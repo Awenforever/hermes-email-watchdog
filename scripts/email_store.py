@@ -8,7 +8,12 @@ import json, os, sqlite3, threading, time
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = os.path.expanduser("~/.hermes/email.db")
+try:
+    import email_config
+except ImportError:
+    email_config = None
+
+DB_PATH = email_config.get_path("db") if email_config else os.path.expanduser("~/.hermes/email.db")
 
 _local = threading.local()
 
@@ -61,6 +66,13 @@ def init_db():
         summary_short TEXT,
         summary_long TEXT,
         action_summary TEXT,
+        deadline TEXT,
+        deadline_timezone TEXT,
+        format_decision TEXT,
+        semantic_category TEXT,
+        analysis_json TEXT,
+        attachment_policy TEXT,
+        delivered_text_hash TEXT,
         push_status TEXT DEFAULT 'pending',
         pushed_at TEXT,
         created_at TEXT DEFAULT (datetime('now')),
@@ -136,6 +148,21 @@ def init_db():
         FOREIGN KEY (message_id) REFERENCES messages(id)
     );
 
+    CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        title TEXT,
+        action_needed TEXT,
+        deadline TEXT,
+        timezone TEXT,
+        status TEXT DEFAULT 'active',
+        reminder_json TEXT,
+        reminders_sent_json TEXT DEFAULT '[]',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (message_id) REFERENCES messages(id)
+    );
+
     CREATE TABLE IF NOT EXISTS contacts (
         email TEXT PRIMARY KEY,
         name TEXT,
@@ -163,8 +190,27 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_links_msg ON links(message_id);
     CREATE INDEX IF NOT EXISTS idx_actions_msg ON actions(message_id);
     CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
+    CREATE INDEX IF NOT EXISTS idx_schedules_msg ON schedules(message_id);
+    CREATE INDEX IF NOT EXISTS idx_schedules_deadline ON schedules(deadline);
     """)
+    _migrate_columns(conn)
     conn.commit()
+
+
+def _migrate_columns(conn):
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    wanted = {
+        "deadline": "TEXT",
+        "deadline_timezone": "TEXT",
+        "format_decision": "TEXT",
+        "semantic_category": "TEXT",
+        "analysis_json": "TEXT",
+        "attachment_policy": "TEXT",
+        "delivered_text_hash": "TEXT",
+    }
+    for name, sql_type in wanted.items():
+        if name not in columns:
+            conn.execute(f"ALTER TABLE messages ADD COLUMN {name} {sql_type}")
 
 
 # ── Message CRUD ────────────────────────────────────────────────
@@ -216,6 +262,16 @@ def mark_pushed(msg_id: str):
     conn.commit()
 
 
+def update_message_fields(msg_id: str, data: dict):
+    if not data:
+        return
+    conn = _get_conn()
+    cols = ", ".join(f"{k}=?" for k in data)
+    vals = list(data.values()) + [msg_id]
+    conn.execute(f"UPDATE messages SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+    conn.commit()
+
+
 # ── Thread CRUD ─────────────────────────────────────────────────
 
 def upsert_thread(thread_id: str, data: dict):
@@ -253,6 +309,49 @@ def get_attachments(message_id: str) -> list:
     conn = _get_conn()
     rows = conn.execute("SELECT * FROM attachments WHERE message_id=?", (message_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Schedule CRUD ───────────────────────────────────────────────
+
+def upsert_schedule(data: dict):
+    conn = _get_conn()
+    sched_id = data["id"]
+    existing = conn.execute("SELECT id FROM schedules WHERE id=?", (sched_id,)).fetchone()
+    if existing:
+        cols = ", ".join(f"{k}=?" for k in data if k != "id")
+        vals = [data[k] for k in data if k != "id"] + [sched_id]
+        conn.execute(f"UPDATE schedules SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+    else:
+        cols = ", ".join(data.keys())
+        placeholders = ", ".join("?" for _ in data)
+        conn.execute(f"INSERT INTO schedules ({cols}) VALUES ({placeholders})", list(data.values()))
+    conn.commit()
+    return sched_id
+
+
+def get_schedules(status: str = "active", limit: int = 50) -> list:
+    conn = _get_conn()
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM schedules WHERE status=? ORDER BY COALESCE(deadline, updated_at) ASC LIMIT ?",
+            (status, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM schedules ORDER BY COALESCE(deadline, updated_at) ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_schedule(schedule_id: str, data: dict):
+    if not data:
+        return
+    conn = _get_conn()
+    cols = ", ".join(f"{k}=?" for k in data)
+    vals = list(data.values()) + [schedule_id]
+    conn.execute(f"UPDATE schedules SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+    conn.commit()
 
 
 # ── Link CRUD ───────────────────────────────────────────────────
@@ -363,7 +462,7 @@ def get_own_domains() -> list:
 
 # ── Seen tracking (still JSON for simplicity, but backed by DB) ─
 
-SEEN_FILE = os.path.expanduser("~/.hermes/email_watch_seen.json")
+SEEN_FILE = email_config.get_path("seen") if email_config else os.path.expanduser("~/.hermes/email_watch_seen.json")
 
 def is_seen(msg_id: str, account: str) -> bool:
     seen = _load_seen()

@@ -5,8 +5,13 @@ import json, os, re
 from datetime import datetime
 from pathlib import Path
 
-CONTACTS_FILE = os.path.expanduser("~/.hermes/email_contacts.json")
-SETTINGS_FILE = os.path.expanduser("~/.hermes/email_settings.json")
+try:
+    import email_config
+except ImportError:
+    email_config = None
+
+CONTACTS_FILE = email_config.get_path("contacts") if email_config else os.path.expanduser("~/.hermes/email_contacts.json")
+SETTINGS_FILE = email_config.get_path("settings") if email_config else os.path.expanduser("~/.hermes/email_settings.json")
 
 
 def load_contacts():

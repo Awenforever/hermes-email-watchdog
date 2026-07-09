@@ -11,10 +11,15 @@ from pathlib import Path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-PENDING_FILE = os.path.expanduser("~/.hermes/email_pending.json")
-THREADS_FILE = os.path.expanduser("~/.hermes/email_threads.json")
+try:
+    import email_config
+except ImportError:
+    email_config = None
 
-ACCOUNTS = {
+PENDING_FILE = email_config.get_path("pending") if email_config else os.path.expanduser("~/.hermes/email_pending.json")
+THREADS_FILE = email_config.get_path("threads") if email_config else os.path.expanduser("~/.hermes/email_threads.json")
+
+ACCOUNTS = email_config.get_account_map() if email_config else {
     "ustc": {
         "type": "himalaya",
         "config": os.path.expanduser("~/.config/himalaya/config_ustc.toml"),
@@ -50,7 +55,7 @@ def save_json(path, data):
 
 def run(cmd, timeout=30):
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.stdout.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", 124
@@ -58,27 +63,25 @@ def run(cmd, timeout=30):
 
 def send_via_himalaya(acct, reply_data):
     """Send via himalaya."""
-    body = reply_data["body"].replace("\\", "\\\\").replace("'", "'\\''")
-    
     stdin = f"From: {reply_data['from_name']} <{reply_data['from_email']}>\n"
     stdin += f"To: {reply_data['to_name']} <{reply_data['to']}>\n"
     stdin += f"Subject: {reply_data['subject']}\n"
     if reply_data.get("cc"):
         stdin += f"Cc: {', '.join(reply_data['cc'])}\n"
-    stdin += f"\n{body}\n"
-    
-    cmd = f"cat << 'ENDOFEMAIL'\n{stdin}ENDOFEMAIL\n | himalaya -c {acct['config']} template send"
-    out, rc = run(cmd, timeout=30)
-    return (rc == 0, out)
+    stdin += f"\n{reply_data['body']}\n"
+    try:
+        result = subprocess.run(
+            ["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "template", "send"],
+            input=stdin, capture_output=True, text=True, timeout=30,
+        )
+        return (result.returncode == 0, result.stdout.strip() or result.stderr.strip())
+    except subprocess.TimeoutExpired:
+        return (False, "")
 
 
 def send_via_agently(reply_data):
     """Send via agently-cli."""
-    to_args = " ".join([f"--to '{reply_data['to']}'"])
-    body = reply_data["body"].replace("'", "'\\''")
-    subject = reply_data["subject"].replace("'", "'\\''")
-    
-    cmd = f"agently-cli message +send {to_args} --subject '{subject}' --body '{body}'"
+    cmd = ["agently-cli", "message", "+send", "--to", reply_data["to"], "--subject", reply_data["subject"], "--body", reply_data["body"]]
     out, rc = run(cmd, timeout=30)
     
     if rc != 0:
@@ -90,7 +93,7 @@ def send_via_agently(reply_data):
             rd = data.get("data", {})
             if rd.get("confirmation_required"):
                 ctk = rd.get("confirmation_token", "")
-                cmd2 = f"{cmd} --confirmation-token {ctk}"
+                cmd2 = cmd + ["--confirmation-token", ctk]
                 out2, rc2 = run(cmd2, timeout=30)
                 return (rc2 == 0, out2)
             return (True, "ok")

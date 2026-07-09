@@ -10,13 +10,18 @@ import json, os, re, subprocess
 from datetime import datetime
 from pathlib import Path
 
-CONTACTS_FILE = os.path.expanduser("~/.hermes/email_contacts.json")
-SETTINGS_FILE = os.path.expanduser("~/.hermes/email_settings.json")
-THREADS_FILE = os.path.expanduser("~/.hermes/email_threads.json")
-SEEN_FILE = os.path.expanduser("~/.hermes/email_watch_seen.json")
+try:
+    import email_config
+except ImportError:
+    email_config = None
+
+CONTACTS_FILE = email_config.get_path("contacts") if email_config else os.path.expanduser("~/.hermes/email_contacts.json")
+SETTINGS_FILE = email_config.get_path("settings") if email_config else os.path.expanduser("~/.hermes/email_settings.json")
+THREADS_FILE = email_config.get_path("threads") if email_config else os.path.expanduser("~/.hermes/email_threads.json")
+SEEN_FILE = email_config.get_path("seen") if email_config else os.path.expanduser("~/.hermes/email_watch_seen.json")
 
 # Account configs for sending
-ACCOUNTS = {
+ACCOUNTS = email_config.get_account_map() if email_config else {
     "ustc": {
         "type": "himalaya",
         "config": os.path.expanduser("~/.config/himalaya/config_ustc.toml"),
@@ -68,7 +73,7 @@ def save_threads(data):
 
 def run(cmd, timeout=30):
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.stdout.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", 124
@@ -83,7 +88,7 @@ def get_recent_emails(account, limit=10):
         return []
     
     if acct["type"] == "himalaya":
-        cmd = f"himalaya -c {acct['config']} envelope list --page-size {limit} --output json 2>/dev/null"
+        cmd = ["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "envelope", "list", "--page-size", str(limit), "--output", "json"]
         out, rc = run(cmd, timeout=30)
         if rc != 0:
             return []
@@ -92,7 +97,7 @@ def get_recent_emails(account, limit=10):
         except json.JSONDecodeError:
             return []
     else:
-        cmd = f"agently-cli message +list --dir inbox --limit {limit}"
+        cmd = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(limit)]
         out, rc = run(cmd, timeout=30)
         if rc != 0:
             return []
@@ -160,7 +165,7 @@ def read_full_email(env):
         return None
     
     if acct["type"] == "himalaya":
-        cmd = f"himalaya -c {acct['config']} message read {msg_id} --output json 2>/dev/null"
+        cmd = ["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "message", "read", str(msg_id), "--output", "json"]
         out, rc = run(cmd, timeout=30)
         if rc != 0:
             return None
@@ -169,7 +174,7 @@ def read_full_email(env):
         except json.JSONDecodeError:
             return {"text": out}
     else:
-        cmd = f"agently-cli message +read --id {msg_id}"
+        cmd = ["agently-cli", "message", "+read", "--id", str(msg_id)]
         out, rc = run(cmd, timeout=30)
         if rc != 0:
             return None
@@ -280,23 +285,20 @@ def send_email(reply_data, confirmation_token=None):
 
 def send_via_himalaya(reply_data):
     """Send via himalaya (no two-phase)."""
-    body_escaped = reply_data["body"].replace("'", "'\\''")
-    
-    cmd_parts = [
-        "cat << 'EOF' | himalaya",
-        f"-c {reply_data['account']['config']}",
-        "template send"
-    ]
-    cmd = " ".join(cmd_parts)
-    
     stdin = f"From: {reply_data['from_name']} <{reply_data['from_email']}>\n"
     stdin += f"To: {reply_data['to_name']} <{reply_data['to']}>\n"
     stdin += f"Subject: {reply_data['subject']}\n"
     if reply_data["cc"]:
         stdin += f"Cc: {', '.join(reply_data['cc'])}\n"
-    stdin += f"\n{reply_data['body']}\nEOF"
-    
-    out, rc = run(cmd, timeout=30)
+    stdin += f"\n{reply_data['body']}\n"
+    try:
+        result = subprocess.run(
+            ["himalaya", "-c", reply_data["account"].get("himalaya_config") or reply_data["account"]["config"], "template", "send"],
+            input=stdin, capture_output=True, text=True, timeout=30,
+        )
+        out, rc = result.stdout.strip() or result.stderr.strip(), result.returncode
+    except subprocess.TimeoutExpired:
+        out, rc = "", 124
     
     if rc == 0:
         return (True, "邮件已发送")
@@ -306,14 +308,13 @@ def send_via_himalaya(reply_data):
 
 def send_via_agently(reply_data, confirmation_token=None):
     """Send via agently-cli with two-phase confirmation."""
-    to_str = " ".join([f"--to '{reply_data['to']}'"])
-    cc_str = " ".join([f"--cc '{c}'" for c in (reply_data.get("cc") or [])])
-    att_str = " ".join([f"--attachment '{a}'" for a in (reply_data.get("attachments") or [])])
-    token_str = f"--confirmation-token {confirmation_token}" if confirmation_token else ""
-    
-    body_escaped = reply_data["body"].replace("'", "'\\''")
-    
-    cmd = f"agently-cli message +send {to_str} --subject '{reply_data['subject']}' --body '{body_escaped}' {cc_str} {att_str} {token_str}"
+    cmd = ["agently-cli", "message", "+send", "--to", reply_data["to"], "--subject", reply_data["subject"], "--body", reply_data["body"]]
+    for c in (reply_data.get("cc") or []):
+        cmd.extend(["--cc", c])
+    for a in (reply_data.get("attachments") or []):
+        cmd.extend(["--attachment", a])
+    if confirmation_token:
+        cmd.extend(["--confirmation-token", confirmation_token])
     out, rc = run(cmd, timeout=30)
     
     if rc != 0:
@@ -394,7 +395,7 @@ def update_thread_on_reply(from_email, reply_subject, reply_summary):
 
 # ── Pending Send Queue ──────────────────────────────────────────
 
-PENDING_FILE = os.path.expanduser("~/.hermes/email_pending.json")
+PENDING_FILE = email_config.get_path("pending") if email_config else os.path.expanduser("~/.hermes/email_pending.json")
 
 
 def queue_email(reply_data, send_at=None):

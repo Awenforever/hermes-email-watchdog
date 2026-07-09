@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "default_account": "ustc",
+  "accounts": [
+    {
+      "id": "ustc",
+      "label": "USTC",
+      "type": "himalaya",
+      "email": "user@mail.ustc.edu.cn",
+      "display_name": "User Name",
+      "himalaya_config": "~/.config/himalaya/config_ustc.toml",
+      "enabled": true
+    },
+    {
+      "id": "gmail",
+      "label": "Gmail",
+      "type": "himalaya",
+      "email": "user@gmail.com",
+      "display_name": "User Name",
+      "himalaya_config": "~/.config/himalaya/config_gmail.toml",
+      "enabled": true
+    },
+    {
+      "id": "agently",
+      "label": "Agently",
+      "type": "agently",
+      "email": "user@agent.qq.com",
+      "display_name": "User Name",
+      "enabled": true
+    }
+  ],
+  "paths": {
+    "db": "~/.hermes/email.db",
+    "seen": "~/.hermes/email_watch_seen.json",
+    "cache_dir": "~/.hermes/email_cache",
+    "drafts_dir": "~/.hermes/email_drafts",
+    "pending": "~/.hermes/email_pending.json",
+    "threads": "~/.hermes/email_threads.json",
+    "calendar": "~/.hermes/email_calendar.json",
+    "contacts": "~/.hermes/email_contacts.json",
+    "groups": "~/.hermes/email_groups.json",
+    "settings": "~/.hermes/email_settings.json",
+    "attachment_dir": "~/Documents/EmailAttachments",
+    "invoice_dir": "~/Documents/Invoices"
+  },
+  "watchdog": {
+    "lookback": 5,
+    "sleep_start": 0,
+    "sleep_end": 6,
+    "max_cached": 200
+  },
+  "llm": {
+    "enabled": true,
+    "endpoint": "https://api.llm.ustc.edu.cn/v1/chat/completions",
+    "api_key_env": "USTC_LLM_API_KEY",
+    "model": "deepseek-v4-flash",
+    "temperature": 0.1,
+    "max_tokens": 2000,
+    "timeout_seconds": 90,
+    "max_body_chars": 12000
+  },
+  "delivery": {
+    "auto_download_attachments": true,
+    "create_reminders": true,
+    "managed_cron": false,
+    "timezone": "Asia/Shanghai"
+  }
+}

@@ -18,10 +18,12 @@ from pathlib import Path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 try:
+    import email_config
     import email_store
     import email_trust
     import email_risk
-    import email_push
+    import email_delivery
+    import email_llm
     HAS_V3 = True
 except ImportError as e:
     HAS_V3 = False
@@ -38,30 +40,25 @@ except ImportError:
 
 # ── Configuration ───────────────────────────────────────────────
 
-SEEN_FILE = os.path.expanduser("~/.hermes/email_watch_seen.json")
-LOOKBACK = 5
-MAX_PER_TICK = 1  # push 1 email per tick; WeChat limit = 10 consecutive messages
-SLEEP_START = 0   # 00:00
-SLEEP_END = 6     # 06:00
-INVOICE_DIR = os.path.expanduser("~/Documents/Invoices")
-ATTACHMENT_DIR = os.path.expanduser("~/Documents/EmailAttachments")
-
-ACCOUNTS = [
-    {"name": "USTC", "type": "himalaya",
-     "config": os.path.expanduser("~/.config/himalaya/config_ustc.toml"),
-     "email": "wmwen@mail.ustc.edu.cn"},
-    {"name": "Gmail", "type": "himalaya",
-     "config": os.path.expanduser("~/.config/himalaya/config_gmail.toml"),
-     "email": "wmwen1999@gmail.com"},
-    {"name": "Agently", "type": "agently",
-     "email": "augenstern@agent.qq.com"},
-]
+if HAS_V3:
+    _WATCHDOG_SETTINGS = email_config.get_watchdog_settings()
+    SEEN_FILE = email_config.get_path("seen")
+    LOOKBACK = int(_WATCHDOG_SETTINGS.get("lookback", 5))
+    SLEEP_START = int(_WATCHDOG_SETTINGS.get("sleep_start", 0))
+    SLEEP_END = int(_WATCHDOG_SETTINGS.get("sleep_end", 6))
+    ACCOUNTS = email_config.get_accounts(True)
+else:
+    SEEN_FILE = os.path.expanduser("~/.hermes/email_watch_seen.json")
+    LOOKBACK = 5
+    SLEEP_START = 0
+    SLEEP_END = 6
+    ACCOUNTS = []
 
 
 # ── Email Content Cache ──────────────────────────────────────
 
-CACHE_DIR = os.path.expanduser("~/.hermes/email_cache")
-MAX_CACHED = 200  # keep last 200 emails
+CACHE_DIR = email_config.get_path("cache_dir") if HAS_V3 else os.path.expanduser("~/.hermes/email_cache")
+MAX_CACHED = int(_WATCHDOG_SETTINGS.get("max_cached", 200)) if HAS_V3 else 200
 
 def _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, has_attachments):
     """Save full email body to disk for later retrieval via WeChat commands."""
@@ -117,7 +114,7 @@ def _extract_calendar_hints(subject, body):
 
 def run(cmd, timeout=30):
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.stdout.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", 124
@@ -152,7 +149,7 @@ def is_sleep_time():
 # ── Email fetching ──────────────────────────────────────────────
 
 def list_himalaya(config_path):
-    cmd = f"himalaya -c {config_path} envelope list --page-size {LOOKBACK} --output json 2>/dev/null"
+    cmd = ["himalaya", "-c", config_path, "envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"]
     out, rc = run(cmd, timeout=30)
     if rc != 0:
         return []
@@ -162,7 +159,7 @@ def list_himalaya(config_path):
         return []
 
 def read_himalaya(config_path, msg_id):
-    cmd = f"himalaya -c {config_path} message read {msg_id} --output json 2>/dev/null"
+    cmd = ["himalaya", "-c", config_path, "message", "read", str(msg_id), "--output", "json"]
     out, rc = run(cmd, timeout=30)
     if rc != 0:
         return None
@@ -172,7 +169,7 @@ def read_himalaya(config_path, msg_id):
         return {"text": out}
 
 def list_agently():
-    cmd = "agently-cli message +list --dir inbox --limit 5"
+    cmd = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(LOOKBACK)]
     out, rc = run(cmd, timeout=30)
     if rc != 0:
         return []
@@ -185,7 +182,7 @@ def list_agently():
     return []
 
 def read_agently(msg_id):
-    cmd = f"agently-cli message +read --id {msg_id}"
+    cmd = ["agently-cli", "message", "+read", "--id", str(msg_id)]
     out, rc = run(cmd, timeout=30)
     if rc != 0:
         return None
@@ -202,7 +199,7 @@ def read_agently(msg_id):
 
 def download_himalaya_attachments(config_path, msg_id, save_dir):
     """Download attachments from a himalaya message. Returns list of saved paths."""
-    cmd = f"himalaya -c {config_path} attachment download {msg_id} --downloads-dir {save_dir}"
+    cmd = ["himalaya", "-c", config_path, "attachment", "download", str(msg_id), "--downloads-dir", save_dir]
     out, rc = run(cmd, timeout=60)
     if rc != 0:
         return []
@@ -220,7 +217,7 @@ def download_himalaya_attachments(config_path, msg_id, save_dir):
     return []
 
 def download_agently_attachment(msg_id, att_id, save_dir):
-    cmd = f"agently-cli attachment +download --msg {msg_id} --att {att_id} --output {save_dir}"
+    cmd = ["agently-cli", "attachment", "+download", "--msg", str(msg_id), "--att", str(att_id), "--output", save_dir]
     out, rc = run(cmd, timeout=60)
     if rc != 0:
         return None
@@ -553,15 +550,64 @@ def classify(email_data):
     return ("💬", "个人邮件", "medium", summary, "push")
 
 
+def classify_rule(email_data):
+    """RuleResult compatibility wrapper for the semantic delivery pipeline."""
+    emoji, category, priority, summary, action = classify(email_data)
+    if action == "skip" or priority == "skip":
+        rule_action = "skip"
+    elif action == "extract_code":
+        rule_action = "simple_code"
+    elif action in ("push_urgent", "push_full", "download_invoice", "download_attach", "push"):
+        rule_action = "needs_llm"
+    else:
+        rule_action = "needs_llm"
+    return {
+        "emoji": emoji,
+        "category": category,
+        "priority": priority,
+        "summary": summary,
+        "legacy_action": action,
+        "action": rule_action,
+    }
+
+
+def _simple_code_analysis(email_data, rule_result):
+    code = ""
+    text = f"{email_data.get('subject','')}\n{email_data.get('body','')}"
+    for pat in [r"(?:code|码|验证码)[：:\s]*(\d{4,8})", r"\b(\d{6})\b", r"(\d{4,8})"]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            code = m.group(1)
+            break
+    return {
+        "id": str(email_data.get("id") or email_data.get("msg_id") or ""),
+        "semantic_category": "verification_code",
+        "user_relevance": "urgent",
+        "confidence": 0.95,
+        "should_notify": True,
+        "should_show_full_body": False,
+        "format_decision": "code_extraction",
+        "formatted_summary": rule_result.get("summary") or email_data.get("subject", ""),
+        "code": code,
+        "service": email_data.get("from_name") or email_data.get("from_addr") or "verification",
+        "action_needed": {"required": False, "description": None, "type": "none", "next_step": None},
+        "deadline": {"has_deadline": False, "datetime": None, "date_text": None, "timezone": "Asia/Shanghai", "confidence": 0},
+        "reminder_schedule": [],
+        "attachment_handling": {"policy": "none", "wanted_types": [], "reason": "verification code"},
+        "body_rendering": {"header_lines": [], "body_sections": [], "signature": None},
+        "risk_notes": [],
+        "llm_notes": "rule bypass: high-confidence verification code",
+    }
+
+
 # ── Process single account ──────────────────────────────────────
 def check_account(acct, pushed_count=None):
-    """Check one account for new emails. Returns list of alert strings.
-    If pushed_count is a list, stops when pushed_count[0] >= MAX_PER_TICK."""
+    """Check one account for new emails. Returns list of notification strings."""
     alerts = []
-    acct_name = acct["name"]
+    acct_name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
 
     if acct["type"] == "himalaya":
-        envelopes = list_himalaya(acct["config"])
+        envelopes = list_himalaya(acct.get("himalaya_config") or acct.get("config"))
     else:
         envelopes = list_agently()
 
@@ -573,9 +619,6 @@ def check_account(acct, pushed_count=None):
     updated = False
 
     for env in envelopes:
-        if pushed_count and pushed_count[0] >= MAX_PER_TICK:
-            break
-            
         msg_id = str(env.get("id") or env.get("message_id", ""))
         key = f"{prefix}{msg_id}"
 
@@ -583,7 +626,7 @@ def check_account(acct, pushed_count=None):
             continue
 
         if acct["type"] == "himalaya":
-            msg = read_himalaya(acct["config"], msg_id)
+            msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id)
         else:
             msg = read_agently(msg_id)
 
@@ -599,6 +642,7 @@ def check_account(acct, pushed_count=None):
             subject = env.get("subject", "")
             has_attachments = env.get("has_attachment", False)
             to_addr = env.get("to", {}).get("addr", "") if isinstance(env.get("to"), dict) else ""
+            attachments = env.get("attachments", [])
         else:
             body = msg.get("body", "") if isinstance(msg, dict) else ""
             from_addr = env.get("from", {}).get("email", "")
@@ -607,18 +651,22 @@ def check_account(acct, pushed_count=None):
             has_attachments = env.get("has_attachments", False)
             to_list = env.get("to") or [{}]
             to_addr = to_list[0].get("email", "") if to_list else ""
+            attachments = env.get("attachments", [])
 
+        from_addr_lower = (from_addr or "").lower()
+        from_domain = from_addr_lower.split("@", 1)[1] if "@" in from_addr_lower else ""
         email_data = {
-            "subject": subject, "from_addr": from_addr, "from_name": from_name,
-            "body": body[:5000], "to_addr": to_addr,
-            "has_attachments": has_attachments, "msg_id": msg_id,
+            "id": msg_id, "msg_id": msg_id, "account": acct_name,
+            "subject": subject, "from_addr": from_addr, "from_email": from_addr_lower,
+            "from_domain": from_domain, "from_name": from_name,
+            "body": body[:12000], "to_addr": to_addr,
+            "has_attachments": has_attachments, "has_attachment": has_attachments,
+            "attachments": attachments, "date_sent": env.get("date", ""),
         }
 
         _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, has_attachments)
 
         if HAS_V3:
-            from_addr_lower = (from_addr or "").lower()
-            from_domain = from_addr_lower.split("@")[1] if "@" in from_addr_lower else ""
             own_domains = email_trust.get_own_domains_cached()
             contact_data = email_store.get_contact(from_addr_lower)
             trust_result = email_trust.compute_trust(from_addr_lower, from_domain, own_domains, contact_data)
@@ -633,87 +681,49 @@ def check_account(acct, pushed_count=None):
                 "risk_score": risk_result["score"], "risk_label": risk_result["label"], "push_status": "pending",
             })
             email_trust.learn_contact(from_addr_lower, from_name, own_domains)
+        else:
+            trust_result = {}
+            risk_result = {}
 
-        emoji, category, priority, summary, action = classify(email_data)
+        rule_result = classify_rule(email_data)
         seen[key] = True
         updated = True
 
         if HAS_MODULES and from_addr:
             email_contacts.learn_contact(from_addr, from_name)
 
-        thread_context = ""
-        if HAS_MODULES and action != "skip":
+        if HAS_MODULES and rule_result.get("action") != "skip":
             thread_id = email_reply.update_thread_on_reply(from_addr, subject, (body or "")[:200])
-            if thread_id:
-                threads = email_reply.load_threads()
-                t = threads.get("threads", {}).get(thread_id, {})
-                if t.get("user_question"):
-                    thread_context = f"\n🔗 {t.get('topic','')} — {t.get('user_question','')}"
 
-        if action == "skip":
+        if HAS_V3:
+            email_store.update_message_fields(msg_id, {
+                "rule_category": rule_result.get("category"),
+                "importance": rule_result.get("priority") if rule_result.get("priority") != "skip" else "low",
+            })
+
+        if rule_result.get("action") == "skip":
+            if HAS_V3:
+                email_store.update_message_fields(msg_id, {"push_status": "skipped"})
             continue
 
-        attach_info = ""
-        if has_attachments:
-            if HAS_V3:
-                skip_download = email_risk.is_suspicious_for_download(
-                    {"subject": subject, "from_email": from_addr_lower, "attachments": env.get("attachments", [])}, trust_result
-                )
+        if rule_result.get("action") == "simple_code":
+            analysis = _simple_code_analysis(email_data, rule_result)
+        elif HAS_V3 and email_llm.should_use_llm(rule_result, email_data):
+            analysis = email_llm.analyze_email(email_data, rule_result)
+        else:
+            analysis = email_llm.fallback_analysis(email_data, rule_result, "llm unavailable") if HAS_V3 else {}
+
+        if HAS_V3:
+            delivery = email_delivery.deliver_email(email_data, rule_result, analysis, acct)
+            alert = delivery.get("notification_text", "")
+        else:
+            alert = rule_result.get("summary") or subject
+
+        if alert:
+            if analysis.get("user_relevance") == "urgent" or rule_result.get("priority") == "urgent":
+                alerts.insert(0, alert)
             else:
-                skip_download = False
-            if skip_download:
-                attach_info = "\n⚠️ 附件可疑，未下载"
-            else:
-                save_dir = os.path.join(INVOICE_DIR if action == "download_invoice" else ATTACHMENT_DIR, datetime.now().strftime("%Y-%m"))
-                if acct["type"] == "himalaya":
-                    saved = download_himalaya_attachments(acct["config"], msg_id, save_dir)
-                else:
-                    saved = []
-                    for att in env.get("attachments", []):
-                        aid = att.get("attachment_id") or att.get("id", "")
-                        if aid:
-                            sp = download_agently_attachment(msg_id, aid, save_dir)
-                            if sp: saved.append(sp)
-                if saved:
-                    label = "发票" if action == "download_invoice" else "附件"
-                    attach_info = f"\n📎 {label}: {' '.join(saved)}"
-
-        priority_mark = "🔴" if priority in ("urgent", "high") else "🟡" if priority == "medium" else "🟢"
-        sender_display = (from_name or "").strip('"\' ').strip() or from_addr
-        if sender_display and from_addr and sender_display != from_addr:
-            sender_display = f"{sender_display} <{from_addr}>"
-
-        lines = [f"{priority_mark} {category}"]
-        lines.append(f"发件人: {sender_display}")
-
-        body_show = body
-        body_show = body_show.replace('\\n', '\n').replace('\\t', ' ')
-        body_show = re.sub(r'^(?:From|To|Cc|Bcc|Subject|Date|Reply-To|Message-ID|MIME-Version|Content-Type|Content-Transfer-Encoding|Return-Path|Received|X-[A-Za-z-]+):[^\n]*\n?', '', body_show, flags=re.MULTILINE | re.IGNORECASE)
-        body_show = re.sub(r'此邮件由.*?举报退订\s*', '', body_show)
-        body_show = re.sub(r'<[^>]+>', '', body_show)
-        body_show = re.sub(r'&[a-z]+;', ' ', body_show)
-        body_show = re.sub(r'\[HTML\]\s*', '', body_show)
-        body_show = re.sub(r'\n{3,}', '\n\n', body_show)
-        body_show = body_show.strip()
-
-        max_preview = 300 if category in ("个人邮件","学校通知","📄 论文决定","📄 论文接收","🎉 论文接收","📅 会议/活动","会议/活动","📝 表格/问卷","💰 付款/缴费","🧾 发票/收据","⚠️ 高风险邮件") else 150
-        if body_show and len(body_show) > 20:
-            truncated = len(body_show) > max_preview
-            preview = body_show[:max_preview].strip()
-            if truncated: preview += "..."
-            lines.append(f"\n{preview}")
-
-        cal = _extract_calendar_hints(subject, body)
-        if cal: lines.append(f"\n{cal}")
-        if attach_info: lines.append(attach_info)
-        if thread_context: lines.append(thread_context)
-
-        alert = "\n".join(lines)
-        if priority == "urgent": alerts.insert(0, alert)
-        else: alerts.append(alert)
-
-        if pushed_count is not None:
-            pushed_count[0] += 1
+                alerts.append(alert)
 
     if updated:
         save_seen(seen)
@@ -725,19 +735,18 @@ def main():
         return ""
 
     all_alerts = []
-    pushed_count = [0]  # use list for closure
+    accounts_seen = set()
     
     for acct in ACCOUNTS:
-        if pushed_count[0] >= MAX_PER_TICK:
-            break
         try:
-            acct_alerts = check_account(acct, pushed_count)
+            acct_alerts = check_account(acct)
             if acct_alerts:
                 all_alerts.extend(acct_alerts)
-                accounts_seen.add(acct["name"])
+                accounts_seen.add(acct.get("label") or acct.get("name") or acct.get("id") or "account")
         except Exception as e:
-            all_alerts.append(f"⚠️ {acct['name']} 检查失败: {e}")
-            accounts_seen.add(acct["name"])
+            name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
+            all_alerts.append(f"⚠️ {name} 检查失败: {e}")
+            accounts_seen.add(name)
 
     if not all_alerts:
         return ""

@@ -10,10 +10,17 @@ from datetime import datetime, timedelta
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-THREADS_FILE = os.path.expanduser("~/.hermes/email_threads.json")
-CALENDAR_FILE = os.path.expanduser("~/.hermes/email_calendar.json")
-SEEN_FILE = os.path.expanduser("~/.hermes/email_watch_seen.json")
-PENDING_FILE = os.path.expanduser("~/.hermes/email_pending.json")
+try:
+    import email_config
+    import email_store
+except ImportError:
+    email_config = None
+    email_store = None
+
+THREADS_FILE = email_config.get_path("threads") if email_config else os.path.expanduser("~/.hermes/email_threads.json")
+CALENDAR_FILE = email_config.get_path("calendar") if email_config else os.path.expanduser("~/.hermes/email_calendar.json")
+SEEN_FILE = email_config.get_path("seen") if email_config else os.path.expanduser("~/.hermes/email_watch_seen.json")
+PENDING_FILE = email_config.get_path("pending") if email_config else os.path.expanduser("~/.hermes/email_pending.json")
 
 
 def load_json(path):
@@ -78,7 +85,46 @@ def check_stale_threads():
 
 
 def check_imminent_deadlines():
-    """Check calendar for deadlines within 24/48 hours."""
+    """Check schedule rows first, then calendar fallback for deadlines within 24/48 hours."""
+    if email_store:
+        now = datetime.now()
+        alerts = []
+        for item in email_store.get_schedules("active", 100):
+            try:
+                reminders = json.loads(item.get("reminder_json") or "[]")
+            except Exception:
+                reminders = []
+            try:
+                sent = json.loads(item.get("reminders_sent_json") or "[]")
+            except Exception:
+                sent = []
+            changed = False
+            for reminder in reminders:
+                key = f"{reminder.get('kind')}:{reminder.get('time')}"
+                if key in sent:
+                    continue
+                try:
+                    due = datetime.fromisoformat(str(reminder.get("time")).replace("Z", "+00:00"))
+                    if due.tzinfo:
+                        due = due.astimezone().replace(tzinfo=None)
+                except Exception:
+                    continue
+                if due <= now:
+                    alerts.append({
+                        "title": reminder.get("message") or item.get("title") or item.get("action_needed") or item.get("message_id"),
+                        "type": reminder.get("kind") or "reminder",
+                        "date": reminder.get("time"),
+                        "time": "",
+                        "hours_until": 0,
+                        "emoji": "🔴",
+                    })
+                    sent.append(key)
+                    changed = True
+            if changed:
+                email_store.update_schedule(item["id"], {"reminders_sent_json": json.dumps(sent, ensure_ascii=False)})
+        if alerts:
+            return alerts
+
     calendar = load_json(CALENDAR_FILE)
     now = datetime.now()
     alerts = []

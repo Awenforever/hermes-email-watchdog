@@ -36,6 +36,7 @@ result = email_commands.handle(用户消息)
 | `标记已处理 #N` | `_mark_done(N)` | 归档邮件 |
 | `今天重要` | `cmd_今天重要()` | 今天的高优先级邮件 |
 | `待处理` | `cmd_待处理()` | 需要回复/有截止的邮件 |
+| `日程` | `cmd_日程()` | 查看 LLM 创建的邮件提醒日程 |
 | `摘要` | `cmd_摘要()` | 今日分类统计 |
 | `帮助` | `cmd_帮助()` | 显示命令列表 |
 
@@ -53,15 +54,16 @@ result = email_commands.handle(用户消息)
   1. `approve_and_send(msg_id)` 发送
   2. 推送微信："✅ 已发送"
 
-## 模块清单（14个）
+## 模块清单（15个）
 
 | 模块 | 功能 |
 |------|------|
-| email_watch.py | 主监控：抓取→分类→store→推送 |
+| email_config.py | 运行时配置加载，默认 `~/.hermes/email_watchdog_config.json` |
+| email_watch.py | 主监控：抓取→规则预筛→LLM语义规划→交付 |
 | email_store.py | SQLite 存储层 |
 | email_trust.py | 动态信任模型 |
 | email_risk.py | 风险评估 |
-| email_push.py | 微信排版 |
+| email_delivery.py | 通知格式、附件下载、日程写入、提醒计划 |
 | email_commands.py | 微信命令处理 |
 | email_actions.py | 主动执行+草稿+审批+链接 |
 | email_reply.py | 回复格式化+发送 |
@@ -70,26 +72,32 @@ result = email_commands.handle(用户消息)
 | email_batch.py | 批量操作 |
 | email_followup.py | 跟进提醒 |
 | email_pending_processor.py | 定时发送 |
-| email_llm.py | LLM 语义理解 |
+| email_llm.py | LLM 语义交付规划 |
 
-## Cron 任务（7个；生产环境只保留 watchdog）
+## 配置
+
+运行时配置文件：`~/.hermes/email_watchdog_config.json`。模板见 `references/email_watchdog_config.template.json`。缺失配置时会回退到旧默认路径和账户，避免现有 cron 失效。
+
+LLM 调用使用 OpenAI-compatible HTTP API，配置项位于 `llm.endpoint`、`llm.api_key_env`、`llm.model` 等字段；脚本只用 Python 标准库 `urllib.request`。
+
+## Cron 任务（生产环境只保留 watchdog）
 
 ⚠️ **WeChat 10条限制**: 7 个 cron 同时推送会导致 iLink 限流+静默丢弃。生产环境只启用 email-watchdog，其余按需暂停。
 
 | 任务 | 频率 | 模式 | 用途 | 生产状态 |
 |------|------|------|------|---------|
-| email-watchdog | 1min | no_agent | 抓取+分类+推送 | ✅ 始终启用 |
+| email-watchdog | 1min | no_agent | 抓取+规则预筛+LLM规划+交付 | ✅ 始终启用 |
 | email-pending-sender | 1min | no_agent | 定时发送队列 | ⏸️ 按需 |
 | email-calendar-reminder | 1h | no_agent | 日历提醒 | ⏸️ 按需 |
 | email-followup-reminder | 9am | no_agent | 未回复+截止预警 | ⏸️ 按需 |
-| email-llm-triage | 10min | agent (flash) | 语义理解 | ⏸️ 按需 |
+| email-llm-triage | 10min | no_agent | 语义分析回填 | ⏸️ 按需 |
 | email-link-processor | 10min | no_agent | 链接提取+快讯合并 | ⏸️ 按需 |
 | email-draft-reply | 15min | agent (pro) | 自动草拟回复 | ⏸️ 按需 |
 
 ## 关键设计约束
 
-- **MAX_PER_TICK=1**: 每 cron tick 只推 1 封，避免超 WeChat 2000 字限制
-- **推送正文 100 字**: 只含摘要片段，全文通过微信命令 `全文 #N` 获取
+- **规则只做预筛**: 广告/风险自动邮件可跳过，验证码可本地提取，其余由 LLM 决定格式、附件和提醒。
+- **交付格式**: `code_extraction`、`summary`、`full_body` 由 `email_llm.analyze_email()` 决定，`email_delivery.py` 负责渲染。
 - **WeChat 10条限制**: 详见 `references/wechat-silent-drop.md`
 - **睡眠窗口**: `SLEEP_START=0, SLEEP_END=6` 即凌晨静默。禁用用负值 `(-1,-1)`
 
@@ -119,10 +127,12 @@ result = email_commands.handle(用户消息)
 | `references/push-format-rules.md` | 推送格式10条规则（用户验证） |
 | `references/secretary-draft-workflow.md` | 邮件秘书自动草拟回复工作流 |
 | `references/config_template.toml` | Himalaya 配置模板 |
+| `references/email_watchdog_config.template.json` | Email Watchdog 运行时配置模板 |
 
 | 文件 | 内容 |
 |------|------|
-| ~/.hermes/email.db | SQLite 主存储 |
+| ~/.hermes/email_watchdog_config.json | 运行时配置 |
+| ~/.hermes/email.db | SQLite 主存储，含 messages/attachments/schedules |
 | ~/.hermes/email_watch_seen.json | 去重 |
 | ~/.hermes/email_cache/{id}.json | 邮件全文缓存 |
 | ~/.hermes/email_drafts/{id}.draft | 回复草稿 |

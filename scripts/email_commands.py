@@ -22,10 +22,12 @@ sys.path.insert(0, SCRIPT_DIR)
 
 try:
     import email_store
+    import email_config
 except ImportError:
     email_store = None
+    email_config = None
 
-CACHE_DIR = os.path.expanduser("~/.hermes/email_cache")
+CACHE_DIR = email_config.get_path("cache_dir") if email_config else os.path.expanduser("~/.hermes/email_cache")
 
 
 # ── Command Parser ───────────────────────────────────────────────
@@ -46,6 +48,7 @@ def parse_command(text: str) -> dict:
         (r'^(?:标记|done|完成|已处理)\s*#?(\d+)', '标记已处理', 1),
         (r'^(?:今天|today)\s*(?:重要|important)?', '今天重要', 0),
         (r'^(?:待处理|pending|未处理)', '待处理', 0),
+        (r'^(?:日程|schedule|deadline|deadlines)', '日程', 0),
         (r'^(?:摘要|summary)', '摘要', 0),
         (r'^(?:帮助|help|命令)', '帮助', 0),
     ]
@@ -145,10 +148,12 @@ def cmd_待处理() -> str:
     
     conn = email_store._get_conn()
     rows = conn.execute(
-        """SELECT * FROM messages 
-           WHERE (needs_reply=1 OR has_deadline=1 OR importance IN ('high','urgent'))
-           AND push_status='pushed'
-           ORDER BY date_sent DESC LIMIT 10"""
+        """SELECT m.*, s.deadline AS schedule_deadline, s.action_needed AS schedule_action
+           FROM messages m
+           LEFT JOIN schedules s ON s.message_id=m.id AND s.status='active'
+           WHERE (m.needs_reply=1 OR m.has_deadline=1 OR m.importance IN ('high','urgent') OR s.id IS NOT NULL)
+           AND m.push_status='pushed'
+           ORDER BY COALESCE(s.deadline, m.date_sent) DESC LIMIT 10"""
     ).fetchall()
     
     if not rows:
@@ -157,12 +162,28 @@ def cmd_待处理() -> str:
     lines = [f"📋 待处理邮件 ({len(rows)}封):"]
     for i, row in enumerate(rows):
         m = dict(row)
-        action = m.get("action_summary") or ""
-        deadline = f" ⏰{m.get('deadline')}" if m.get("deadline") else ""
+        action = m.get("action_summary") or m.get("schedule_action") or ""
+        deadline_value = m.get("deadline") or m.get("schedule_deadline")
+        deadline = f" ⏰{deadline_value}" if deadline_value else ""
         lines.append(f"  #{i+1} [{m.get('account','')}] {m.get('summary_short') or m.get('subject','')[:50]}{deadline}")
         if action:
             lines.append(f"     📋 {action}")
     
+    return "\n".join(lines)
+
+
+def cmd_日程() -> str:
+    """Show active schedule items created during email delivery."""
+    if not email_store:
+        return "存储未就绪"
+    rows = email_store.get_schedules("active", 10)
+    if not rows:
+        return "没有待提醒日程"
+    lines = [f"📅 邮件日程 ({len(rows)}项):"]
+    for i, item in enumerate(rows, 1):
+        title = item.get("title") or item.get("action_needed") or item.get("message_id")
+        deadline = item.get("deadline") or "无截止时间"
+        lines.append(f"  #{i} {deadline} {title[:50]}")
     return "\n".join(lines)
 
 
@@ -203,6 +224,7 @@ def cmd_帮助() -> str:
 标记已处理 #N  归档
 今天重要    查看今天的重要邮件
 待处理      查看需要处理的邮件
+日程        查看邮件提醒日程
 摘要        查看今日邮件统计"""
 
 
@@ -256,6 +278,7 @@ def handle(text: str) -> str:
         "标记已处理": lambda: _mark_done(n),
         "今天重要": cmd_今天重要,
         "待处理": cmd_待处理,
+        "日程": cmd_日程,
         "摘要": cmd_摘要,
         "帮助": cmd_帮助,
     }

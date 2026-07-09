@@ -17,10 +17,17 @@ from pathlib import Path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-CALENDAR_FILE = os.path.expanduser("~/.hermes/email_calendar.json")
-SEEN_FILE = os.path.expanduser("~/.hermes/email_watch_seen.json")
+try:
+    import email_config
+    import email_store
+except ImportError:
+    email_config = None
+    email_store = None
 
-ACCOUNTS = [
+CALENDAR_FILE = email_config.get_path("calendar") if email_config else os.path.expanduser("~/.hermes/email_calendar.json")
+SEEN_FILE = email_config.get_path("seen") if email_config else os.path.expanduser("~/.hermes/email_watch_seen.json")
+
+ACCOUNTS = email_config.get_accounts(True) if email_config else [
     {"name": "USTC", "type": "himalaya",
      "config": os.path.expanduser("~/.config/himalaya/config_ustc.toml")},
     {"name": "Gmail", "type": "himalaya",
@@ -78,7 +85,7 @@ EVENT_PATTERNS = {
 
 def run(cmd, timeout=30):
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.stdout.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", 124
@@ -98,7 +105,7 @@ def save_json(path, data):
 
 
 def list_himalaya(config_path, limit=10):
-    cmd = f"himalaya -c {config_path} envelope list --page-size {limit} --output json 2>/dev/null"
+    cmd = ["himalaya", "-c", config_path, "envelope", "list", "--page-size", str(limit), "--output", "json"]
     out, rc = run(cmd, timeout=30)
     if rc != 0: return []
     try: return json.loads(out)
@@ -106,7 +113,7 @@ def list_himalaya(config_path, limit=10):
 
 
 def list_agently(limit=5):
-    cmd = f"agently-cli message +list --dir inbox --limit {limit}"
+    cmd = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(limit)]
     out, rc = run(cmd, timeout=30)
     if rc != 0: return []
     try:
@@ -116,7 +123,7 @@ def list_agently(limit=5):
 
 
 def read_himalaya(config_path, msg_id):
-    cmd = f"himalaya -c {config_path} message read {msg_id} --output json 2>/dev/null"
+    cmd = ["himalaya", "-c", config_path, "message", "read", str(msg_id), "--output", "json"]
     out, rc = run(cmd, timeout=30)
     if rc != 0: return None
     try: return json.loads(out)
@@ -124,7 +131,7 @@ def read_himalaya(config_path, msg_id):
 
 
 def read_agently(msg_id):
-    cmd = f"agently-cli message +read --id {msg_id}"
+    cmd = ["agently-cli", "message", "+read", "--id", str(msg_id)]
     out, rc = run(cmd, timeout=30)
     if rc != 0: return None
     try:
@@ -258,13 +265,14 @@ def scan_emails_for_dates():
     
     for acct in ACCOUNTS:
         if acct["type"] == "himalaya":
-            envelopes = list_himalaya(acct["config"], 20)
+            envelopes = list_himalaya(acct.get("himalaya_config") or acct.get("config"), 20)
         else:
             envelopes = list_agently(10)
         
         for env in envelopes:
             msg_id = str(env.get("id") or env.get("message_id", ""))
-            source_key = f"{acct['name']}:{msg_id}"
+            acct_name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
+            source_key = f"{acct_name}:{msg_id}"
             
             if source_key in existing_sources:
                 continue
@@ -273,7 +281,7 @@ def scan_emails_for_dates():
             
             # Read body
             if acct["type"] == "himalaya":
-                msg = read_himalaya(acct["config"], msg_id)
+                msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id)
                 body = msg.get("text", "") if isinstance(msg, dict) else str(msg)
             else:
                 msg = read_agently(msg_id)
@@ -364,6 +372,16 @@ def check_urgent_reminders(calendar):
 
 
 def main():
+    if email_store:
+        schedules = email_store.get_schedules("active", 20)
+        if schedules:
+            lines = ["📅 邮件日程:"]
+            for item in schedules[:10]:
+                deadline = item.get("deadline") or "无截止时间"
+                title = item.get("title") or item.get("action_needed") or item.get("message_id")
+                lines.append(f"  {deadline} {title[:60]}")
+            return "\n".join(lines)
+
     # Scan for new events
     new_count, calendar = scan_emails_for_dates()
     

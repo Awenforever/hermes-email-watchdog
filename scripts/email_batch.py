@@ -10,11 +10,16 @@ from datetime import datetime
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-CONTACTS_FILE = os.path.expanduser("~/.hermes/email_contacts.json")
-GROUPS_FILE = os.path.expanduser("~/.hermes/email_groups.json")
-SETTINGS_FILE = os.path.expanduser("~/.hermes/email_settings.json")
+try:
+    import email_config
+except ImportError:
+    email_config = None
 
-ACCOUNTS = {
+CONTACTS_FILE = email_config.get_path("contacts") if email_config else os.path.expanduser("~/.hermes/email_contacts.json")
+GROUPS_FILE = email_config.get_path("groups") if email_config else os.path.expanduser("~/.hermes/email_groups.json")
+SETTINGS_FILE = email_config.get_path("settings") if email_config else os.path.expanduser("~/.hermes/email_settings.json")
+
+ACCOUNTS = email_config.get_account_map() if email_config else {
     "ustc": {"type": "himalaya", "config": os.path.expanduser("~/.config/himalaya/config_ustc.toml"),
              "email": "wmwen@mail.ustc.edu.cn", "name": "wmwen"},
     "gmail": {"type": "himalaya", "config": os.path.expanduser("~/.config/himalaya/config_gmail.toml"),
@@ -38,7 +43,7 @@ def save_json(path, data):
 
 def run(cmd, timeout=30):
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return r.stdout.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", 124
@@ -131,20 +136,25 @@ def send_batch(recipients, subject, body, from_account="ustc", cc=None, attachme
 
 
 def _send_one_himalaya(acct, to_addr, subject, body, cc=None):
-    stdin = f"From: {acct['name']} <{acct['email']}>\n"
+    stdin = f"From: {acct.get('display_name') or acct.get('name')} <{acct['email']}>\n"
     stdin += f"To: {to_addr}\n"
     stdin += f"Subject: {subject}\n"
     if cc:
         stdin += f"Cc: {', '.join(cc)}\n"
     stdin += f"\n{body}\n"
     
-    cmd = f"cat << 'ENDOFMAIL'\n{stdin}ENDOFMAIL\n | himalaya -c {acct['config']} template send"
-    _, rc = run(cmd, timeout=30)
-    return rc == 0
+    try:
+        result = subprocess.run(
+            ["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "template", "send"],
+            input=stdin, capture_output=True, text=True, timeout=30,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 def _send_one_agently(to_addr, subject, body):
-    cmd = f"agently-cli message +send --to '{to_addr}' --subject '{subject}' --body '{body}'"
+    cmd = ["agently-cli", "message", "+send", "--to", to_addr, "--subject", subject, "--body", body]
     out, rc = run(cmd, timeout=30)
     if rc != 0:
         return False
@@ -154,7 +164,7 @@ def _send_one_agently(to_addr, subject, body):
             rd = data.get("data", {})
             if rd.get("confirmation_required"):
                 ctk = rd.get("confirmation_token", "")
-                cmd2 = f"{cmd} --confirmation-token {ctk}"
+                cmd2 = cmd + ["--confirmation-token", ctk]
                 _, rc2 = run(cmd2, timeout=30)
                 return rc2 == 0
             return True
@@ -174,7 +184,7 @@ def forward_to_multiple(msg_id, recipients, note="", from_account="ustc"):
             acct = ACCOUNTS.get(from_account, ACCOUNTS["ustc"])
             if acct["type"] == "himalaya":
                 # Get forward template and modify
-                cmd = f"himalaya -c {acct['config']} template forward {msg_id}"
+                cmd = ["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "template", "forward", str(msg_id)]
                 out, rc = run(cmd, timeout=30)
                 if rc != 0:
                     results["failed"].append(recipient)
@@ -185,14 +195,17 @@ def forward_to_multiple(msg_id, recipients, note="", from_account="ustc"):
                 if note:
                     modified = re.sub(r'\n\n', f'\n\n{note}\n\n', modified, count=1)
                 
-                send_cmd = f"echo '{modified}' | himalaya -c {acct['config']} template send"
-                _, rc2 = run(send_cmd, timeout=30)
+                result = subprocess.run(
+                    ["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "template", "send"],
+                    input=modified, capture_output=True, text=True, timeout=30,
+                )
+                rc2 = result.returncode
                 if rc2 == 0:
                     results["sent"].append(recipient)
                 else:
                     results["failed"].append(recipient)
             else:
-                cmd = f"agently-cli message +forward --id {msg_id} --to '{recipient}' --body '{note}'"
+                cmd = ["agently-cli", "message", "+forward", "--id", str(msg_id), "--to", recipient, "--body", note]
                 _, rc2 = run(cmd, timeout=30)
                 if rc2 == 0:
                     results["sent"].append(recipient)
@@ -210,7 +223,7 @@ def mark_all_read(account="ustc", folder="INBOX"):
     """Mark all emails in a folder as read."""
     acct = ACCOUNTS.get(account, ACCOUNTS["ustc"])
     if acct["type"] == "himalaya":
-        cmd = f"himalaya -c {acct['config']} envelope list --page-size 100 --output json"
+        cmd = ["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "envelope", "list", "--page-size", "100", "--output", "json"]
         out, rc = run(cmd, timeout=30)
         if rc != 0:
             return 0
@@ -220,7 +233,7 @@ def mark_all_read(account="ustc", folder="INBOX"):
             for env in envs:
                 eid = env.get("id", "")
                 if eid and "Seen" not in env.get("flags", []):
-                    run(f"himalaya -c {acct['config']} flag add {eid} --flag seen", timeout=10)
+                    run(["himalaya", "-c", acct.get("himalaya_config") or acct["config"], "flag", "add", str(eid), "--flag", "seen"], timeout=10)
                     count += 1
             return count
         except:

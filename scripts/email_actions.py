@@ -14,12 +14,17 @@ sys.path.insert(0, SCRIPT_DIR)
 
 try:
     import email_store
-    import email_push
+    import email_delivery
 except ImportError:
     email_store = None
-    email_push = None
+    email_delivery = None
 
-CACHE_DIR = os.path.expanduser("~/.hermes/email_cache")
+try:
+    import email_config
+except ImportError:
+    email_config = None
+
+CACHE_DIR = email_config.get_path("cache_dir") if email_config else os.path.expanduser("~/.hermes/email_cache")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -97,53 +102,15 @@ def process_pending_links(limit=5) -> list:
 # ═══════════════════════════════════════════════════════════
 
 def batch_scholar_alerts() -> str:
-    """Merge all unpushed scholar alerts into a single summary message."""
-    if not email_store:
-        return ""
-    
-    conn = email_store._get_conn()
-    rows = conn.execute(
-        """SELECT * FROM messages 
-           WHERE push_status='pushed' 
-           AND final_category IN ('学术快讯','学术周报')
-           AND date_sent > datetime('now','-1 hour')
-           ORDER BY date_sent DESC"""
-    ).fetchall()
-    
-    if len(rows) <= 1:
-        return ""
-    
-    authors = set()
-    subjects = []
-    for row in rows:
-        m = dict(row)
-        subj = m.get("subject", "")
-        authors.add(subj.split(" - ")[0] if " - " in subj else subj[:30])
-        subjects.append(subj[:60])
-    
-    # Mark as summarized
-    for row in rows:
-        email_store.upsert_message({
-            "id": row["id"],
-            "push_status": "summarized",
-            "updated_at": datetime.now().isoformat(),
-        })
-    
-    lines = [f"📚 学术快讯 ({len(rows)}封)"]
-    lines.append(f"涉及: {', '.join(sorted(authors)[:5])}")
-    for s in subjects[:5]:
-        lines.append(f"  • {s}")
-    if len(subjects) > 5:
-        lines.append(f"  ... 还有{len(subjects)-5}封")
-    
-    return "\n".join(lines)
+    """Deprecated: semantic delivery now decides whether low-value mail is skipped or summarized."""
+    return ""
 
 
 # ═══════════════════════════════════════════════════════════
 # #4: Draft reply workflow
 # ═══════════════════════════════════════════════════════════
 
-DRAFTS_DIR = os.path.expanduser("~/.hermes/email_drafts")
+DRAFTS_DIR = email_config.get_path("drafts_dir") if email_config else os.path.expanduser("~/.hermes/email_drafts")
 
 
 def save_draft(msg_id: str, draft_body: str):
@@ -185,17 +152,17 @@ def approve_and_send(msg_id: str, from_account: str = "ustc") -> str:
     to_addr = msg.get("from_email", "")
     subject = f"Re: {msg.get('subject', '')}"
     
-    # Send via himalaya
-    configs = {
-        "ustc": os.path.expanduser("~/.config/himalaya/config_ustc.toml"),
-    }
-    cfg = configs.get(from_account, configs["ustc"])
+    account_map = email_config.get_account_map() if email_config else {}
+    acct = account_map.get(from_account.lower(), {}) if account_map else {}
+    cfg = acct.get("himalaya_config") or acct.get("config") or os.path.expanduser("~/.config/himalaya/config_ustc.toml")
+    from_email = acct.get("email") or "wmwen@mail.ustc.edu.cn"
+    from_name = acct.get("display_name") or acct.get("name") or "wmwen"
     
-    stdin = f"From: wmwen <wmwen@mail.ustc.edu.cn>\nTo: {to_addr}\nSubject: {subject}\n\n{draft}\n"
+    stdin = f"From: {from_name} <{from_email}>\nTo: {to_addr}\nSubject: {subject}\n\n{draft}\n"
     try:
         result = subprocess.run(
-            f"cat << 'EOF'\n{stdin}EOF\n | himalaya -c {cfg} template send 2>/dev/null",
-            shell=True, capture_output=True, text=True, timeout=30
+            ["himalaya", "-c", cfg, "template", "send"],
+            input=stdin, capture_output=True, text=True, timeout=30
         )
         success = result.returncode == 0
         
@@ -285,7 +252,7 @@ def list_cached_emails(limit=20) -> list:
 # #5: Pending send approval workflow
 # ═══════════════════════════════════════════════════════════
 
-PENDING_FILE = os.path.expanduser("~/.hermes/email_pending.json")
+PENDING_FILE = email_config.get_path("pending") if email_config else os.path.expanduser("~/.hermes/email_pending.json")
 
 
 def approve_pending_send(task_id: str) -> str:
