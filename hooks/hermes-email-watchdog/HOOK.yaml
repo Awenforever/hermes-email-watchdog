@@ -1,0 +1,5 @@
+name: hermes-email-watchdog
+version: "1.0"
+events:
+  - gateway:startup
+description: "Hermes Email Watchdog readonly scheduler hook"
