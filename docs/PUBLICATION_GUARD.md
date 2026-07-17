@@ -8,7 +8,7 @@ The reviewed public repository is:
 - visibility: public
 - license: MIT
 - security route: GitHub private vulnerability reporting
-- reviewed remote parent: `36617b50a6016482b4ea03e2d72e05930eb2e442`
+- reviewed remote parent: `66b4ab176f894564e28992166e86b800d3c0656a`
 
 The existing public history must be preserved. Publication must be a normal
 fast-forward; force-push, branch deletion and history rewriting are forbidden.

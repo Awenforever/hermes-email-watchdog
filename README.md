@@ -40,9 +40,22 @@ status, and notification outbox. It must not modify mailbox state or send email.
 
 ## Release status
 
-This remains an isolated repository candidate. GitHub Actions on a real remote,
-stress and recovery, real isolated mailbox/Weixin E2E, software licensing, and
-Weixin context-token queue hardening remain pending.
+The published `main` baseline has passed guarded fast-forward publication,
+GitHub Actions, real-URL fresh-container lifecycle acceptance, isolated
+read-only mailbox onboarding, state/concurrency recovery, and one isolated
+spare-account real Weixin delivery E2E.
+
+This `0.1.0-rc.5` closure candidate changes release documentation, version
+metadata, publication guards, and lifecycle version assertions only. Runtime
+mail handling, rendering, onboarding, durable outbox, and delivery source are
+unchanged.
+
+`weixin.py` and `hermes-wechat-enhance` remain external transport ownership.
+No WeChat Enhance queue bounding, persistence, or priority change is required
+for this Email Watchdog release.
+
+The remaining write step is guarded publication of this exact candidate,
+followed by passing GitHub Actions and creation of the immutable tag/release.
 
 See `INSTALLATION.md`, `SECURITY.md`, `docs/ONBOARDING.md`,
 `docs/OWNERSHIP.md`, and `docs/RELEASE_ACCEPTANCE.md`.

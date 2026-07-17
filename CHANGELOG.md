@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-rc.5 — 2026-07-18
+
+- Close the Email Watchdog release-acceptance record using the accepted public
+  repository, real-URL lifecycle, isolated read-only mailbox, state recovery,
+  and real spare-account Weixin E2E evidence.
+- Remove WeChat Enhance queue bounding, persistence, and priority hardening as
+  an Email Watchdog release gate; `weixin.py` remains externally owned.
+- Refresh the guarded-publication parent for the next fast-forward.
+- Update lifecycle version assertions for `0.1.0-rc.5`.
+- Make no runtime mail, renderer, onboarding, outbox, delivery, mailbox, or
+  Weixin source changes.
+
 ## 0.1.0-rc.4 — 2026-07-17
 
 - Record the owner's decisions to preserve existing public history, use the MIT
