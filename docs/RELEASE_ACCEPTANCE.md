@@ -16,3 +16,13 @@ A final distributable conclusion requires all of the following:
     hardening.
 
 Production closure alone does not satisfy this list.
+
+## Public repository publication gates
+
+- Existing public history is preserved by normal fast-forward.
+- GitHub private vulnerability reporting is enabled before the first push.
+- GitHub Actions permissions are explicitly read-only and action dependencies
+  are pinned to immutable commit SHAs.
+- The live remote head must still equal the reviewed parent before publication.
+- The deleted exposed credential is never reused; a new repository-scoped
+  credential is supplied outside chat and shell history.

@@ -4,14 +4,27 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   static-and-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
-      - run: bash scripts/ci.sh
-      - run: bash tests/test_repository_lifecycle.sh "$GITHUB_WORKSPACE"
+      - name: Run repository matrix
+        run: bash scripts/ci.sh
+      - name: Run lifecycle matrix
+        run: bash tests/test_repository_lifecycle.sh "$GITHUB_WORKSPACE"

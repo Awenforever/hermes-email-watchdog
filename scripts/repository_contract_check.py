@@ -5,7 +5,7 @@ import ast,json,re,sys
 root=Path(sys.argv[1]).resolve()
 required=[
  "README.md","SKILL.md","INSTALLATION.md","SECURITY.md","CHANGELOG.md","LICENSE",
- "docs/REMOTE_HISTORY_MIGRATION.md",
+ "docs/REMOTE_HISTORY_MIGRATION.md","docs/PUBLICATION_GUARD.md",
  "install.sh","setup.sh","verify.sh","upgrade.sh","rollback.sh","uninstall.sh","purge.sh",
  "diagnose.sh","VERSION","docs/ONBOARDING.md",
  "hooks/hermes-email-watchdog/HOOK.yaml","hooks/hermes-email-watchdog/handler.py",
@@ -72,5 +72,20 @@ checks={
  "toml_no_literal_secret":"echo '" not in toml and "printf " not in toml,
 }
 errors += [f"contract false: {k}" for k,v in checks.items() if not v]
+workflow=(root/".github/workflows/ci.yml").read_text(encoding="utf-8")
+security=(root/"SECURITY.md").read_text(encoding="utf-8")
+publication_guard=(root/"docs/PUBLICATION_GUARD.md").read_text(encoding="utf-8")
+workflow_checks={
+ "permissions_contents_read":bool(re.search(r"(?ms)^permissions:\s*\n\s+contents:\s*read\s*$",workflow)),
+ "checkout_immutable":"actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5" in workflow,
+ "setup_python_immutable":"actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" in workflow,
+ "checkout_credentials_disabled":"persist-credentials: false" in workflow,
+ "no_mutable_action_tags":not re.search(r"uses:\s*actions/(?:checkout|setup-python)@v\d+",workflow),
+ "security_route_selected":"GitHub private vulnerability reporting" in security and "Report a vulnerability" in security,
+ "publication_remote_guard":"36617b50a6016482b4ea03e2d72e05930eb2e442" in publication_guard,
+ "publication_forbids_force_push":"force-push" in publication_guard and "forbidden" in publication_guard,
+ "deleted_token_not_reused":"confirmed deleted" in publication_guard and "must never be reused" in publication_guard,
+}
+errors += [f"publication contract false: {k}" for k,v in workflow_checks.items() if not v]
 if errors: raise SystemExit("\n".join(errors))
 print("REPOSITORY_CONTRACT_OK")

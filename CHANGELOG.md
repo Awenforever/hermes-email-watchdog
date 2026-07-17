@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-rc.4 — 2026-07-17
+
+- Record the owner's decisions to preserve existing public history, use the MIT
+  license, and use GitHub private vulnerability reporting.
+- Add the guarded publication contract and confirm the exposed token was deleted.
+- Restrict GitHub Actions to `contents: read`, disable persisted checkout
+  credentials, and pin third-party actions to immutable commit SHAs.
+- Keep publication blocked until the isolated hardening candidate passes and the
+  live security setting is verified by guarded publication tooling.
+
+
 ## 0.1.0-rc.3 — 2026-07-17
 
 - Preserve the existing public GitHub history through a two-parent integration
