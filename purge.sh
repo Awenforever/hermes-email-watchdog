@@ -28,6 +28,9 @@ owned=(
   "${HOME_ROOT}/email_cache"
   "${HOME_ROOT}/email_threads.json"
   "${HOME_ROOT}/email_contacts.json"
+  "${HOME_ROOT}/email_watchdog_onboarding.json"
+  "${HOME_ROOT}/email_watchdog_onboarding_backups"
+  "${HOME_ROOT}/email_watchdog_himalaya"
   "${STATE_DIR}"
 )
 for path in "${owned[@]}"; do

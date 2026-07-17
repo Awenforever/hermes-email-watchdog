@@ -20,15 +20,9 @@ DEFAULT_CONFIG = {
         "db": "~/.hermes/email.db",
         "seen": "~/.hermes/email_watch_seen.json",
         "cache_dir": "~/.hermes/email_cache",
-        "drafts_dir": "~/.hermes/email_drafts",
-        "pending": "~/.hermes/email_pending.json",
         "threads": "~/.hermes/email_threads.json",
-        "calendar": "~/.hermes/email_calendar.json",
         "contacts": "~/.hermes/email_contacts.json",
-        "groups": "~/.hermes/email_groups.json",
-        "settings": "~/.hermes/email_settings.json",
         "attachment_dir": "~/Documents/EmailAttachments",
-        "invoice_dir": "~/Documents/Invoices",
     },
     "watchdog": {
         "lookback": 5,
@@ -96,9 +90,21 @@ DEFAULT_CONFIG = {
     },
     "delivery": {
         "auto_download_attachments": False,
-        "create_reminders": True,
+        "create_reminders": False,
         "managed_cron": False,
-        "timezone": "Asia/Shanghai",
+        "timezone": "auto",
+        "target": {
+            "platform": "",
+            "chat_id": "",
+            "thread_id": "",
+            "chat_type": "",
+        },
+    },
+    # Immutable release safety boundary. User config cannot override these.
+    "safety": {
+        "mailbox_read_only": True,
+        "outbound_email_enabled": False,
+        "mailbox_mutation_enabled": False,
     },
 }
 
@@ -156,6 +162,8 @@ def load_config() -> dict:
         _WARNED = True
 
     cfg = _deep_merge(DEFAULT_CONFIG, data)
+    # Safety settings are immutable for the read-only release candidate.
+    cfg["safety"] = copy.deepcopy(DEFAULT_CONFIG["safety"])
     cfg["accounts"] = [_normalize_account(a) for a in cfg.get("accounts", [])]
     cfg["paths"] = {k: _expand(v) for k, v in cfg.get("paths", {}).items()}
     _CACHE = cfg
@@ -217,6 +225,10 @@ def get_semantic_memory_settings() -> dict:
 
 def get_delivery_settings() -> dict:
     return load_config().get("delivery", {})
+
+
+def get_safety_settings() -> dict:
+    return load_config().get("safety", {})
 
 
 def get_account_emails() -> list:

@@ -26,6 +26,8 @@ paths=[
  home/"email_watchdog_config.json", home/"email_watchdog_enabled",
  home/"email_watchdog_status.json", home/"email_watchdog_outbox.json",
  home/"email_watch_seen.json", home/"email.db",
+ home/"email_watchdog_onboarding.json",
+ home/"email_watchdog_himalaya",
 ]
 json.dump({"captured_at":datetime.now().astimezone().isoformat(timespec="seconds"),
            "read_only":True,"files":[meta(p) for p in paths]},

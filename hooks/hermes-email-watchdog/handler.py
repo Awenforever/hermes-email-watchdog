@@ -7,6 +7,7 @@ import importlib
 import json
 import logging
 import os
+import re
 import sys
 import time
 import traceback
@@ -18,11 +19,13 @@ logger = logging.getLogger(__name__)
 
 SKILL_DIR = Path(os.getenv("HERMES_EMAIL_WATCHDOG_SKILL_DIR", "/opt/data/skills/hermes-email-watchdog"))
 SCRIPTS_DIR = SKILL_DIR / "scripts"
-CONFIG_PATH = os.getenv("EMAIL_WATCHDOG_CONFIG", "/opt/data/.hermes-home/.hermes/email_watchdog_config.json")
-ENABLED_FILE = Path("/opt/data/.hermes-home/.hermes/email_watchdog_enabled")
-INTERVAL_FILE = Path("/opt/data/.hermes-home/.hermes/email_watchdog_interval_seconds")
-STATUS_FILE = Path("/opt/data/.hermes-home/.hermes/email_watchdog_status.json")
-SEEN_FILE = Path("/opt/data/.hermes-home/.hermes/email_watch_seen.json")
+STATE_ROOT = Path(os.getenv("HERMES_EMAIL_WATCHDOG_STATE_ROOT", "/opt/data/.hermes-home/.hermes"))
+CONFIG_PATH = os.getenv("EMAIL_WATCHDOG_CONFIG", str(STATE_ROOT / "email_watchdog_config.json"))
+ENABLED_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_ENABLED_FILE", str(STATE_ROOT / "email_watchdog_enabled")))
+INTERVAL_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_INTERVAL_FILE", str(STATE_ROOT / "email_watchdog_interval_seconds")))
+STATUS_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_STATUS_FILE", str(STATE_ROOT / "email_watchdog_status.json")))
+SEEN_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_SEEN_FILE", str(STATE_ROOT / "email_watch_seen.json")))
+ONBOARDING_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_ONBOARDING_FILE", str(STATE_ROOT / "email_watchdog_onboarding.json")))
 # EMAIL_WATCHDOG_OUTBOX_V1
 OUTBOX_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_FILE", "/opt/data/.hermes-home/.hermes/email_watchdog_outbox.json"))
 OUTBOX_MAX_DELIVERED = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_MAX_DELIVERED", "200") or "200")
@@ -35,6 +38,9 @@ _once_lock = asyncio.Lock()
 
 async def handle(event_type: str, context: dict):
     global _task
+    if event_type == "agent:start":
+        _capture_onboarding_target(context or {})
+        return
     if event_type != "gateway:startup":
         return
 
@@ -50,6 +56,70 @@ async def handle(event_type: str, context: dict):
     _task = asyncio.create_task(_loop(), name="hermes-email-watchdog-loop")
     _task.add_done_callback(_task_done)
     logger.warning("Hermes Email Watchdog: readonly scheduler task created")
+
+
+# EMAIL_WATCHDOG_ONBOARDING_CONTEXT_CAPTURE_V1
+def _setup_intent(message: object) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    patterns = [
+        r"(?:安装|配置|设置|启用|接入|开启).{0,12}(?:邮件|邮箱|email|watchdog)",
+        r"(?:邮件|邮箱|email).{0,12}(?:监控|提醒|通知|看门狗|watchdog)",
+        r"hermes[ -]?email[ -]?watchdog",
+        r"email[ -]?watchdog",
+        r"(?:install|configure|setup|enable).{0,20}(?:email|mail|watchdog)",
+        r"(?:monitor|watch).{0,12}(?:email|mailbox)",
+    ]
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+
+def _capture_onboarding_target(context: dict) -> None:
+    try:
+        if not _setup_intent(context.get("message")):
+            return
+        platform = str(context.get("platform") or "").strip().lower()
+        chat_id = str(context.get("chat_id") or "").strip()
+        if not platform or not chat_id:
+            return
+        state = {}
+        if ONBOARDING_FILE.exists():
+            try:
+                loaded = json.loads(ONBOARDING_FILE.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    state = loaded
+            except Exception:
+                state = {}
+        message_hash = hashlib.sha256(
+            str(context.get("message") or "").encode("utf-8", errors="replace")
+        ).hexdigest()
+        state.update(
+            {
+                "schema_version": 1,
+                "pending_target": {
+                    "platform": platform,
+                    "chat_id": chat_id,
+                    "thread_id": str(context.get("thread_id") or "").strip(),
+                    "chat_type": str(context.get("chat_type") or "").strip(),
+                },
+                "capture_source": "agent_start_hook",
+                "captured_at": _now(),
+                "session_id": str(context.get("session_id") or ""),
+                "user_id_sha256": hashlib.sha256(
+                    str(context.get("user_id") or "").encode("utf-8", errors="replace")
+                ).hexdigest(),
+                "message_sha256": message_hash,
+            }
+        )
+        # Never persist the inbound message body.
+        state.pop("message", None)
+        ONBOARDING_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ONBOARDING_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, ONBOARDING_FILE)
+    except Exception:
+        logger.exception("Hermes Email Watchdog: failed to capture onboarding target")
 
 
 def _task_done(task: asyncio.Task):
@@ -95,6 +165,17 @@ def _interval_seconds() -> int:
 
 
 def _chat_id() -> str:
+    try:
+        data = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+        delivery = data.get("delivery") if isinstance(data, dict) else {}
+        target = delivery.get("target") if isinstance(delivery, dict) else {}
+        if isinstance(target, dict):
+            platform = str(target.get("platform") or "").strip().lower()
+            chat_id = str(target.get("chat_id") or "").strip()
+            if platform == "weixin" and chat_id:
+                return chat_id
+    except Exception:
+        pass
     return (
         os.getenv("HERMES_EMAIL_WATCHDOG_WEIXIN_CHAT_ID", "").strip()
         or os.getenv("HERMES_PROACTIVE_WEIXIN_CHAT_ID", "").strip()
@@ -521,7 +602,7 @@ def _runner_ref():
 async def _send_weixin(text: str, delivery_id: str | None = None):
     chat_id = _chat_id()
     if not chat_id:
-        raise RuntimeError("HERMES_EMAIL_WATCHDOG_WEIXIN_CHAT_ID/HERMES_PROACTIVE_WEIXIN_CHAT_ID is empty")
+        raise RuntimeError("configured Weixin delivery target is empty")
 
     runner = _runner_ref()
     if runner is None:

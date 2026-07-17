@@ -27,6 +27,7 @@ tests=(
   test_email_outbox_idempotency_matrix.py
   test_email_outbox_nonblocking_backoff_matrix.py
   test_outbox_lifecycle.py
+  test_email_onboarding_matrix.py
   test_email_semantic_matrix.py
   test_email_semantic_memory_matrix.py
   test_email_semantic_core_matrix.py

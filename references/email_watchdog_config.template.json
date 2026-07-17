@@ -74,7 +74,13 @@
     "auto_download_attachments": false,
     "create_reminders": false,
     "managed_cron": false,
-    "timezone": "auto"
+    "timezone": "auto",
+    "target": {
+      "platform": "",
+      "chat_id": "",
+      "thread_id": "",
+      "chat_type": ""
+    }
   },
   "safety": {
     "mailbox_read_only": true,

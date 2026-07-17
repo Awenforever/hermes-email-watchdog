@@ -1,11 +1,17 @@
 # Installation
 
-This repository candidate supports direct installation into an isolated Hermes
-data root. It does not restart the gateway automatically.
+Clone the complete repository, verify the expected immutable commit, then run:
 
 ```bash
 bash install.sh
 bash verify.sh
+```
+
+Installation never opens a questionnaire and leaves the scheduler disabled.
+Configure it through the current Hermes conversation or non-interactively:
+
+```bash
+bash /opt/data/skills/hermes-email-watchdog/setup.sh status --json
 ```
 
 Environment overrides:
@@ -15,10 +21,10 @@ HERMES_EMAIL_WATCHDOG_DATA_ROOT
 HERMES_EMAIL_WATCHDOG_SKILL_DIR
 HERMES_EMAIL_WATCHDOG_ACTIVE_HOOK_DIR
 HERMES_EMAIL_WATCHDOG_INSTALL_STATE_DIR
+HERMES_EMAIL_WATCHDOG_STATE_ROOT
+EMAIL_WATCHDOG_CONFIG
+HERMES_EMAIL_WATCHDOG_HIMALAYA_BIN
 ```
-
-The initial install is disabled until onboarding creates an account
-configuration and explicitly enables the scheduler.
 
 Upgrade:
 
@@ -26,8 +32,8 @@ Upgrade:
 bash upgrade.sh
 ```
 
-Default uninstall removes the active hook and installed canonical source while
-preserving all user data:
+Default uninstall removes code and the active Hook while preserving all owned
+configuration, onboarding, state, and learning data:
 
 ```bash
 bash uninstall.sh
