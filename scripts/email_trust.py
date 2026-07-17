@@ -235,9 +235,5 @@ def is_trusted(email: str) -> bool:
 
 def get_own_domains_cached() -> list:
     """Get own domains, using account emails as hint."""
-    account_emails = email_config.get_account_emails() if email_config else [
-        "wmwen@mail.ustc.edu.cn",
-        "wmwen1999@gmail.com",
-        "augenstern@agent.qq.com",
-    ]
+    account_emails = email_config.get_account_emails() if email_config else []
     return detect_own_domains(account_emails)

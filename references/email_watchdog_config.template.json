@@ -1,68 +1,90 @@
 {
   "version": 1,
-  "default_account": "ustc",
-  "accounts": [
-    {
-      "id": "ustc",
-      "label": "USTC",
-      "type": "himalaya",
-      "email": "user@mail.ustc.edu.cn",
-      "display_name": "User Name",
-      "himalaya_config": "~/.config/himalaya/config_ustc.toml",
-      "enabled": true
-    },
-    {
-      "id": "gmail",
-      "label": "Gmail",
-      "type": "himalaya",
-      "email": "user@gmail.com",
-      "display_name": "User Name",
-      "himalaya_config": "~/.config/himalaya/config_gmail.toml",
-      "enabled": true
-    },
-    {
-      "id": "agently",
-      "label": "Agently",
-      "type": "agently",
-      "email": "user@agent.qq.com",
-      "display_name": "User Name",
-      "enabled": true
-    }
-  ],
+  "default_account": "",
+  "accounts": [],
   "paths": {
     "db": "~/.hermes/email.db",
     "seen": "~/.hermes/email_watch_seen.json",
     "cache_dir": "~/.hermes/email_cache",
-    "drafts_dir": "~/.hermes/email_drafts",
-    "pending": "~/.hermes/email_pending.json",
     "threads": "~/.hermes/email_threads.json",
-    "calendar": "~/.hermes/email_calendar.json",
     "contacts": "~/.hermes/email_contacts.json",
-    "groups": "~/.hermes/email_groups.json",
-    "settings": "~/.hermes/email_settings.json",
-    "attachment_dir": "~/Documents/EmailAttachments",
-    "invoice_dir": "~/Documents/Invoices"
+    "attachment_dir": "~/Documents/EmailAttachments"
   },
   "watchdog": {
     "lookback": 5,
     "sleep_start": 0,
     "sleep_end": 6,
-    "max_cached": 200
+    "max_cached": 200,
+    "seen_max_entries": 5000
   },
   "llm": {
-    "enabled": true,
-    "endpoint": "https://api.llm.ustc.edu.cn/v1/chat/completions",
-    "api_key_env": "USTC_LLM_API_KEY",
-    "model": "deepseek-v4-flash",
+    "enabled": false,
+    "endpoint": "",
+    "api_key_env": "",
+    "model": "",
     "temperature": 0.1,
     "max_tokens": 2000,
     "timeout_seconds": 90,
     "max_body_chars": 12000
   },
+  "semantic_engine": {
+    "enabled": true,
+    "mode": "shadow",
+    "provider": "ollama",
+    "endpoint": "http://127.0.0.1:11434",
+    "model": "qwen2.5:3b",
+    "timeout_seconds": 300,
+    "temperature": 0.1,
+    "max_body_chars": 12000,
+    "max_parallel": 1,
+    "cache_by_message_hash": true,
+    "protocol": "readable_grounded_core_v1u",
+    "num_thread": 5,
+    "num_predict_mode": "adaptive",
+    "num_predict": 1800,
+    "num_predict_simple": 600,
+    "num_predict_standard": 1000,
+    "num_predict_complex": 1600,
+    "num_predict_hard_cap": 1800
+  },
+  "notification": {
+    "renderer": "adaptive_v1e",
+    "mode": "shadow",
+    "production_route_enabled": false,
+    "all_mail_push": true,
+    "legacy_fallback_enabled": true,
+    "fast_lane_enabled": true,
+    "original_policy": "auto",
+    "original_max_chars": 5000,
+    "show_priority": true,
+    "show_category": true,
+    "show_time": true,
+    "show_debug_reason": false,
+    "suppress_redundant_summary": true
+  },
+  "semantic_memory": {
+    "enabled": true,
+    "mode": "shadow",
+    "max_examples": 5,
+    "max_evidence_keys": 200,
+    "learn_from_user_feedback_only": true,
+    "runtime_activation": false
+  },
   "delivery": {
-    "auto_download_attachments": true,
-    "create_reminders": true,
+    "auto_download_attachments": false,
+    "create_reminders": false,
     "managed_cron": false,
-    "timezone": "Asia/Shanghai"
+    "timezone": "auto",
+    "target": {
+      "platform": "",
+      "chat_id": "",
+      "thread_id": "",
+      "chat_type": ""
+    }
+  },
+  "safety": {
+    "mailbox_read_only": true,
+    "outbound_email_enabled": false,
+    "mailbox_mutation_enabled": false
   }
 }

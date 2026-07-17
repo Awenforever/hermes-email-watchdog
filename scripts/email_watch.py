@@ -10,7 +10,10 @@ import json
 import os
 import re
 import subprocess
+import shutil
 import sys
+import importlib
+from html import unescape
 from datetime import datetime, timezone, time as dtime
 from pathlib import Path
 
@@ -24,16 +27,26 @@ try:
     import email_risk
     import email_delivery
     import email_llm
+    # EMAIL_WATCHDOG_DEPENDENCY_RELOAD_LEARNING_SHADOW_V1
+    email_delivery = importlib.reload(email_delivery)
+    email_llm = importlib.reload(email_llm)
     HAS_V3 = True
 except ImportError as e:
     HAS_V3 = False
+
+# ── Shadow learning integration ─────────────────────────────
+try:
+    import email_learning
+    HAS_LEARNING = True
+except ImportError:
+    HAS_LEARNING = False
 
 # ── Contact & thread integration ──
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 try:
     import email_contacts
-    import email_reply
+    import email_thread_tracker
     HAS_MODULES = True
 except ImportError:
     HAS_MODULES = False
@@ -47,12 +60,14 @@ if HAS_V3:
     SLEEP_START = int(_WATCHDOG_SETTINGS.get("sleep_start", 0))
     SLEEP_END = int(_WATCHDOG_SETTINGS.get("sleep_end", 6))
     ACCOUNTS = email_config.get_accounts(True)
+    SEEN_MAX_ENTRIES = int(_WATCHDOG_SETTINGS.get("seen_max_entries", 5000))
 else:
     SEEN_FILE = os.path.expanduser("~/.hermes/email_watch_seen.json")
     LOOKBACK = 5
     SLEEP_START = 0
     SLEEP_END = 6
     ACCOUNTS = []
+    SEEN_MAX_ENTRIES = 5000
 
 
 # ── Email Content Cache ──────────────────────────────────────
@@ -118,6 +133,8 @@ def run(cmd, timeout=30):
         return r.stdout.strip(), r.returncode
     except subprocess.TimeoutExpired:
         return "", 124
+    except FileNotFoundError:
+        return "", 127
 
 def load_json(path):
     if os.path.exists(path):
@@ -134,39 +151,243 @@ def load_seen():
     return load_json(SEEN_FILE)
 
 def save_seen(data):
+    """Persist seen IDs with bounded retention to avoid unbounded JSON growth."""
+    if isinstance(data, dict) and len(data) > SEEN_MAX_ENTRIES:
+        data = dict(list(data.items())[-SEEN_MAX_ENTRIES:])
     save_json(SEEN_FILE, data)
 
-def is_sleep_time():
-    if SLEEP_START < 0 or SLEEP_END < 0:  # negative values = disabled
+
+
+def is_sleep_time(now=None):
+    # EMAIL_WATCHDOG_SLEEP_SEMANTICS_V2
+    try:
+        start = int(SLEEP_START or 0) % 24
+        end = int(SLEEP_END or 0) % 24
+    except Exception:
         return False
-    now = datetime.now().time()
-    if SLEEP_START < SLEEP_END:
-        return SLEEP_START <= now.hour < SLEEP_END
-    else:
-        return now.hour >= SLEEP_START or now.hour < SLEEP_END
+
+    # Equal start/end means the quiet window is disabled, not all-day quiet.
+    if start == end:
+        return False
+
+    if now is None:
+        now = datetime.now()
+
+    try:
+        hour = int(getattr(now, "hour")) % 24
+    except Exception:
+        return False
+
+    if start < end:
+        return start <= hour < end
+
+    # Cross-midnight window, e.g. 22 -> 6.
+    return hour >= start or hour < end
+
+def _json_loads_flexible(text):
+    """Parse normal JSON, double-encoded JSON, or JSONL-ish Himalaya output."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    for candidate in (raw, raw.replace("\\n", "\n")):
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, str):
+                try:
+                    return json.loads(data)
+                except Exception:
+                    return data
+            return data
+        except json.JSONDecodeError:
+            pass
+    items = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return items or None
 
 
-# ── Email fetching ──────────────────────────────────────────────
+def _unwrap_himalaya_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("envelopes", "messages", "items", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return value
+            if isinstance(value, dict):
+                nested = _unwrap_himalaya_list(value)
+                if nested:
+                    return nested
+    return []
+
+
+# EMAIL_WATCHDOG_HIMALAYA_BIN_RESOLUTION_V1
+def _himalaya_binary():
+    candidates = [
+        os.environ.get("HIMALAYA_BIN", "").strip(),
+        "/opt/data/bin/himalaya",
+        shutil.which("himalaya") or "",
+        "himalaya",
+    ]
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        expanded = os.path.expanduser(candidate)
+        if expanded == "himalaya" or os.path.exists(expanded):
+            return expanded
+    return "himalaya"
+
+def _himalaya_cmd_variants(config_path, args):
+    cfg = os.path.expanduser(config_path or "")
+    base = _himalaya_binary()
+    variants = []
+    if cfg:
+        variants.append([base, "-c", cfg] + list(args))
+        variants.append([base, "--config", cfg] + list(args))
+    variants.append([base] + list(args))
+    unique = []
+    seen = set()
+    for cmd in variants:
+        key = tuple(cmd)
+        if key not in seen:
+            unique.append(cmd)
+            seen.add(key)
+    return unique
+
+
+
+# EMAIL_WATCHDOG_HIMALAYA_ERROR_PROPAGATION_V1
+class HimalayaCommandError(RuntimeError):
+    """Raised when Himalaya fails instead of silently treating the mailbox as empty."""
+    def __init__(self, cmd_args, attempts):
+        self.cmd_args = list(cmd_args or [])
+        self.attempts = list(attempts or [])
+        super().__init__(self._format())
+
+    def _format(self):
+        if not self.attempts:
+            return f"himalaya failed for args={self.cmd_args!r}: no attempts"
+        last = self.attempts[-1]
+        rc = last.get("rc")
+        detail = last.get("stderr") or last.get("stdout") or last.get("error") or last.get("parse_error") or ""
+        detail = _himalaya_error_snippet(detail)
+        return f"himalaya failed for args={self.cmd_args!r}: rc={rc}; {detail}"
+
+
+def _himalaya_error_snippet(value, limit=500):
+    text = str(value or "")
+    text = re.sub(r"\x1B\[[0-9;]*[A-Za-z]", "", text)
+    text = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "***REDACTED_EMAIL***", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        text = "..." + text[-limit:]
+    return text
+
+
+def _run_himalaya_json(config_path, args, timeout=30):
+    """Run Himalaya and return parsed JSON. Command/auth failures are explicit."""
+    attempts = []
+    for cmd in _himalaya_cmd_variants(config_path, args):
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+            attempt = {
+                "cmd": cmd[:3],
+                "rc": result.returncode,
+                "stdout": _himalaya_error_snippet(stdout, 800),
+                "stderr": _himalaya_error_snippet(stderr, 800),
+            }
+            attempts.append(attempt)
+        except subprocess.TimeoutExpired:
+            attempts.append({"cmd": cmd[:3], "rc": 124, "error": f"timeout after {timeout}s"})
+            continue
+        except FileNotFoundError as exc:
+            attempts.append({"cmd": cmd[:3], "rc": 127, "error": str(exc)})
+            continue
+
+        if result.returncode != 0:
+            continue
+
+        raw = stdout.strip()
+        if not raw:
+            if list(args[:2]) == ["envelope", "list"]:
+                return []
+            attempts[-1]["parse_error"] = "empty stdout"
+            continue
+
+        parsed = _json_loads_flexible(stdout)
+        if parsed is not None:
+            return parsed
+
+        attempts[-1]["parse_error"] = "stdout was not parseable JSON"
+
+    raise HimalayaCommandError(args, attempts)
+
 
 def list_himalaya(config_path):
-    cmd = ["himalaya", "-c", config_path, "envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"]
-    out, rc = run(cmd, timeout=30)
-    if rc != 0:
-        return []
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        return []
+    data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30)
+    return _unwrap_himalaya_list(data)
+
+def _html_to_text(value):
+    text = str(value or "")
+    text = text.replace("\\n", "\n").replace("\\t", "\t")
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = unescape(text).replace("\xa0", " ")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _extract_message_body(msg):
+    if isinstance(msg, str):
+        return _html_to_text(msg)
+    if not isinstance(msg, dict):
+        return ""
+    for key in ("text", "body", "plain", "plain_text", "content"):
+        value = msg.get(key)
+        if isinstance(value, str) and value.strip():
+            return _html_to_text(value)
+    for key in ("html", "html_body"):
+        value = msg.get(key)
+        if isinstance(value, str) and value.strip():
+            return _html_to_text(value)
+    for key in ("parts", "body_parts"):
+        parts = msg.get(key)
+        if isinstance(parts, list):
+            collected = []
+            for part in parts:
+                if isinstance(part, dict):
+                    collected.append(_extract_message_body(part))
+                elif isinstance(part, str):
+                    collected.append(_html_to_text(part))
+            body = "\n".join(x for x in collected if x)
+            if body:
+                return body
+    return _html_to_text(json.dumps(msg, ensure_ascii=False))
+
+
 
 def read_himalaya(config_path, msg_id):
-    cmd = ["himalaya", "-c", config_path, "message", "read", str(msg_id), "--output", "json"]
-    out, rc = run(cmd, timeout=30)
-    if rc != 0:
+    data = _run_himalaya_json(config_path, ["message", "read", str(msg_id), "--output", "json"], timeout=30)
+    if data is None:
         return None
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        return {"text": out}
+    if isinstance(data, dict):
+        data = dict(data)
+        data["text"] = _extract_message_body(data)
+        return data
+    return {"text": _extract_message_body(data)}
 
 def list_agently():
     cmd = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(LOOKBACK)]
@@ -198,23 +419,22 @@ def read_agently(msg_id):
 # ── Attachment downloading ──────────────────────────────────────
 
 def download_himalaya_attachments(config_path, msg_id, save_dir):
-    """Download attachments from a himalaya message. Returns list of saved paths."""
-    cmd = ["himalaya", "-c", config_path, "attachment", "download", str(msg_id), "--downloads-dir", save_dir]
-    out, rc = run(cmd, timeout=60)
-    if rc != 0:
+    """Download attachments from a Himalaya message. Returns newly saved paths."""
+    before = set(os.listdir(save_dir)) if os.path.isdir(save_dir) else set()
+    os.makedirs(save_dir, exist_ok=True)
+    for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
+        out, rc = run(cmd, timeout=60)
+        if rc == 0:
+            break
+    else:
         return []
-    # himalaya doesn't return paths in a structured way; scan the dir
+    after = set(os.listdir(save_dir))
     saved = []
-    if os.path.isdir(save_dir):
-        # Get recently created files
-        for f in sorted(os.listdir(save_dir), key=lambda x: os.path.getmtime(os.path.join(save_dir, x)), reverse=True):
-            fp = os.path.join(save_dir, f)
-            if os.path.isfile(fp):
-                saved.append(fp)
-        # Return only files created in the last 5 seconds
-        now = datetime.now().timestamp()
-        return [p for p in saved if now - os.path.getmtime(p) < 10]
-    return []
+    for name in sorted(after - before):
+        fp = os.path.join(save_dir, name)
+        if os.path.isfile(fp):
+            saved.append(fp)
+    return saved
 
 def download_agently_attachment(msg_id, att_id, save_dir):
     cmd = ["agently-cli", "attachment", "+download", "--msg", str(msg_id), "--att", str(att_id), "--output", save_dir]
@@ -636,7 +856,7 @@ def check_account(acct, pushed_count=None):
             continue
 
         if acct["type"] == "himalaya":
-            body = msg.get("text", "") if isinstance(msg, dict) else str(msg)
+            body = _extract_message_body(msg)
             from_addr = env.get("from", {}).get("addr", "")
             from_name = env.get("from", {}).get("name", "")
             subject = env.get("subject", "")
@@ -693,7 +913,7 @@ def check_account(acct, pushed_count=None):
             email_contacts.learn_contact(from_addr, from_name)
 
         if HAS_MODULES and rule_result.get("action") != "skip":
-            thread_id = email_reply.update_thread_on_reply(from_addr, subject, (body or "")[:200])
+            thread_id = email_thread_tracker.update_thread_on_reply(from_addr, subject, (body or "")[:200])
 
         if HAS_V3:
             email_store.update_message_fields(msg_id, {
@@ -701,13 +921,40 @@ def check_account(acct, pushed_count=None):
                 "importance": rule_result.get("priority") if rule_result.get("priority") != "skip" else "low",
             })
 
-        if rule_result.get("action") == "skip":
+        production_route_active = bool(
+            HAS_V3
+            and hasattr(email_delivery, "production_route_enabled")
+            and email_delivery.production_route_enabled()
+        )
+
+        if rule_result.get("action") == "skip" and not production_route_active:
             if HAS_V3:
                 email_store.update_message_fields(msg_id, {"push_status": "skipped"})
+                try:
+                    email_delivery.observe_shadow_only(
+                        email_data, rule_result, acct, legacy_reason="legacy_rule_skip"
+                    )
+                except Exception as exc:
+                    try:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "Hermes Email Watchdog legacy-skip shadow observation failed: %r", exc
+                        )
+                    except Exception:
+                        pass
             continue
 
         if rule_result.get("action") == "simple_code":
             analysis = _simple_code_analysis(email_data, rule_result)
+        elif production_route_active:
+            # The new durable production route owns semantic analysis. The legacy
+            # analysis is retained only as a safe formatter fallback input.
+            analysis = email_llm.fallback_analysis(
+                email_data, rule_result, "production semantic route owns analysis"
+            ) if HAS_V3 else {}
+            analysis = dict(analysis or {})
+            analysis["should_notify"] = True
+            analysis["production_semantic_route_pending"] = True
         elif HAS_V3 and email_llm.should_use_llm(rule_result, email_data):
             analysis = email_llm.analyze_email(email_data, rule_result)
         else:
@@ -715,12 +962,22 @@ def check_account(acct, pushed_count=None):
 
         if HAS_V3:
             delivery = email_delivery.deliver_email(email_data, rule_result, analysis, acct)
+            # EMAIL_WATCHDOG_SHADOW_LEARNING_LOGGER_V1
+            if HAS_LEARNING:
+                try:
+                    email_learning.record_decision(email_data, rule_result, analysis, delivery, acct)
+                except Exception:
+                    pass
             alert = delivery.get("notification_text", "")
         else:
             alert = rule_result.get("summary") or subject
 
         if alert:
-            if analysis.get("user_relevance") == "urgent" or rule_result.get("priority") == "urgent":
+            if (
+                delivery.get("route_lane") == "fast"
+                or analysis.get("user_relevance") == "urgent"
+                or rule_result.get("priority") == "urgent"
+            ):
                 alerts.insert(0, alert)
             else:
                 alerts.append(alert)
@@ -730,13 +987,12 @@ def check_account(acct, pushed_count=None):
     return alerts
 
 def main():
-    # Sleep time check
     if is_sleep_time():
         return ""
 
     all_alerts = []
     accounts_seen = set()
-    
+
     for acct in ACCOUNTS:
         try:
             acct_alerts = check_account(acct)
@@ -745,18 +1001,20 @@ def main():
                 accounts_seen.add(acct.get("label") or acct.get("name") or acct.get("id") or "account")
         except Exception as e:
             name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
-            all_alerts.append(f"⚠️ {name} 检查失败: {e}")
+            all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
             accounts_seen.add(name)
 
     if not all_alerts:
         return ""
 
+    if len(all_alerts) == 1:
+        return all_alerts[0]
+
     now = datetime.now().strftime("%m/%d %H:%M")
     total = len(all_alerts)
-    
-    header = f"📬 {total}封邮件 ({now}) [{'+'.join(sorted(accounts_seen))}]"
-    full = header + "\n\n" + "\n\n---\n\n".join(all_alerts)
-    return full
+    accounts = "+".join(sorted(accounts_seen)) if accounts_seen else "Email"
+    header = f"### 📬 新邮件 {total} 封｜{accounts}｜{now}"
+    return header + "\n\n---\n\n" + "\n\n---\n\n".join(all_alerts)
 
 
 if __name__ == "__main__":
