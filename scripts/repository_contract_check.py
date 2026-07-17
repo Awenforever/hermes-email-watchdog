@@ -82,7 +82,7 @@ workflow_checks={
  "checkout_credentials_disabled":"persist-credentials: false" in workflow,
  "no_mutable_action_tags":not re.search(r"uses:\s*actions/(?:checkout|setup-python)@v\d+",workflow),
  "security_route_selected":"GitHub private vulnerability reporting" in security and "Report a vulnerability" in security,
- "publication_remote_guard":"66b4ab176f894564e28992166e86b800d3c0656a" in publication_guard,
+ "publication_remote_guard":"1c545a3075c3db7d92a892d7ae6799db829a3255" in publication_guard,
  "publication_forbids_force_push":"force-push" in publication_guard and "forbidden" in publication_guard,
  "deleted_token_not_reused":"confirmed deleted" in publication_guard and "must never be reused" in publication_guard,
 }

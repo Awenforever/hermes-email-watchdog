@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0 — 2026-07-18
+
+- Publish the first stable Email Watchdog release after the complete `rc.5`
+  acceptance and public-release verification sequence.
+- Keep runtime mail handling, renderer, onboarding, durable outbox, delivery,
+  mailbox policy and Weixin integration byte-identical to `0.1.0-rc.5`.
+- Record the stable production-deployment contract: preserve all owned user
+  data, create a rollback backup, and leave `weixin.py` and
+  `hermes-wechat-enhance` unchanged.
+- Update stable lifecycle assertions and guarded-publication parent.
+
 ## 0.1.0-rc.5 — 2026-07-18
 
 - Close the Email Watchdog release-acceptance record using the accepted public

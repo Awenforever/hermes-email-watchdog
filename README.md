@@ -40,22 +40,21 @@ status, and notification outbox. It must not modify mailbox state or send email.
 
 ## Release status
 
-The published `main` baseline has passed guarded fast-forward publication,
-GitHub Actions, real-URL fresh-container lifecycle acceptance, isolated
-read-only mailbox onboarding, state/concurrency recovery, and one isolated
-spare-account real Weixin delivery E2E.
+Hermes Email Watchdog `0.1.0` is the first stable public release. The exact
+runtime implementation is unchanged from the accepted `0.1.0-rc.5` candidate.
 
-This `0.1.0-rc.5` closure candidate changes release documentation, version
-metadata, publication guards, and lifecycle version assertions only. Runtime
-mail handling, rendering, onboarding, durable outbox, and delivery source are
-unchanged.
+The release lineage has passed guarded fast-forward publication, GitHub
+Actions, real-tag fresh-container lifecycle acceptance, isolated read-only
+mailbox onboarding, state/concurrency recovery, and one isolated spare-account
+real Weixin delivery E2E.
 
 `weixin.py` and `hermes-wechat-enhance` remain external transport ownership.
-No WeChat Enhance queue bounding, persistence, or priority change is required
-for this Email Watchdog release.
+They are not modified by this release and are not production-deployment
+prerequisites for Email Watchdog.
 
-The remaining write step is guarded publication of this exact candidate,
-followed by passing GitHub Actions and creation of the immutable tag/release.
+The stable package may be installed or upgraded with the repository lifecycle
+scripts. Installation preserves owned configuration, onboarding state, seen
+state, learning data and durable notification outbox.
 
 See `INSTALLATION.md`, `SECURITY.md`, `docs/ONBOARDING.md`,
 `docs/OWNERSHIP.md`, and `docs/RELEASE_ACCEPTANCE.md`.

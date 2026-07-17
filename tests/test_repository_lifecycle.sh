@@ -37,14 +37,14 @@ bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 
 # Upgrade from a modified, checksummed checkout and roll back.
 cp -a "${REPO}" "${DATA}/repo-v2"
-printf '0.2.0-rc.5\n' > "${DATA}/repo-v2/VERSION"
+printf '0.2.0\n' > "${DATA}/repo-v2/VERSION"
 python3 "${DATA}/repo-v2/scripts/generate_checksums.py" "${DATA}/repo-v2"
 echo STEP=upgrade
 bash "${DATA}/repo-v2/upgrade.sh"
-[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.2.0-rc.5" ]]
+[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.2.0" ]]
 echo STEP=rollback
 bash "${DATA}/data/skills/hermes-email-watchdog/rollback.sh"
-[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.1.0-rc.5" ]]
+[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.1.0" ]]
 bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 
 echo STEP=rollback-verified

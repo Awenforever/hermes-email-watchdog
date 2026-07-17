@@ -8,7 +8,7 @@ The reviewed public repository is:
 - visibility: public
 - license: MIT
 - security route: GitHub private vulnerability reporting
-- reviewed remote parent: `66b4ab176f894564e28992166e86b800d3c0656a`
+- reviewed remote parent: `1c545a3075c3db7d92a892d7ae6799db829a3255`
 
 The existing public history must be preserved. Publication must be a normal
 fast-forward; force-push, branch deletion and history rewriting are forbidden.
@@ -18,8 +18,9 @@ Before any push, the publication tool must:
 1. Verify the live public `main` still equals the reviewed remote parent.
 2. Verify the exact candidate commit and bundle checksum.
 3. Verify GitHub private vulnerability reporting is enabled.
-4. Accept a newly created repository-scoped credential only through a hidden
-   terminal prompt or protected file descriptor. The credential must not appear
+4. Accept a newly created repository-scoped credential through a terminal prompt
+   or protected file descriptor. Visible terminal input is permitted only when
+   explicitly requested by the repository owner. The credential must not appear
    in chat, command-line arguments, shell history, logs or result archives.
 5. Verify the credential has only the permissions required for the current
    operation.
