@@ -10,7 +10,9 @@ request.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -89,6 +91,35 @@ OWNED_HIMALAYA_DIR = Path(
         )
     )
 )
+
+# EMAIL_WATCHDOG_ONBOARDING_TRANSACTION_LOCK_V1
+TRANSACTION_LOCK_FILE = Path(
+    os.path.expandvars(
+        os.path.expanduser(
+            os.environ.get(
+                "HERMES_EMAIL_WATCHDOG_ONBOARDING_LOCK_FILE",
+                str(STATE_ROOT / "email_watchdog_onboarding.lock"),
+            )
+        )
+    )
+)
+
+
+@contextlib.contextmanager
+def _transaction_lock():
+    """Serialize setup state changes across concurrent CLI processes."""
+    TRANSACTION_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(TRANSACTION_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.chmod(TRANSACTION_LOCK_FILE, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
 
 ALLOWED_PATH_KEYS = {
     "db",
@@ -173,6 +204,42 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
         json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         0o600,
     )
+
+
+def _stage_text(path: Path, text: str, mode: int = 0o600) -> Path:
+    """Create a durable sibling staging file without publishing it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_tmp = tempfile.mkstemp(
+        prefix=f".{path.name}.stage.",
+        dir=str(path.parent),
+    )
+    tmp = Path(raw_tmp)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        return tmp
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _validation_config_for_staged_himalaya(
+    config: dict[str, Any],
+    generated: PlannedHimalayaFile,
+    staged_path: Path,
+) -> dict[str, Any]:
+    candidate = copy.deepcopy(config)
+    final_path = str(generated.path)
+    for account in candidate.get("accounts", []):
+        if not isinstance(account, dict):
+            continue
+        for key in ("config", "himalaya_config"):
+            if str(account.get(key) or "") == final_path:
+                account[key] = str(staged_path)
+    return candidate
 
 
 def _load_json(path: Path, default: Any) -> Any:
@@ -817,78 +884,105 @@ def _write_backup(snapshot: dict[str, tuple[bool, bytes, int]], operation_id: st
 
 
 def apply(input_data: dict[str, Any]) -> dict[str, Any]:
-    internal = _plan_internal(input_data)
-    if not internal["ok"]:
-        raise OnboardingError("unresolved fields: " + ", ".join(internal["unresolved"]))
-    config = internal["config"]
-    generated: PlannedHimalayaFile | None = internal["generated_himalaya"]
-    paths = [CONFIG_PATH, ENABLED_FILE, ONBOARDING_FILE]
-    if generated:
-        paths.append(generated.path)
-    snapshot = _snapshot(paths)
-    operation_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
-    backup = _write_backup(snapshot, operation_id)
-    try:
+    with _transaction_lock():
+        internal = _plan_internal(input_data)
+        if not internal["ok"]:
+            raise OnboardingError("unresolved fields: " + ", ".join(internal["unresolved"]))
+        config = internal["config"]
+        generated: PlannedHimalayaFile | None = internal["generated_himalaya"]
+        paths = [CONFIG_PATH, ENABLED_FILE, ONBOARDING_FILE]
         if generated:
-            _atomic_write_text(generated.path, generated.content, 0o600)
-        _atomic_write_json(CONFIG_PATH, config)
-        _write_enabled(False)
-        validation = validate_config(config)
-        if not validation.get("passed"):
-            raise OnboardingError("read-only account validation failed")
-        if internal["enable_requested"]:
-            _write_enabled(True)
-        target = config["delivery"]["target"]
+            paths.append(generated.path)
+        snapshot = _snapshot(paths)
+        operation_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+        backup = _write_backup(snapshot, operation_id)
+        staged_generated: Path | None = None
+        live_writes_started = False
+        try:
+            validation_config = config
+            if generated:
+                staged_generated = _stage_text(generated.path, generated.content, 0o600)
+                validation_config = _validation_config_for_staged_himalaya(
+                    config,
+                    generated,
+                    staged_generated,
+                )
+
+            # Validate the proposed configuration before publishing any live
+            # Email Watchdog config/state files. A SIGKILL during validation
+            # therefore leaves the previously committed transaction intact.
+            validation = validate_config(validation_config)
+            if not validation.get("passed"):
+                raise OnboardingError("read-only account validation failed")
+
+            live_writes_started = True
+            if generated and staged_generated is not None:
+                generated.path.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staged_generated, generated.path)
+                staged_generated = None
+                os.chmod(generated.path, 0o600)
+
+            _atomic_write_json(CONFIG_PATH, config)
+            _write_enabled(bool(internal["enable_requested"]))
+
+            target = config["delivery"]["target"]
+            state = _load_json(ONBOARDING_FILE, {})
+            if not isinstance(state, dict):
+                state = {}
+            state.update(
+                {
+                    "schema_version": 1,
+                    "configured": True,
+                    "configured_at": _now(),
+                    "last_config_sha256": internal["config_sha256"],
+                    "last_account_source": internal["account_source"],
+                    "last_target_source": internal["target_source"],
+                    "configured_target": _target_summary(target),
+                    "enabled": _read_enabled(),
+                    "last_backup": str(backup),
+                    "last_operation_id": operation_id,
+                    "transaction_state": "committed",
+                }
+            )
+            state.pop("pending_target", None)
+            _atomic_write_json(ONBOARDING_FILE, state)
+            return {
+                "passed": True,
+                "config_sha256": internal["config_sha256"],
+                "enabled": _read_enabled(),
+                "validation": validation,
+                "account_source": internal["account_source"],
+                "target_source": internal["target_source"],
+                "backup": _path_summary(backup),
+                "mailbox_mutation": False,
+            }
+        except Exception:
+            if live_writes_started:
+                _restore(snapshot)
+            raise
+        finally:
+            if staged_generated is not None:
+                staged_generated.unlink(missing_ok=True)
+
+
+def capture_context() -> dict[str, Any]:
+    with _transaction_lock():
+        target = _session_target()
+        if not target.get("platform") or not target.get("chat_id"):
+            raise OnboardingError("current session platform/chat id is unavailable")
         state = _load_json(ONBOARDING_FILE, {})
         if not isinstance(state, dict):
             state = {}
         state.update(
             {
                 "schema_version": 1,
-                "configured": True,
-                "configured_at": _now(),
-                "last_config_sha256": internal["config_sha256"],
-                "last_account_source": internal["account_source"],
-                "last_target_source": internal["target_source"],
-                "configured_target": _target_summary(target),
-                "enabled": _read_enabled(),
-                "last_backup": str(backup),
+                "pending_target": target,
+                "captured_at": _now(),
+                "capture_source": "terminal_session_env",
             }
         )
-        state.pop("pending_target", None)
         _atomic_write_json(ONBOARDING_FILE, state)
-        return {
-            "passed": True,
-            "config_sha256": internal["config_sha256"],
-            "enabled": _read_enabled(),
-            "validation": validation,
-            "account_source": internal["account_source"],
-            "target_source": internal["target_source"],
-            "backup": _path_summary(backup),
-            "mailbox_mutation": False,
-        }
-    except Exception:
-        _restore(snapshot)
-        raise
-
-
-def capture_context() -> dict[str, Any]:
-    target = _session_target()
-    if not target.get("platform") or not target.get("chat_id"):
-        raise OnboardingError("current session platform/chat id is unavailable")
-    state = _load_json(ONBOARDING_FILE, {})
-    if not isinstance(state, dict):
-        state = {}
-    state.update(
-        {
-            "schema_version": 1,
-            "pending_target": target,
-            "captured_at": _now(),
-            "capture_source": "terminal_session_env",
-        }
-    )
-    _atomic_write_json(ONBOARDING_FILE, state)
-    return {"passed": True, "target": _target_summary(target)}
+        return {"passed": True, "target": _target_summary(target)}
 
 
 def status() -> dict[str, Any]:
@@ -957,16 +1051,28 @@ def export_redacted() -> dict[str, Any]:
 
 
 def enable() -> dict[str, Any]:
-    validation = validate_current()
-    if not validation.get("passed"):
-        raise OnboardingError("cannot enable before read-only validation passes")
-    _write_enabled(True)
-    return {"passed": True, "enabled": True, "validation": validation}
+    with _transaction_lock():
+        validation = validate_current()
+        if not validation.get("passed"):
+            raise OnboardingError("cannot enable before read-only validation passes")
+        _write_enabled(True)
+        state = _load_json(ONBOARDING_FILE, {})
+        if isinstance(state, dict):
+            state["enabled"] = True
+            state["updated_at"] = _now()
+            _atomic_write_json(ONBOARDING_FILE, state)
+        return {"passed": True, "enabled": True, "validation": validation}
 
 
 def disable() -> dict[str, Any]:
-    _write_enabled(False)
-    return {"passed": True, "enabled": False}
+    with _transaction_lock():
+        _write_enabled(False)
+        state = _load_json(ONBOARDING_FILE, {})
+        if isinstance(state, dict):
+            state["enabled"] = False
+            state["updated_at"] = _now()
+            _atomic_write_json(ONBOARDING_FILE, state)
+        return {"passed": True, "enabled": False}
 
 
 def _build_parser() -> argparse.ArgumentParser:

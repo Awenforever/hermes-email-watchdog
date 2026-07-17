@@ -21,6 +21,9 @@ printf '{}\n' > "${home}/email_watch_seen.json"
 printf '{"entries":{}}\n' > "${home}/email_watchdog_outbox.json"
 printf '{"state":"disabled"}\n' > "${home}/email_watchdog_status.json"
 printf '{"configured":true}\n' > "${home}/email_watchdog_onboarding.json"
+printf 'lock\n' > "${home}/email_watchdog_onboarding.lock"
+printf 'lock\n' > "${home}/.email_watchdog_onboarding.json.lock"
+printf 'lock\n' > "${home}/.email_watchdog_outbox.json.lock"
 printf 'backup\n' > "${home}/email_watchdog_onboarding_backups/state.txt"
 printf 'imap-only\n' > "${home}/email_watchdog_himalaya/primary.toml"
 printf 'db-placeholder\n' > "${home}/email.db"
@@ -50,7 +53,7 @@ echo STEP=uninstall
 bash "${DATA}/data/skills/hermes-email-watchdog/uninstall.sh"
 [[ ! -e "${DATA}/data/skills/hermes-email-watchdog" ]]
 [[ ! -e "${DATA}/data/hooks/hermes-email-watchdog" ]]
-for p in email_watchdog_config.json email_watch_seen.json email_watchdog_outbox.json email_watchdog_status.json email_watchdog_onboarding.json email_watchdog_onboarding_backups email_watchdog_himalaya email.db email_learning; do
+for p in email_watchdog_config.json email_watch_seen.json email_watchdog_outbox.json email_watchdog_status.json email_watchdog_onboarding.json email_watchdog_onboarding.lock .email_watchdog_onboarding.json.lock .email_watchdog_outbox.json.lock email_watchdog_onboarding_backups email_watchdog_himalaya email.db email_learning; do
   [[ -e "${home}/${p}" ]]
 done
 
@@ -70,7 +73,7 @@ set -e
 bash "${DATA}/data/skills/hermes-email-watchdog/uninstall.sh"
 echo STEP=purge
 bash "${REPO}/purge.sh" --confirm-purge-user-data
-for p in email_watchdog_config.json email_watch_seen.json email_watchdog_outbox.json email_watchdog_status.json email_watchdog_onboarding.json email_watchdog_onboarding_backups email_watchdog_himalaya email.db email_learning email_cache email_watchdog_install; do
+for p in email_watchdog_config.json email_watch_seen.json email_watchdog_outbox.json email_watchdog_status.json email_watchdog_onboarding.json email_watchdog_onboarding.lock .email_watchdog_onboarding.json.lock .email_watchdog_outbox.json.lock email_watchdog_onboarding_backups email_watchdog_himalaya email.db email_learning email_cache email_watchdog_install; do
   [[ ! -e "${home}/${p}" ]]
 done
 

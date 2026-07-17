@@ -9,7 +9,8 @@ required=[
  "diagnose.sh","VERSION","docs/ONBOARDING.md",
  "hooks/hermes-email-watchdog/HOOK.yaml","hooks/hermes-email-watchdog/handler.py",
  "scripts/email_onboarding.py","scripts/email_notification_renderer.py",
- "tests/test_email_onboarding_matrix.py","tests/test_email_outbox_nonblocking_backoff_matrix.py",
+ "tests/test_email_onboarding_matrix.py","tests/test_email_state_concurrency_recovery_matrix.py",
+ "tests/test_email_outbox_nonblocking_backoff_matrix.py",
 ]
 errors=[f"missing required file: {p}" for p in required if not (root/p).is_file()]
 forbidden_modules=[
@@ -41,6 +42,8 @@ exec(compile(config_text,str(root/"scripts/email_config.py"),"exec"),namespace)
 checks={
  "handler_nonblocking":"EMAIL_WATCHDOG_OUTBOX_NONBLOCKING_BACKOFF_V1" in handler,
  "handler_onboarding":"EMAIL_WATCHDOG_ONBOARDING_CONTEXT_CAPTURE_V1" in handler,
+ "handler_state_transaction_lock":"EMAIL_WATCHDOG_STATE_TRANSACTION_LOCK_V1" in handler,
+ "onboarding_transaction_lock":"EMAIL_WATCHDOG_ONBOARDING_TRANSACTION_LOCK_V1" in onboarding,
  "handler_baseline_identical":handler==baseline,
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
  "renderer_v1e":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1E" in renderer and "adaptive_v1e" in renderer,

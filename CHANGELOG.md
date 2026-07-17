@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-rc.2 — 2026-07-17
+
+- Serialize onboarding apply/enable/disable/context transactions with an
+  OS-backed lock.
+- Validate proposed mailbox configuration before publishing live config,
+  enabled state, or onboarding state.
+- Use unique durable staging files for generated Himalaya configuration.
+- Serialize Hook context and business-outbox JSON read-modify-write operations
+  across threads and processes.
+- Replace fixed `.tmp` state paths with unique atomic staging files.
+- Add concurrency, rollback-race, and SIGKILL regression coverage.
+
 ## 0.2.0-rc.1 — 2026-07-17
 
 - Add repository-owned JSON onboarding engine and non-interactive wrapper.

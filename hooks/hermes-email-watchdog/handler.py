@@ -12,6 +12,10 @@ import sys
 import time
 import traceback
 import hashlib
+import contextlib
+import fcntl
+import tempfile
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -34,6 +38,57 @@ OUTBOX_RETRY_MAX_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_RETRY_MAX
 
 _task: asyncio.Task | None = None
 _once_lock = asyncio.Lock()
+
+# EMAIL_WATCHDOG_STATE_TRANSACTION_LOCK_V1
+_STATE_LOCKS_GUARD = threading.Lock()
+_STATE_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _state_thread_lock(path: Path) -> threading.RLock:
+    key = str(path)
+    with _STATE_LOCKS_GUARD:
+        lock = _STATE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _STATE_LOCKS[key] = lock
+        return lock
+
+
+@contextlib.contextmanager
+def _state_file_lock(path: Path):
+    """Serialize JSON read-modify-write across threads and processes."""
+    with _state_thread_lock(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_name(f".{path.name}.lock")
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.chmod(lock_path, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+
+
+def _atomic_write_json_file(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_tmp = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    tmp = Path(raw_tmp)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 async def handle(event_type: str, context: dict):
@@ -82,42 +137,38 @@ def _capture_onboarding_target(context: dict) -> None:
         chat_id = str(context.get("chat_id") or "").strip()
         if not platform or not chat_id:
             return
-        state = {}
-        if ONBOARDING_FILE.exists():
-            try:
-                loaded = json.loads(ONBOARDING_FILE.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    state = loaded
-            except Exception:
-                state = {}
-        message_hash = hashlib.sha256(
-            str(context.get("message") or "").encode("utf-8", errors="replace")
-        ).hexdigest()
-        state.update(
-            {
-                "schema_version": 1,
-                "pending_target": {
-                    "platform": platform,
-                    "chat_id": chat_id,
-                    "thread_id": str(context.get("thread_id") or "").strip(),
-                    "chat_type": str(context.get("chat_type") or "").strip(),
-                },
-                "capture_source": "agent_start_hook",
-                "captured_at": _now(),
-                "session_id": str(context.get("session_id") or ""),
-                "user_id_sha256": hashlib.sha256(
-                    str(context.get("user_id") or "").encode("utf-8", errors="replace")
-                ).hexdigest(),
-                "message_sha256": message_hash,
-            }
-        )
-        # Never persist the inbound message body.
-        state.pop("message", None)
-        ONBOARDING_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = ONBOARDING_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, ONBOARDING_FILE)
+        with _state_file_lock(ONBOARDING_FILE):
+            state: dict = {}
+            if ONBOARDING_FILE.exists():
+                try:
+                    loaded = json.loads(ONBOARDING_FILE.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        state = loaded
+                except Exception:
+                    state = {}
+            message_hash = hashlib.sha256(
+                str(context.get("message") or "").encode("utf-8", errors="replace")
+            ).hexdigest()
+            state.update(
+                {
+                    "schema_version": 1,
+                    "pending_target": {
+                        "platform": platform,
+                        "chat_id": chat_id,
+                        "thread_id": str(context.get("thread_id") or "").strip(),
+                        "chat_type": str(context.get("chat_type") or "").strip(),
+                    },
+                    "capture_source": "agent_start_hook",
+                    "captured_at": _now(),
+                    "session_id": str(context.get("session_id") or ""),
+                    "user_id_sha256": hashlib.sha256(
+                        str(context.get("user_id") or "").encode("utf-8", errors="replace")
+                    ).hexdigest(),
+                    "message_sha256": message_hash,
+                }
+            )
+            state.pop("message", None)
+            _atomic_write_json_file(ONBOARDING_FILE, state)
     except Exception:
         logger.exception("Hermes Email Watchdog: failed to capture onboarding target")
 
@@ -257,7 +308,6 @@ def _outbox_load() -> dict:
 
 
 def _outbox_save(data: dict) -> None:
-    OUTBOX_FILE.parent.mkdir(parents=True, exist_ok=True)
     data.setdefault("version", 1)
     data.setdefault("entries", {})
     delivered = [
@@ -268,13 +318,7 @@ def _outbox_save(data: dict) -> None:
         delivered.sort(key=lambda kv: str(kv[1].get("delivered_at") or kv[1].get("updated_at") or ""))
         for k, _ in delivered[: max(0, len(delivered) - OUTBOX_MAX_DELIVERED)]:
             data["entries"].pop(k, None)
-    tmp = OUTBOX_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(tmp, OUTBOX_FILE)
-    try:
-        os.chmod(OUTBOX_FILE, 0o600)
-    except Exception:
-        pass
+    _atomic_write_json_file(OUTBOX_FILE, data)
 
 
 def _outbox_text_hash(text: str) -> str:
@@ -290,30 +334,31 @@ def _outbox_prepare(text: str) -> dict:
     text = text or ""
     text_hash = _outbox_text_hash(text)
     delivery_id = _outbox_delivery_id(text_hash)
-    data = _outbox_load()
-    entries = data.setdefault("entries", {})
-    entry = entries.get(delivery_id)
-    now = _outbox_now()
-    if not isinstance(entry, dict):
-        entry = {
-            "id": delivery_id,
-            "delivery_id": delivery_id,
-            "text_hash": text_hash,
-            "text": text,
-            "status": "pending",
-            "attempts": 0,
-            "created_at": now,
-            "updated_at": now,
-            "source": "hermes-email-watchdog",
-        }
-        entries[delivery_id] = entry
-    elif entry.get("status") != "delivered":
-        entry["text"] = text
-        entry["text_hash"] = text_hash
-        entry["status"] = "pending"
-        entry["updated_at"] = now
-    _outbox_save(data)
-    return dict(entry)
+    with _state_file_lock(OUTBOX_FILE):
+        data = _outbox_load()
+        entries = data.setdefault("entries", {})
+        entry = entries.get(delivery_id)
+        now = _outbox_now()
+        if not isinstance(entry, dict):
+            entry = {
+                "id": delivery_id,
+                "delivery_id": delivery_id,
+                "text_hash": text_hash,
+                "text": text,
+                "status": "pending",
+                "attempts": 0,
+                "created_at": now,
+                "updated_at": now,
+                "source": "hermes-email-watchdog",
+            }
+            entries[delivery_id] = entry
+        elif entry.get("status") != "delivered":
+            entry["text"] = text
+            entry["text_hash"] = text_hash
+            entry["status"] = "pending"
+            entry["updated_at"] = now
+        _outbox_save(data)
+        return dict(entry)
 
 
 
@@ -395,60 +440,63 @@ def _outbox_pending_state() -> dict:
     }
 
 def _outbox_mark_attempt(entry: dict) -> None:
-    data = _outbox_load()
-    entries = data.setdefault("entries", {})
-    item = entries.get(entry.get("delivery_id") or entry.get("id"))
-    if not isinstance(item, dict):
-        item = dict(entry)
-        entries[item.get("delivery_id") or item.get("id")] = item
-    item["status"] = "pending"
-    item["attempts"] = int(item.get("attempts") or 0) + 1
-    item["last_attempt_at"] = _outbox_now()
-    item["updated_at"] = item["last_attempt_at"]
-    _outbox_save(data)
+    with _state_file_lock(OUTBOX_FILE):
+        data = _outbox_load()
+        entries = data.setdefault("entries", {})
+        item = entries.get(entry.get("delivery_id") or entry.get("id"))
+        if not isinstance(item, dict):
+            item = dict(entry)
+            entries[item.get("delivery_id") or item.get("id")] = item
+        item["status"] = "pending"
+        item["attempts"] = int(item.get("attempts") or 0) + 1
+        item["last_attempt_at"] = _outbox_now()
+        item["updated_at"] = item["last_attempt_at"]
+        _outbox_save(data)
 
 
 
 def _outbox_mark_failed(entry: dict, exc: object) -> None:
-    data = _outbox_load()
-    entries = data.setdefault("entries", {})
-    key = entry.get("delivery_id") or entry.get("id")
-    item = entries.get(key)
-    if not isinstance(item, dict):
-        item = dict(entry)
-        entries[key] = item
-    now = _outbox_now()
-    attempts = int(item.get("attempts") or 0)
-    delay = _outbox_retry_delay_seconds(attempts)
-    now_dt = _outbox_parse_time(now) or datetime.now().astimezone()
-    item["status"] = "pending"
-    item["last_error"] = _safe_error_text(exc)
-    item["last_error_at"] = now
-    item["retry_delay_seconds"] = delay
-    item["next_attempt_at"] = (now_dt + timedelta(seconds=delay)).isoformat(timespec="seconds")
-    item["updated_at"] = now
-    _outbox_save(data)
+    with _state_file_lock(OUTBOX_FILE):
+        data = _outbox_load()
+        entries = data.setdefault("entries", {})
+        key = entry.get("delivery_id") or entry.get("id")
+        item = entries.get(key)
+        if not isinstance(item, dict):
+            item = dict(entry)
+            entries[key] = item
+        now = _outbox_now()
+        attempts = int(item.get("attempts") or 0)
+        delay = _outbox_retry_delay_seconds(attempts)
+        now_dt = _outbox_parse_time(now) or datetime.now().astimezone()
+        item["status"] = "pending"
+        item["last_error"] = _safe_error_text(exc)
+        item["last_error_at"] = now
+        item["retry_delay_seconds"] = delay
+        item["next_attempt_at"] = (now_dt + timedelta(seconds=delay)).isoformat(timespec="seconds")
+        item["updated_at"] = now
+        _outbox_save(data)
 
 
 def _outbox_mark_delivered(entry: dict, result: object) -> None:
-    data = _outbox_load()
-    entries = data.setdefault("entries", {})
-    key = entry.get("delivery_id") or entry.get("id")
-    item = entries.get(key)
-    if not isinstance(item, dict):
-        item = dict(entry)
-        entries[key] = item
-    now = _outbox_now()
-    item["status"] = "delivered"
-    item["delivered_at"] = now
-    item["updated_at"] = now
-    item["last_error"] = ""
-    item.pop("next_attempt_at", None)
-    item.pop("retry_delay_seconds", None)
-    message_id = getattr(result, "message_id", None)
-    if message_id:
-        item["message_id_present"] = True
-    _outbox_save(data)
+    with _state_file_lock(OUTBOX_FILE):
+        data = _outbox_load()
+        entries = data.setdefault("entries", {})
+        key = entry.get("delivery_id") or entry.get("id")
+        item = entries.get(key)
+        if not isinstance(item, dict):
+            item = dict(entry)
+            entries[key] = item
+        now = _outbox_now()
+        item["status"] = "delivered"
+        item["delivered_at"] = now
+        item["updated_at"] = now
+        item["last_error"] = ""
+        item.pop("next_attempt_at", None)
+        item.pop("retry_delay_seconds", None)
+        message_id = getattr(result, "message_id", None)
+        if message_id:
+            item["message_id_present"] = True
+        _outbox_save(data)
 
 
 async def _flush_outbox(limit: int = 3) -> dict:

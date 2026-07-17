@@ -18,3 +18,5 @@ Report vulnerabilities privately to the repository owner.
 - Generated Himalaya configuration is IMAP-only and references an external secret source.
 - Setup writes atomically, validates read-only access, and rolls back failures.
 - Session targets are redacted in command output and the Hook stores no message body.
+
+- State-changing onboarding operations are serialized and validate before publish.
