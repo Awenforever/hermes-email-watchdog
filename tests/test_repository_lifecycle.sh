@@ -44,7 +44,7 @@ bash "${DATA}/repo-v2/upgrade.sh"
 [[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.2.0-rc.2" ]]
 echo STEP=rollback
 bash "${DATA}/data/skills/hermes-email-watchdog/rollback.sh"
-[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.2.0-rc.1" ]]
+[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.1.0-rc.2" ]]
 bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 
 echo STEP=rollback-verified

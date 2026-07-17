@@ -2,6 +2,8 @@
 
 ## 0.1.0-rc.2 — 2026-07-17
 
+- Correct the lifecycle rollback assertion to verify restoration of `0.1.0-rc.2`.
+
 - Serialize onboarding apply/enable/disable/context transactions with an
   OS-backed lock.
 - Validate proposed mailbox configuration before publishing live config,
