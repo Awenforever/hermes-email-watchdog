@@ -33,6 +33,17 @@ _URGENCY_RE = re.compile(
 )
 _MEETING_RE = re.compile(r"(?i)(会议|例会|活动|讲座|面试|meeting|event|webinar|interview)")
 _DEADLINE_RE = re.compile(r"(?i)(截止|提交|完成|回复|确认|deadline|due|submit|respond|complete)")
+_DEADLINE_TERM_RE = re.compile(r"(?i)(截止|请于|不晚于|deadline|due(?:\s+by)?|before)")
+_ACTION_RE = re.compile(r"(?i)(请.{0,30}(?:提交|完成|回复|确认|填写)|submit|respond|complete|confirm)")
+_TEMPORAL_RE = re.compile(
+    r"(?i)(?:20\d{2}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|"
+    r"\d{1,2}[-/.月]\d{1,2}日?|\d{1,2}:\d{2}|"
+    r"\d+\s*(?:分钟|小时|minutes?|hours?)\s*(?:后|later)|"
+    r"(?:today|tomorrow|今天|明天|本周|下周))"
+)
+_ANTI_FRAUD_RE = re.compile(
+    r"(?i)(反诈|防骗|诈骗.{0,24}(?:提醒|通知|教育)|anti[- ]?fraud|fraud awareness)"
+)
 
 
 def _text(value: Any, limit: int = 0) -> str:
@@ -75,13 +86,21 @@ def classify_fast_lane(email: Mapping[str, Any], features: Mapping[str, Any]) ->
         _text(item, 16) for item in list(features.get("code_candidates") or [])
         if re.fullmatch(r"\d{4,8}", _text(item, 16))
     ]
-    if candidates and (_CODE_RE.search(scope) or hints.get("verification_code_phrase")):
+    anti_fraud_notice = bool(_ANTI_FRAUD_RE.search(scope))
+    if candidates and not anti_fraud_notice and (_CODE_RE.search(scope) or hints.get("verification_code_phrase")):
         return {"fast_lane": True, "kind": "verification_code", "reasons": ["grounded_verification_code"], "code": candidates[0]}
-    if _SECURITY_RE.search(scope) and _URGENCY_RE.search(scope):
+    if not anti_fraud_notice and _SECURITY_RE.search(scope) and _URGENCY_RE.search(scope):
         return {"fast_lane": True, "kind": "account_security", "reasons": ["urgent_account_security"]}
-    if _URGENCY_RE.search(scope) and _MEETING_RE.search(scope):
+    if _URGENCY_RE.search(scope) and _MEETING_RE.search(scope) and _TEMPORAL_RE.search(scope):
         return {"fast_lane": True, "kind": "meeting_event", "reasons": ["explicit_near_term_meeting"]}
-    if _URGENCY_RE.search(scope) and _DEADLINE_RE.search(scope):
+    if (
+        not anti_fraud_notice
+        and _URGENCY_RE.search(scope)
+        and _DEADLINE_RE.search(scope)
+        and _DEADLINE_TERM_RE.search(scope)
+        and _ACTION_RE.search(scope)
+        and _TEMPORAL_RE.search(scope)
+    ):
         return {"fast_lane": True, "kind": "task_deadline", "reasons": ["explicit_near_term_deadline"]}
     return {"fast_lane": False, "kind": "", "reasons": []}
 

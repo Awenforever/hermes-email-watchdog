@@ -103,7 +103,42 @@ def test_sendresult() -> None:
         print("SENDRESULT_TRUE_FALSE_SEMANTICS_OK")
 
 
+def test_terminal_states_and_sanitizer() -> None:
+    with tempfile.TemporaryDirectory(prefix="email-watchdog-terminal-") as td:
+        outbox = Path(td) / "outbox.json"
+        module = load_handler(outbox)
+        module.OUTBOX_MAX_ATTEMPTS = 2
+        entry = module._outbox_prepare(
+            "production semantic route owns analysis\nhttps://example.com/a?token=secret"
+        )
+        row = entries(outbox)[entry["delivery_id"]]
+        assert "production semantic route owns analysis" not in row["text"]
+        assert "token=secret" not in row["text"]
+
+        module._outbox_mark_attempt(entry)
+        module._outbox_mark_failed(entry, RuntimeError("one"))
+        module._outbox_mark_attempt(entry)
+        module._outbox_mark_failed(entry, RuntimeError("two"))
+        assert entries(outbox)[entry["delivery_id"]]["status"] == "dead_letter"
+
+        expiring = module._outbox_prepare("expires")
+        data = json.loads(outbox.read_text(encoding="utf-8"))
+        data["entries"][expiring["delivery_id"]]["expires_at"] = "2000-01-01T00:00:00+00:00"
+        module._atomic_write_json_file(outbox, data)
+        module._outbox_pending_entries(limit=10, due_only=False)
+        assert entries(outbox)[expiring["delivery_id"]]["status"] == "expired"
+
+        accepted = module._outbox_prepare("accepted")
+        result = types.SimpleNamespace(success=True, error="", message_id="queued:1")
+        module._outbox_mark_delivered(accepted, result)
+        accepted_row = entries(outbox)[accepted["delivery_id"]]
+        assert accepted_row["status"] == "accepted"
+        assert accepted_row["adapter_state"] == "queued"
+        print("OUTBOX_TTL_DEAD_LETTER_ACCEPTED_AND_SANITIZER_OK")
+
+
 if __name__ == "__main__":
     test_failure_and_reload_flush()
     test_sendresult()
+    test_terminal_states_and_sanitizer()
     print("EMAIL_WATCHDOG_OUTBOX_RUNTIME_CONTRACT_OK")

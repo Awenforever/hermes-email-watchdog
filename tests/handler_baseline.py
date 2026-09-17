@@ -35,6 +35,8 @@ OUTBOX_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_FILE", "/opt/data/.he
 OUTBOX_MAX_DELIVERED = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_MAX_DELIVERED", "200") or "200")
 OUTBOX_RETRY_BASE_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_RETRY_BASE_SECONDS", "60") or "60")
 OUTBOX_RETRY_MAX_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_RETRY_MAX_SECONDS", "3600") or "3600")
+OUTBOX_MAX_ATTEMPTS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_MAX_ATTEMPTS", "5") or "5")
+OUTBOX_DEFAULT_TTL_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_TTL_SECONDS", str(72 * 3600)) or str(72 * 3600))
 
 _task: asyncio.Task | None = None
 _once_lock = asyncio.Lock()
@@ -313,7 +315,7 @@ def _outbox_save(data: dict) -> None:
     data.setdefault("entries", {})
     delivered = [
         (k, v) for k, v in data["entries"].items()
-        if isinstance(v, dict) and v.get("status") == "delivered"
+        if isinstance(v, dict) and v.get("status") in {"accepted", "delivered", "expired", "dead_letter", "discarded"}
     ]
     if len(delivered) > OUTBOX_MAX_DELIVERED:
         delivered.sort(key=lambda kv: str(kv[1].get("delivered_at") or kv[1].get("updated_at") or ""))
@@ -330,9 +332,42 @@ def _outbox_delivery_id(text_hash: str) -> str:
     return f"hermes-email-watchdog-{text_hash[:32]}"
 
 
+def _notification_ttl_seconds(text: str, metadata: dict | None = None) -> int:
+    metadata = metadata if isinstance(metadata, dict) else {}
+    try:
+        explicit = int(metadata.get("ttl_seconds") or 0)
+    except Exception:
+        explicit = 0
+    if explicit > 0:
+        return max(60, min(explicit, 30 * 86400))
+    sample = (text or "")[:1200].lower()
+    if "验证码" in sample or "verification code" in sample or " one-time " in f" {sample} ":
+        return 10 * 60
+    if "周报" in sample or "weekly" in sample:
+        return 7 * 86400
+    if "活动" in sample or "会议" in sample or "event" in sample:
+        return 24 * 3600
+    return max(3600, OUTBOX_DEFAULT_TTL_SECONDS)
+
+
+def _sanitize_notification(text: str) -> str:
+    """Bound transport size and remove internal or secret-bearing noise."""
+    value = str(text or "").replace("production semantic route owns analysis", "")
+    # Query strings commonly contain tracking IDs, signed invoice URLs and
+    # unsubscribe secrets.  Preserve the destination while stripping secrets.
+    value = re.sub(r"(https?://[^\s?#]+)[?#][^\s]+", r"\1", value)
+    value = re.sub(r"\b[A-Za-z0-9_\-+/=]{120,}\b", "[敏感长参数已省略]", value)
+    value = re.sub(r"\n{3,}", "\n\n", value).strip()
+    max_chars = int(os.getenv("HERMES_EMAIL_WATCHDOG_MAX_NOTIFICATION_CHARS", "1800") or "1800")
+    max_chars = max(400, min(max_chars, 4000))
+    if len(value) > max_chars:
+        value = value[: max_chars - 18].rstrip() + "\n\n（原文过长，已截断）"
+    return value
+
+
 def _outbox_prepare(text: str, metadata: dict | None = None) -> dict:
     # Persist before calling adapter.send so success=false/exception can be retried safely.
-    text = text or ""
+    text = _sanitize_notification(text)
     text_hash = _outbox_text_hash(text)
     delivery_id = _outbox_delivery_id(text_hash)
     with _state_file_lock(OUTBOX_FILE):
@@ -350,11 +385,15 @@ def _outbox_prepare(text: str, metadata: dict | None = None) -> dict:
                 "attempts": 0,
                 "created_at": now,
                 "updated_at": now,
+                "expires_at": (
+                    (_outbox_parse_time(now) or datetime.now().astimezone())
+                    + timedelta(seconds=_notification_ttl_seconds(text, metadata))
+                ).isoformat(timespec="seconds"),
                 "source": "hermes-email-watchdog",
                 "metadata": dict(metadata or {}),
             }
             entries[delivery_id] = entry
-        elif entry.get("status") != "delivered":
+        elif entry.get("status") not in {"accepted", "delivered"}:
             entry["text"] = text
             entry["text_hash"] = text_hash
             entry["status"] = "pending"
@@ -420,7 +459,33 @@ def _outbox_is_due(entry: dict, now: datetime | None = None) -> bool:
     return current.astimezone() >= due_at.astimezone()
 
 
+def _outbox_refresh_terminal_states() -> None:
+    with _state_file_lock(OUTBOX_FILE):
+        data = _outbox_load()
+        changed = False
+        now = datetime.now().astimezone()
+        for entry in data.get("entries", {}).values():
+            if not isinstance(entry, dict) or entry.get("status") != "pending":
+                continue
+            expires_at = _outbox_parse_time(entry.get("expires_at"))
+            if expires_at is not None and now >= expires_at:
+                entry["status"] = "expired"
+                entry["expired_at"] = _outbox_now()
+                entry["updated_at"] = entry["expired_at"]
+                entry.pop("next_attempt_at", None)
+                changed = True
+            elif int(entry.get("attempts") or 0) >= max(1, OUTBOX_MAX_ATTEMPTS):
+                entry["status"] = "dead_letter"
+                entry["dead_letter_at"] = _outbox_now()
+                entry["updated_at"] = entry["dead_letter_at"]
+                entry.pop("next_attempt_at", None)
+                changed = True
+        if changed:
+            _outbox_save(data)
+
+
 def _outbox_pending_entries(limit: int = 10, due_only: bool = True) -> list[dict]:
+    _outbox_refresh_terminal_states()
     data = _outbox_load()
     entries = [
         dict(v) for v in data.get("entries", {}).values()
@@ -472,11 +537,16 @@ def _outbox_mark_failed(entry: dict, exc: object) -> None:
         attempts = int(item.get("attempts") or 0)
         delay = _outbox_retry_delay_seconds(attempts)
         now_dt = _outbox_parse_time(now) or datetime.now().astimezone()
-        item["status"] = "pending"
+        terminal = attempts >= max(1, OUTBOX_MAX_ATTEMPTS)
+        item["status"] = "dead_letter" if terminal else "pending"
         item["last_error"] = _safe_error_text(exc)
         item["last_error_at"] = now
         item["retry_delay_seconds"] = delay
-        item["next_attempt_at"] = (now_dt + timedelta(seconds=delay)).isoformat(timespec="seconds")
+        if terminal:
+            item["dead_letter_at"] = now
+            item.pop("next_attempt_at", None)
+        else:
+            item["next_attempt_at"] = (now_dt + timedelta(seconds=delay)).isoformat(timespec="seconds")
         item["updated_at"] = now
         _outbox_save(data)
 
@@ -491,15 +561,19 @@ def _outbox_mark_delivered(entry: dict, result: object) -> None:
             item = dict(entry)
             entries[key] = item
         now = _outbox_now()
-        item["status"] = "delivered"
-        item["delivered_at"] = now
+        message_id = str(getattr(result, "message_id", None) or "")
+        queued = message_id.startswith("queued:")
+        item["status"] = "accepted" if queued else "delivered"
+        item["accepted_at"] = now
+        if not queued:
+            item["delivered_at"] = now
         item["updated_at"] = now
         item["last_error"] = ""
         item.pop("next_attempt_at", None)
         item.pop("retry_delay_seconds", None)
-        message_id = getattr(result, "message_id", None)
         if message_id:
             item["message_id_present"] = True
+            item["adapter_state"] = "queued" if queued else "sent"
         _outbox_save(data)
 
 
@@ -601,7 +675,7 @@ async def _run_once():
 
             try:
                 _outbox_mark_attempt(entry)
-                result = await _send_weixin(output, delivery_id=entry["delivery_id"])
+                result = await _send_weixin(entry["text"], delivery_id=entry["delivery_id"])
             except Exception as exc:
                 # Mailbox processing has completed and the exact notification is durable in the outbox.
                 # Defer delivery with bounded backoff; do not suppress future mailbox polling.
@@ -670,6 +744,7 @@ def _runner_ref():
 async def _send_weixin(
     text: str, delivery_id: str | None = None, attribution: dict | None = None
 ):
+    text = _sanitize_notification(text)
     chat_id = _chat_id()
     if not chat_id:
         raise RuntimeError("configured Weixin delivery target is empty")
@@ -709,7 +784,9 @@ async def _send_weixin(
                     "resolved_model": model_name,
                     "routed_model": model_name,
                     "source": "hermes-email-watchdog",
+                    "_delivery_source": "hermes-email-watchdog",
                     "_delivery_id": delivery_id,
+                    "_delivery_ttl_seconds": _notification_ttl_seconds(text, attribution),
                 },
             )
             if not getattr(result, "success", False):

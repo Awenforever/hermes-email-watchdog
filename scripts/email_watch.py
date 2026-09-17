@@ -562,18 +562,29 @@ def classify(email_data):
     vc_kw = ["verification code", "security code", "验证码", "确认码",
              "auth code", "login code", "authentication code", "短信验证",
              "verify your", "验证你的", "邮箱验证", "手机验证"]
-    for kw in vc_kw:
-        if kw in full_text:
-            # Extract code
-            code = ""
-            for pat in [r"(\d{4,8})\s*(?:是|is|：|:)", r"(?:code|码|验证码)[：:\s]*(\d{4,8})",
-                        r"\b(\d{6})\b", r"(\d{4,8})"]:
-                m = re.search(pat, full_text)
-                if m:
-                    code = m.group(1)
-                    break
-            summary = f"{s}\n码: {code}" if code else s
-            return ("🔐", "验证码", "urgent", summary, "extract_code")
+    anti_fraud_notice = bool(re.search(
+        r"反诈|防骗|诈骗.{0,24}(?:提醒|通知|教育)|anti[- ]?fraud|fraud awareness",
+        full_text,
+        re.IGNORECASE,
+    ))
+    grounded_codes = []
+    if HAS_V3:
+        try:
+            grounded_codes = email_feature_extractor.extract_code_candidates(full_text)
+        except Exception:
+            grounded_codes = []
+    if not grounded_codes:
+        # Conservative fallback for installations without the V3 extractor:
+        # the authentication phrase and number must be in the same short span.
+        for match in re.finditer(r"(?<!\d)(\d{4,8})(?!\d)", full_text):
+            window = full_text[max(0, match.start() - 80):match.end() + 80]
+            if any(kw in window for kw in vc_kw):
+                grounded_codes.append(match.group(1))
+                break
+    if grounded_codes and not anti_fraud_notice and any(kw in full_text for kw in vc_kw):
+        code = grounded_codes[0]
+        summary = f"{s}\n码: {code}"
+        return ("🔐", "验证码", "urgent", summary, "extract_code")
 
     # ═══════════════════════════════════════════════════════════
     # 🚨 Suspicious / Phishing — uses dynamic trust model (BEFORE security check)
@@ -1015,9 +1026,10 @@ def check_account(acct, pushed_count=None):
             # The new durable production route owns semantic analysis. The legacy
             # analysis is retained only as a safe formatter fallback input.
             analysis = email_llm.fallback_analysis(
-                email_data, rule_result, "production semantic route owns analysis"
+                email_data, rule_result, ""
             ) if HAS_V3 else {}
             analysis = dict(analysis or {})
+            analysis["llm_notes"] = ""
             analysis["should_notify"] = True
             analysis["production_semantic_route_pending"] = True
         elif HAS_V3 and email_llm.should_use_llm(rule_result, email_data):

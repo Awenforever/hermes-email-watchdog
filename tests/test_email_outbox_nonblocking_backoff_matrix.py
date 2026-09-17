@@ -50,7 +50,7 @@ class NonBlockingBackoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(h._outbox_retry_delay_seconds(7), 3600)
         self.assertEqual(h._outbox_retry_delay_seconds(198), 3600)
 
-    async def test_02_existing_high_attempt_entry_is_deferred_and_mailbox_polling_runs(self):
+    async def test_02_existing_high_attempt_entry_is_dead_lettered_and_mailbox_polling_runs(self):
         now = datetime.now().astimezone()
         self.write_entries([{
             "id": "old", "delivery_id": "old", "text_hash": "hash", "text": "old payload",
@@ -64,9 +64,12 @@ class NonBlockingBackoffTests(unittest.IsolatedAsyncioTestCase):
         poll.assert_called_once()
         row = self.load_entries()["old"]
         self.assertEqual(row["attempts"], 198)
+        self.assertEqual(row["status"], "dead_letter")
+        self.assertTrue(row["dead_letter_at"])
         status = json.loads(h.STATUS_FILE.read_text(encoding="utf-8"))
         self.assertEqual(status["state"], "running")
-        self.assertEqual(status["pending_deferred"], 1)
+        self.assertEqual(status["pending_deferred"], 0)
+        self.assertEqual(status["pending_total"], 0)
 
     async def test_03_due_failure_is_preserved_and_does_not_block_polling(self):
         old = datetime.now().astimezone() - timedelta(days=1)
@@ -151,8 +154,9 @@ class NonBlockingBackoffTests(unittest.IsolatedAsyncioTestCase):
         poll.assert_called_once()
         entries = self.load_entries()
         self.assertEqual(len(entries), 2)
-        self.assertEqual(entries["old-due"]["status"], "pending")
+        self.assertEqual(entries["old-due"]["status"], "dead_letter")
         self.assertEqual(entries["old-due"]["attempts"], 5)
+        self.assertTrue(entries["old-due"]["dead_letter_at"])
         new_rows = [row for key, row in entries.items() if key != "old-due"]
         self.assertEqual(len(new_rows), 1)
         self.assertEqual(new_rows[0]["status"], "pending")
@@ -160,7 +164,7 @@ class NonBlockingBackoffTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(attempted), 2)
         status = json.loads(h.STATUS_FILE.read_text(encoding="utf-8"))
         self.assertEqual(status["state"], "degraded")
-        self.assertEqual(status["pending_total"], 2)
+        self.assertEqual(status["pending_total"], 1)
 
     async def test_07_due_old_failure_does_not_block_successful_new_delivery(self):
         old = datetime.now().astimezone() - timedelta(days=1)

@@ -124,7 +124,7 @@ class RendererTests(unittest.TestCase):
     def test_02_fixed_header(self):
         text = self.render()["text"]
         self.assertIn("### 📬 新邮件｜USTC", text)
-        self.assertIn("`重要` · `学校通知` · `2026-07-12 01:00 SGT`", text)
+        self.assertIn("`重要` · `学校通知` · `2026-07-12 01:00 北京时间`", text)
         self.assertIn("**发件人**\n> Miracle <sender@example.com>", text)
         self.assertIn("**主题**\n> 中期检查通知", text)
 
@@ -201,7 +201,7 @@ class RendererTests(unittest.TestCase):
 
     def test_14_deadline_block(self):
         text = self.render(d=decision(deadline=True))["text"]
-        self.assertIn("**截止时间**\n> 2026-07-15 17:00 SGT", text)
+        self.assertIn("**截止时间**\n> 2026-07-15 17:00 北京时间", text)
 
     def test_15_no_deadline_no_block(self):
         self.assertNotIn("**截止时间**", self.render()["text"])
@@ -225,7 +225,7 @@ class RendererTests(unittest.TestCase):
     def test_19_actual_delivery_schedule_is_rendered(self):
         delivery = {"notification_text": "legacy", "attachments": [], "schedule": [{"time": "2026-07-14T09:00:00+08:00", "message": "检查材料"}]}
         text = self.render(delivery=delivery)["text"]
-        self.assertIn("**提醒**\n> - 2026-07-14 09:00 SGT｜检查材料", text)
+        self.assertIn("**提醒**\n> - 2026-07-14 09:00 北京时间｜检查材料", text)
 
     def test_20_risk_block_only_for_non_none(self):
         text = self.render(d=decision(risk="high"))["text"]
@@ -265,14 +265,14 @@ class RendererTests(unittest.TestCase):
         d = decision(mode="event_card", summary="组会安排", deadline=True, category="会议/活动")
         text = self.render(d=d)["text"]
         self.assertIn("**会议/活动**", text)
-        self.assertIn("时间：2026-07-15 17:00 SGT", text)
+        self.assertIn("时间：2026-07-15 17:00 北京时间", text)
 
     def test_24_deadline_card(self):
         d = decision(mode="deadline_card", summary="中期检查", action=True, deadline=True, category="任务/截止")
         text = self.render(d=d)["text"]
         self.assertIn("**截止任务**", text)
         self.assertIn("任务：准备并提交材料", text)
-        self.assertIn("截止：2026-07-15 17:00 SGT", text)
+        self.assertIn("截止：2026-07-15 17:00 北京时间", text)
         self.assertNotIn("**待办**", text)
         self.assertNotIn("**截止时间**", text)
 

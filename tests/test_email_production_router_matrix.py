@@ -39,7 +39,7 @@ class ProductionRouterTests(unittest.TestCase):
         lane=router.classify_fast_lane({"subject":"会议将在30分钟后开始","body":"请立即参加"}, self.features())
         self.assertEqual(lane["kind"], "meeting_event")
     def test_07_urgent_deadline(self):
-        lane=router.classify_fast_lane({"subject":"今天完成材料确认","body":"请立即提交"}, self.features())
+        lane=router.classify_fast_lane({"subject":"今天17:00截止材料确认","body":"请立即提交"}, self.features())
         self.assertEqual(lane["kind"], "task_deadline")
     def test_08_all_mail_legacy_fallback_pushes(self):
         a=router.legacy_fallback_analysis({"subject":"营销邮件"},{"action":"skip","category":"广告"},{"should_notify":False},"x")
@@ -55,6 +55,12 @@ class ProductionRouterTests(unittest.TestCase):
         d=router.build_fast_decision(email,{"action":"simple_code","category":"验证码"},{"should_notify":True},features,lane)
         self.assertEqual(d["classification"]["category"],"verification_code")
         self.assertEqual(d["notification"]["content_mode"],"code_card")
+    def test_11_anti_fraud_notice_is_not_code_or_deadline(self):
+        lane=router.classify_fast_lane(
+            {"subject":"重要提醒：境外诈骗防范通知","body":"不要向他人泄露验证码，可拨打12308咨询，请立即阅读。"},
+            self.features(["12308"], {"verification_code_phrase":True}),
+        )
+        self.assertFalse(lane["fast_lane"])
 
 if __name__ == '__main__':
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(ProductionRouterTests)

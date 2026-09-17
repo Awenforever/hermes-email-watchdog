@@ -16,6 +16,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 import os
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -220,9 +221,13 @@ def _format_time(value: Any) -> str:
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except Exception:
             dt = parsedate_to_datetime(raw)
+        shanghai = ZoneInfo("Asia/Shanghai")
+        # Semantic output without an offset is already expressed in the
+        # configured user timezone.  Treating it as host-local UTC caused an
+        # extra eight-hour shift in production.
         if dt.tzinfo is None:
-            return raw
-        return dt.astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M SGT")
+            dt = dt.replace(tzinfo=shanghai)
+        return dt.astimezone(shanghai).strftime("%Y-%m-%d %H:%M 北京时间")
     except Exception:
         return raw
 
