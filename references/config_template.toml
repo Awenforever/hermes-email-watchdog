@@ -1,0 +1,23 @@
+# Himalaya IMAP-only configuration template for Hermes Email Watchdog.
+# No outgoing send backend is included in this read-only release candidate.
+# Store credentials in an external secret manager; never paste a password here.
+
+[accounts.example]
+email = "you@example.com"
+display-name = "Your Name"
+default = true
+
+backend.type = "imap"
+backend.host = "imap.example.com"
+backend.port = 993
+backend.encryption.type = "tls"
+backend.login = "you@example.com"
+backend.auth.type = "password"
+
+# Approved examples:
+# backend.auth.cmd = "pass show mail/example.com"
+# backend.auth.cmd = "secret-tool lookup service mail account you@example.com"
+# backend.auth.cmd = "printenv EMAIL_WATCHDOG_IMAP_PASSWORD"
+backend.auth.cmd = "pass show mail/example.com"
+
+folder.aliases.inbox = "INBOX"
