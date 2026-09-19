@@ -13,7 +13,6 @@ import time
 import traceback
 import hashlib
 import contextlib
-import fcntl
 import tempfile
 import threading
 from datetime import datetime, timedelta
@@ -21,17 +20,34 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SKILL_DIR = Path(os.getenv("HERMES_EMAIL_WATCHDOG_SKILL_DIR", "/opt/data/skills/hermes-email-watchdog"))
+HERMES_HOME = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+SKILL_DIR = Path(
+    os.getenv(
+        "HERMES_EMAIL_WATCHDOG_SKILL_DIR",
+        str(HERMES_HOME / "plugins" / "hermes-email-watchdog"),
+    )
+)
 SCRIPTS_DIR = SKILL_DIR / "scripts"
-STATE_ROOT = Path(os.getenv("HERMES_EMAIL_WATCHDOG_STATE_ROOT", "/opt/data/.hermes-home/.hermes"))
-CONFIG_PATH = os.getenv("EMAIL_WATCHDOG_CONFIG", str(STATE_ROOT / "email_watchdog_config.json"))
-ENABLED_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_ENABLED_FILE", str(STATE_ROOT / "email_watchdog_enabled")))
-INTERVAL_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_INTERVAL_FILE", str(STATE_ROOT / "email_watchdog_interval_seconds")))
-STATUS_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_STATUS_FILE", str(STATE_ROOT / "email_watchdog_status.json")))
-SEEN_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_SEEN_FILE", str(STATE_ROOT / "email_watch_seen.json")))
-ONBOARDING_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_ONBOARDING_FILE", str(STATE_ROOT / "email_watchdog_onboarding.json")))
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from portable_lock import acquire_file_lock, release_file_lock
+STATE_ROOT = Path(
+    os.getenv(
+        "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+        str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
+    )
+)
+CONFIG_PATH = os.getenv("EMAIL_WATCHDOG_CONFIG", str(STATE_ROOT / "config.json"))
+os.environ.setdefault("HERMES_EMAIL_WATCHDOG_STATE_ROOT", str(STATE_ROOT))
+os.environ.setdefault("EMAIL_WATCHDOG_CONFIG", CONFIG_PATH)
+ENABLED_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_ENABLED_FILE", str(STATE_ROOT / "enabled")))
+INTERVAL_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_INTERVAL_FILE", str(STATE_ROOT / "interval_seconds")))
+STATUS_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_STATUS_FILE", str(STATE_ROOT / "status.json")))
+SEEN_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_SEEN_FILE", str(STATE_ROOT / "seen.json")))
+ONBOARDING_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_ONBOARDING_FILE", str(STATE_ROOT / "onboarding.json")))
 # EMAIL_WATCHDOG_OUTBOX_V1
-OUTBOX_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_FILE", "/opt/data/.hermes-home/.hermes/email_watchdog_outbox.json"))
+OUTBOX_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_FILE", str(STATE_ROOT / "outbox.json")))
 OUTBOX_MAX_DELIVERED = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_MAX_DELIVERED", "200") or "200")
 OUTBOX_RETRY_BASE_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_RETRY_BASE_SECONDS", "60") or "60")
 OUTBOX_RETRY_MAX_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_RETRY_MAX_SECONDS", "3600") or "3600")
@@ -66,11 +82,11 @@ def _state_file_lock(path: Path):
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             os.chmod(lock_path, 0o600)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            acquire_file_lock(fd)
             yield
         finally:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                release_file_lock(fd)
             finally:
                 os.close(fd)
 

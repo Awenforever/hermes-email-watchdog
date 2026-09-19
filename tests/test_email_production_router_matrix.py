@@ -12,7 +12,7 @@ import email_production_router as router
 class ProductionRouterTests(unittest.TestCase):
     def setUp(self):
         self.settings_patch = mock.patch.object(router, "settings", return_value={
-            "production_route_enabled": True, "all_mail_push": True,
+            "production_route_enabled": True, "all_mail_push": False,
             "legacy_fallback_enabled": True, "fast_lane_enabled": True,
             "renderer": "adaptive_v1e", "mode": "production",
         })
@@ -41,13 +41,13 @@ class ProductionRouterTests(unittest.TestCase):
     def test_07_urgent_deadline(self):
         lane=router.classify_fast_lane({"subject":"今天17:00截止材料确认","body":"请立即提交"}, self.features())
         self.assertEqual(lane["kind"], "task_deadline")
-    def test_08_all_mail_legacy_fallback_pushes(self):
+    def test_08_low_value_legacy_fallback_is_silent(self):
         a=router.legacy_fallback_analysis({"subject":"营销邮件"},{"action":"skip","category":"广告"},{"should_notify":False},"x")
-        self.assertTrue(a["should_notify"])
-    def test_09_decision_conversion_pushes(self):
+        self.assertFalse(a["should_notify"])
+    def test_09_low_value_decision_is_silent(self):
         d={"classification":{"category":"newsletter_marketing"},"importance":{"level":"low"},"notification":{"should_notify":False,"content_mode":"summary_only","summary":"资讯"},"action":{},"deadline":{},"attachments":{},"risk":{}}
         a=router.decision_to_legacy_analysis(d,{})
-        self.assertTrue(a["should_notify"])
+        self.assertFalse(a["should_notify"])
     def test_10_fast_code_schema(self):
         email={"id":"1","subject":"登录验证码","body":"验证码 482731","attachments":[],"has_attachments":False}
         features=router.extract_features(email)
@@ -61,6 +61,16 @@ class ProductionRouterTests(unittest.TestCase):
             self.features(["12308"], {"verification_code_phrase":True}),
         )
         self.assertFalse(lane["fast_lane"])
+    def test_12_required_action_pushes(self):
+        d={"classification":{"category":"task"},"importance":{"level":"normal"},"notification":{"should_notify":True},"action":{"required":True},"deadline":{},"risk":{}}
+        self.assertTrue(router.should_push_notification(d))
+    def test_13_weekly_report_pushes(self):
+        d={"classification":{"category":"academic_report_digest"},"importance":{"level":"normal"},"notification":{"should_notify":True},"action":{},"deadline":{},"risk":{}}
+        self.assertTrue(router.should_push_notification(d))
+    def test_14_all_mail_policy_remains_explicit_opt_in(self):
+        d={"classification":{"category":"newsletter_marketing"},"importance":{"level":"low"},"notification":{"should_notify":False},"action":{},"deadline":{},"risk":{}}
+        with mock.patch.object(router, "settings", return_value={"all_mail_push":True}):
+            self.assertTrue(router.should_push_notification(d))
 
 if __name__ == '__main__':
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(ProductionRouterTests)

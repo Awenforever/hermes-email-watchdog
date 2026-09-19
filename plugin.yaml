@@ -1,0 +1,27 @@
+name: hermes-email-watchdog
+version: 0.2.0
+manifest_version: 1
+api_version: 1
+description: Read-only email triage with grounded classification and actionable messaging alerts.
+author: Awenforever
+license: MIT
+homepage: https://github.com/Awenforever/hermes-email-watchdog
+tags: [email, imap, triage, gateway]
+requires_hermes: ">=0.21.3,<0.22"
+config_schema:
+  enabled:
+    type: bool
+    default: false
+    description: Enable read-only mailbox polling after account setup.
+  interval_seconds:
+    type: int
+    default: 60
+    description: Mailbox polling interval.
+  notification_policy:
+    type: str
+    default: actionable
+    description: Push actionable mail only; other mail stays silent and auditable.
+  weekly_report_notifications:
+    type: bool
+    default: true
+    description: Notify when a Weekly Report email arrives.

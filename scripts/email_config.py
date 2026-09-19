@@ -68,7 +68,7 @@ DEFAULT_CONFIG = {
         "renderer": "adaptive_v1e",
         "mode": "shadow",
         "production_route_enabled": False,
-        "all_mail_push": True,
+        "all_mail_push": False,
         "legacy_fallback_enabled": True,
         "fast_lane_enabled": True,
         "original_policy": "auto",

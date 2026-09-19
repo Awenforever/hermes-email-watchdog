@@ -57,7 +57,7 @@ def settings() -> Dict[str, Any]:
     cfg = dict(email_config.get_notification_settings() or {})
     return {
         "production_route_enabled": bool(cfg.get("production_route_enabled", False)),
-        "all_mail_push": bool(cfg.get("all_mail_push", True)),
+        "all_mail_push": bool(cfg.get("all_mail_push", False)),
         "legacy_fallback_enabled": bool(cfg.get("legacy_fallback_enabled", True)),
         "fast_lane_enabled": bool(cfg.get("fast_lane_enabled", True)),
         "renderer": str(cfg.get("renderer") or "adaptive_v1e"),
@@ -195,7 +195,7 @@ def decision_to_legacy_analysis(decision: Mapping[str, Any], original: Mapping[s
         "final_category": classification.get("category") or "unknown_needs_llm",
         "user_relevance": importance.get("level") or "normal",
         "confidence": classification.get("confidence") or 0.0,
-        "should_notify": True,
+        "should_notify": should_push_notification(decision),
         "format_decision": notification.get("content_mode") or "summary_only",
         "formatted_summary": summary,
         "action_needed": {
@@ -219,9 +219,38 @@ def decision_to_legacy_analysis(decision: Mapping[str, Any], original: Mapping[s
     return result
 
 
+def should_push_notification(decision: Mapping[str, Any]) -> bool:
+    """Return the production push decision; silent mail remains persisted for audit/digest."""
+    cfg = settings()
+    if cfg.get("all_mail_push"):
+        return True
+    classification = decision.get("classification") if isinstance(decision.get("classification"), Mapping) else {}
+    importance = decision.get("importance") if isinstance(decision.get("importance"), Mapping) else {}
+    notification = decision.get("notification") if isinstance(decision.get("notification"), Mapping) else {}
+    action = decision.get("action") if isinstance(decision.get("action"), Mapping) else {}
+    deadline = decision.get("deadline") if isinstance(decision.get("deadline"), Mapping) else {}
+    risk = decision.get("risk") if isinstance(decision.get("risk"), Mapping) else {}
+    category = _text(classification.get("category"), 80).lower()
+    if category == "academic_report_digest":
+        return bool(notification.get("should_notify", True))
+    if _text(importance.get("level"), 32).lower() in {"high", "critical", "urgent"}:
+        return True
+    if bool(action.get("required")) or bool(deadline.get("has_deadline")):
+        return True
+    if _text(risk.get("level"), 32).lower() in {"high", "critical"}:
+        return True
+    return False
+
+
 def legacy_fallback_analysis(email: Mapping[str, Any], rule_result: Mapping[str, Any], original: Mapping[str, Any] | None, reason: str) -> Dict[str, Any]:
     original = dict(original or {})
-    original["should_notify"] = True
+    priority = _text(rule_result.get("priority"), 32).lower()
+    category = _text(rule_result.get("category"), 80).lower()
+    original["should_notify"] = bool(
+        priority in {"urgent", "high", "critical"}
+        or category == "academic_report_digest"
+        or rule_result.get("action") in {"simple_code", "push_urgent"}
+    )
     original.setdefault("semantic_category", rule_result.get("category") or "unknown_needs_llm")
     original.setdefault("user_relevance", "normal")
     original.setdefault("format_decision", "legacy_fallback")

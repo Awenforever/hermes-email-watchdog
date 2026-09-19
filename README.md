@@ -1,66 +1,60 @@
 # Hermes Email Watchdog
 
-A read-only multi-account email monitor for Hermes Agent. It classifies new
-mail, generates grounded summaries, and sends durable notifications through the
-Hermes Weixin adapter.
+Hermes 的只读多账号邮件监控插件。它读取新邮件，完成拆分、归类、证据化摘要和风险判断，只把真正需要处理的事项通知到 Hermes 消息通道。
 
-## Frozen functional baseline
+## 功能
 
-- Semantic protocol: `readable_grounded_core_v1u`
-- Renderer: `adaptive_v1e`
-- Scheduler/outbox: `EMAIL_WATCHDOG_OUTBOX_NONBLOCKING_BACKOFF_V1`
-- Repository onboarding: `EMAIL_WATCHDOG_ONBOARDING_V1`
-- Mailbox policy: read-only
-- Outbound email and mailbox mutation modules: excluded
-- Weixin transport ownership: external to this repository
+- 通过 Himalaya 读取一个或多个 IMAP 邮箱。
+- 区分正文、引用、签名、列表退订信息和常见模板噪声。
+- 输出带事实依据的类别、重要性、期限、风险和建议动作。
+- 默认只通知紧急、高风险、有截止时间或明确需要行动的邮件。
+- 普通通知、营销邮件和新闻简报仍会被记录和学习，但保持静默。
+- 通知使用持久 outbox；失败重试不会阻塞下一轮收信。
+- 配置变更采用锁、原子写入和失败回滚。
 
-## Setup
+本插件不发送邮件，也不改变已读、标记、移动或删除状态。微信等消息传输由 Hermes 及对应通道插件负责。
 
-After repository installation, configure through natural Hermes conversation or
-through the same non-interactive engine:
+## 要求
+
+- Hermes `>=0.21.3,<0.22`
+- Python 3.11+
+- [Himalaya](https://github.com/pimalaya/himalaya) 可执行文件
+- 邮箱密码通过系统密钥环、密码管理器或外部命令提供；不要写入插件配置
+
+## 安装
 
 ```bash
-bash /opt/data/skills/hermes-email-watchdog/setup.sh status --json
+hermes plugins install Awenforever/hermes-email-watchdog
+hermes plugins enable hermes-email-watchdog
+hermes email-watchdog install-runtime
 ```
 
-The setup engine can reuse an existing Himalaya configuration, capture the
-current Weixin conversation, generate an IMAP-only Himalaya configuration using
-an external secret command, validate read-only access, roll back failures, and
-explicitly enable or disable the scheduler.
+配置邮箱后，先做一次只读试运行：
 
-It never asks for or stores a mailbox password.
+```bash
+hermes email-watchdog run-once
+hermes email-watchdog status
+```
 
-## Safety boundary
+确认分类和通知目标无误后再启用定时监控：
 
-The skill may read explicitly configured mail accounts. It may write only its
-own configuration, onboarding state, cache, seen index, learning database,
-status, and notification outbox. It must not modify mailbox state or send email.
+```bash
+hermes email-watchdog enable
+```
 
-`weixin.py` and `hermes-wechat-enhance` are not owned by this repository.
+## 数据与边界
 
-## Release status
+配置、seen 索引、缓存、学习数据库、状态和 outbox 位于当前 Hermes profile 的 `plugin-data/hermes-email-watchdog/`。安装和升级不应覆盖这些数据。
 
-Hermes Email Watchdog `0.1.0` is the first stable public release. The exact
-runtime implementation is unchanged from the accepted `0.1.0-rc.5` candidate.
+邮件正文可能包含敏感信息。请限制 profile 目录权限、加密备份，并为缓存设置符合个人需求的保留周期。插件日志和通知不应输出邮箱密码、访问令牌或完整认证命令。
 
-The release lineage has passed guarded fast-forward publication, GitHub
-Actions, real-tag fresh-container lifecycle acceptance, isolated read-only
-mailbox onboarding, state/concurrency recovery, and one isolated spare-account
-real Weixin delivery E2E.
+## 生产建议
 
-`weixin.py` and `hermes-wechat-enhance` remain external transport ownership.
-They are not modified by this release and are not production-deployment
-prerequisites for Email Watchdog.
+- 首次接入使用专用测试邮件验证匹配、拆分、时区和期限。
+- 保持“仅行动项通知”默认策略，按实际误报逐步调整。
+- 定期检查失败 outbox、解析降级率和被静默的高风险样本。
+- 升级前备份 plugin-data；升级后先执行 `run-once` 再恢复计划任务。
 
-The stable package may be installed or upgraded with the repository lifecycle
-scripts. Installation preserves owned configuration, onboarding state, seen
-state, learning data and durable notification outbox.
+## License
 
-See `INSTALLATION.md`, `SECURITY.md`, `docs/ONBOARDING.md`,
-`docs/OWNERSHIP.md`, and `docs/RELEASE_ACCEPTANCE.md`.
-
-## Public repository migration
-
-This release preserves the earlier public v3 history while replacing its current
-write-capable tree with the accepted read-only candidate. See
-[`docs/REMOTE_HISTORY_MIGRATION.md`](docs/REMOTE_HISTORY_MIGRATION.md).
+[MIT](LICENSE)

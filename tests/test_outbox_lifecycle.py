@@ -10,7 +10,12 @@ import tempfile
 import types
 import uuid
 
-SKILL_DIR = Path(os.environ.get("HERMES_EMAIL_WATCHDOG_SKILL_DIR", "/opt/data/skills/hermes-email-watchdog"))
+SKILL_DIR = Path(
+    os.environ.get(
+        "HERMES_EMAIL_WATCHDOG_SKILL_DIR",
+        str(Path(__file__).resolve().parents[1]),
+    )
+)
 HANDLER_PATH = SKILL_DIR / "hooks/hermes-email-watchdog/handler.py"
 
 

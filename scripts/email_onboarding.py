@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
-import fcntl
 import hashlib
 import json
 import os
@@ -33,6 +32,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import email_config
+from portable_lock import acquire_file_lock, release_file_lock
 
 STATE_ROOT = Path(
     os.path.expandvars(
@@ -112,11 +112,11 @@ def _transaction_lock():
     fd = os.open(TRANSACTION_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
     try:
         os.chmod(TRANSACTION_LOCK_FILE, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        acquire_file_lock(fd)
         yield
     finally:
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            release_file_lock(fd)
         finally:
             os.close(fd)
 
@@ -730,10 +730,11 @@ def plan(input_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _himalaya_binary() -> str:
+    hermes_home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
     candidates = [
         os.environ.get("HERMES_EMAIL_WATCHDOG_HIMALAYA_BIN", "").strip(),
         os.environ.get("HIMALAYA_BIN", "").strip(),
-        "/opt/data/bin/himalaya",
+        str(hermes_home / "bin" / ("himalaya.exe" if os.name == "nt" else "himalaya")),
         shutil.which("himalaya") or "",
     ]
     for candidate in candidates:

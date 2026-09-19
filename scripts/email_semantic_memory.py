@@ -24,10 +24,17 @@ except Exception:
 
 MARKER = "EMAIL_WATCHDOG_SEMANTIC_MEMORY_SHADOW_V1"
 SCHEMA_VERSION = 1
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+STATE_ROOT = Path(
+    os.environ.get(
+        "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+        str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
+    )
+).expanduser()
 DEFAULT_DB_PATH = Path(
     os.environ.get(
         "EMAIL_LEARNING_DB",
-        "/opt/data/.hermes-home/.hermes/email_learning/email_learning.sqlite",
+        str(STATE_ROOT / "learning" / "email_learning.sqlite"),
     )
 )
 

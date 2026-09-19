@@ -51,7 +51,7 @@
     "renderer": "adaptive_v1e",
     "mode": "shadow",
     "production_route_enabled": false,
-    "all_mail_push": true,
+    "all_mail_push": false,
     "legacy_fallback_enabled": true,
     "fast_lane_enabled": true,
     "original_policy": "auto",

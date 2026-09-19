@@ -18,7 +18,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 SCHEMA_VERSION = 1
-DEFAULT_ROOT = Path("/opt/data/.hermes-home/.hermes/email_learning")
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+STATE_ROOT = Path(
+    os.environ.get(
+        "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+        str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
+    )
+).expanduser()
+DEFAULT_ROOT = STATE_ROOT / "learning"
 ROOT = Path(os.environ.get("EMAIL_LEARNING_ROOT", str(DEFAULT_ROOT)))
 DB_PATH = Path(os.environ.get("EMAIL_LEARNING_DB", str(ROOT / "email_learning.sqlite")))
 

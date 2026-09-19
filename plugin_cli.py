@@ -1,0 +1,122 @@
+"""Profile-aware lifecycle CLI for Email Watchdog."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def _home() -> Path:
+    from hermes_constants import get_hermes_home
+
+    return get_hermes_home()
+
+
+def _root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _state() -> Path:
+    return _home() / "plugin-data" / "hermes-email-watchdog"
+
+
+def _hook() -> Path:
+    return _home() / "hooks" / "hermes-email-watchdog"
+
+
+def register_cli(parser: argparse.ArgumentParser) -> None:
+    actions = parser.add_subparsers(dest="email_watchdog_action")
+    actions.add_parser("status", help="Show runtime and account readiness")
+    actions.add_parser("install-runtime", help="Install or refresh the profile-scoped gateway hook")
+    actions.add_parser("enable", help="Enable read-only polling")
+    actions.add_parser("disable", help="Disable polling")
+    actions.add_parser("run-once", help="Poll once and print the normalized result")
+    parser.set_defaults(func=email_watchdog_command)
+
+
+def _install_runtime() -> int:
+    source = _root() / "hooks" / "hermes-email-watchdog"
+    target = _hook()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    stage = target.with_name(f".{target.name}.stage")
+    if stage.exists():
+        shutil.rmtree(stage)
+    shutil.copytree(source, stage)
+    backup = None
+    if target.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = _state() / "hook-backups" / stamp
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
+        target.replace(backup_path)
+        backup = str(backup_path)
+    stage.replace(target)
+    _state().mkdir(parents=True, exist_ok=True)
+    print(json.dumps({"ok": True, "hook": str(target), "backup": backup}))
+    return 0
+
+
+def _env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["HERMES_EMAIL_WATCHDOG_SKILL_DIR"] = str(_root())
+    env["HERMES_EMAIL_WATCHDOG_STATE_ROOT"] = str(_state())
+    env["EMAIL_WATCHDOG_CONFIG"] = str(_state() / "config.json")
+    return env
+
+
+def _run_once() -> int:
+    result = subprocess.run(
+        [sys.executable, str(_root() / "scripts" / "email_watch.py")],
+        env=_env(),
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print(result.stderr.rstrip(), file=sys.stderr)
+    return result.returncode
+
+
+def email_watchdog_command(args: argparse.Namespace) -> int:
+    action = getattr(args, "email_watchdog_action", None)
+    if action == "install-runtime":
+        return _install_runtime()
+    if action == "enable":
+        _state().mkdir(parents=True, exist_ok=True)
+        (_state() / "enabled").write_text("enabled\n", encoding="utf-8")
+        print(json.dumps({"ok": True, "enabled": True, "restart_required": True}))
+        return 0
+    if action == "disable":
+        (_state() / "enabled").unlink(missing_ok=True)
+        print(json.dumps({"ok": True, "enabled": False, "restart_required": True}))
+        return 0
+    if action == "run-once":
+        return _run_once()
+    if action in {None, "status"}:
+        state = _state()
+        config = state / "config.json"
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "hermes_home": str(_home()),
+                    "hook_installed": (_hook() / "HOOK.yaml").is_file(),
+                    "enabled": (state / "enabled").is_file(),
+                    "config_present": config.is_file(),
+                    "status_file": str(state / "status.json"),
+                    "notification_policy": "actionable",
+                    "mailbox_mode": "read-only",
+                },
+                indent=2,
+            )
+        )
+        return 0
+    print(f"Unknown action: {action}")
+    return 2

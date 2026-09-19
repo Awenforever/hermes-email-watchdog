@@ -36,10 +36,17 @@ except Exception:  # Import safety: delivery wrapper catches and logs failures.
 
 MARKER = "EMAIL_WATCHDOG_SEMANTIC_ENGINE_READABLE_GROUNDED_CORE_ADAPTIVE_OUTPUT_BUDGET_SHADOW_V1"
 PROMPT_VERSION = "semantic_v2_readable_grounded_core_v1w_20260724"
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+STATE_ROOT = Path(
+    os.environ.get(
+        "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+        str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
+    )
+).expanduser()
 DEFAULT_DB_PATH = Path(
     os.environ.get(
         "EMAIL_LEARNING_DB",
-        "/opt/data/.hermes-home/.hermes/email_learning/email_learning.sqlite",
+        str(STATE_ROOT / "learning" / "email_learning.sqlite"),
     )
 )
 

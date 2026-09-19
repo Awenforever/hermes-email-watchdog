@@ -28,10 +28,17 @@ except Exception:  # pragma: no cover - defensive import for isolated tests
 
 MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1E"
 RENDERER_VERSION = "adaptive_v1e"
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+STATE_ROOT = Path(
+    os.environ.get(
+        "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+        str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
+    )
+).expanduser()
 DEFAULT_DB_PATH = Path(
     os.environ.get(
         "EMAIL_LEARNING_DB",
-        "/opt/data/.hermes-home/.hermes/email_learning/email_learning.sqlite",
+        str(STATE_ROOT / "learning" / "email_learning.sqlite"),
     )
 )
 

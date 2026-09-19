@@ -35,8 +35,15 @@ try:
 except Exception:  # Candidate lifecycle must never break delivery observation.
     email_candidate_lifecycle = None
 
-CONFIG_PATH = Path(os.environ.get("EMAIL_DECISION_ENGINE_CONFIG", "/opt/data/.hermes-home/.hermes/email_decision_engine_config.json"))
-LEARNING_ROOT = Path(os.environ.get("EMAIL_LEARNING_ROOT", "/opt/data/.hermes-home/.hermes/email_learning"))
+HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+STATE_ROOT = Path(
+    os.environ.get(
+        "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+        str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
+    )
+).expanduser()
+CONFIG_PATH = Path(os.environ.get("EMAIL_DECISION_ENGINE_CONFIG", str(STATE_ROOT / "decision_engine_config.json")))
+LEARNING_ROOT = Path(os.environ.get("EMAIL_LEARNING_ROOT", str(STATE_ROOT / "learning")))
 SHADOW_JSONL = LEARNING_ROOT / "decision_engine_shadow.jsonl"
 LLM_JSONL = LEARNING_ROOT / "llm_observations.jsonl"
 CANDIDATE_JSONL = LEARNING_ROOT / "pattern_candidates.jsonl"

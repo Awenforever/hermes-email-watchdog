@@ -249,9 +249,10 @@ def _unwrap_himalaya_list(data):
 
 # EMAIL_WATCHDOG_HIMALAYA_BIN_RESOLUTION_V1
 def _himalaya_binary():
+    hermes_home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
     candidates = [
         os.environ.get("HIMALAYA_BIN", "").strip(),
-        "/opt/data/bin/himalaya",
+        str(hermes_home / "bin" / ("himalaya.exe" if os.name == "nt" else "himalaya")),
         shutil.which("himalaya") or "",
         "himalaya",
     ]

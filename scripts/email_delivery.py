@@ -539,9 +539,10 @@ def _policy_after_domain_guard(policy: str, email: dict) -> str:
 
 # EMAIL_WATCHDOG_HIMALAYA_BIN_RESOLUTION_V1
 def _himalaya_binary():
+    hermes_home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
     candidates = [
         os.environ.get("HIMALAYA_BIN", "").strip(),
-        "/opt/data/bin/himalaya",
+        str(hermes_home / "bin" / ("himalaya.exe" if os.name == "nt" else "himalaya")),
         shutil.which("himalaya") or "",
         "himalaya",
     ]
@@ -1296,6 +1297,24 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     raise RuntimeError("semantic decision missing")
 
             prod_analysis = email_production_router.decision_to_legacy_analysis(decision, analysis or {})
+            if prod_analysis.get("should_notify") is False:
+                _persist_delivery(email or {}, prod_analysis, "", "suppressed")
+                result = {
+                    "notification_text": "",
+                    "attachments": [],
+                    "schedule": [],
+                    "cron_entries": [],
+                    "status": "suppressed",
+                    "production_route": "adaptive_v1e",
+                    "route_lane": route_lane,
+                    "route_reasons": route_reason,
+                    "semantic": semantic_meta,
+                    "renderer": {},
+                    "legacy_fallback_used": False,
+                }
+                _ew_prod_record_learning(email, rule_result, prod_analysis, result, account)
+                _ew_prod_record_memory(email, decision, account, semantic_meta, {})
+                return result
             attachments = download_attachments(email or {}, prod_analysis, account or {})
             schedule = upsert_schedule(email or {}, prod_analysis)
             cron_entries = install_reminder_cron(schedule)
