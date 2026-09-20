@@ -8,7 +8,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,20 +75,6 @@ def _env() -> dict[str, str]:
     return env
 
 
-def _atomic_marker(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
-    tmp = Path(raw)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
-
-
 def _run_once() -> int:
     result = subprocess.run(
         [sys.executable, str(_root() / "scripts" / "email_watch.py")],
@@ -142,13 +127,9 @@ def email_watchdog_command(args: argparse.Namespace) -> int:
     if action == "install-runtime":
         return _install_runtime()
     if action == "enable":
-        _atomic_marker(_state() / "enabled", "true\n")
-        print(json.dumps({"ok": True, "enabled": True, "restart_required": True}))
-        return 0
+        return _run_onboarding("enable")
     if action == "disable":
-        _atomic_marker(_state() / "enabled", "false\n")
-        print(json.dumps({"ok": True, "enabled": False, "restart_required": True}))
-        return 0
+        return _run_onboarding("disable")
     if action == "run-once":
         return _run_once()
     if action == "onboarding-plan":

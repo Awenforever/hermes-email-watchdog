@@ -49,7 +49,7 @@ class PluginCliPortableTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
-        self.assertTrue(self.command("enable")["enabled"])
+        (state / "enabled").write_text("true\n", encoding="utf-8")
         self.assertEqual((state / "enabled").read_text(encoding="utf-8"), "true\n")
         status = self.command("status")
         self.assertEqual(status["semantic_provider"], "USTC")
@@ -68,6 +68,13 @@ class PluginCliPortableTests(unittest.TestCase):
         second = self.command("install-runtime")
         self.assertTrue(Path(second["backup"]).is_dir())
         self.assertTrue((Path(second["backup"]) / "HOOK.yaml").is_file())
+
+    def test_enable_fails_closed_until_read_only_validation_passes(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            rc = self.module.email_watchdog_command(Namespace(email_watchdog_action="enable"))
+        self.assertNotEqual(rc, 0)
+        self.assertFalse((self.home / "plugin-data" / "hermes-email-watchdog" / "enabled").exists())
 
 
 if __name__ == "__main__":

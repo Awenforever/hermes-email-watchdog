@@ -54,6 +54,8 @@ hermes email-watchdog status
 hermes email-watchdog enable
 ```
 
+`enable` 会重新执行只读邮箱验证；账号尚未配置或验证失败时会拒绝启用并保持关闭。
+
 ## 数据与边界
 
 配置、seen 索引、缓存、学习数据库、状态和 outbox 位于当前 Hermes profile 的 `plugin-data/hermes-email-watchdog/`。安装和升级不会覆盖已有数据；从旧版升级时，仅在新位置没有对应文件的情况下迁移旧数据。
