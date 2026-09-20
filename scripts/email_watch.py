@@ -893,7 +893,7 @@ def _delivery_owns_learning_record(delivery):
     if not isinstance(delivery, dict):
         return False
     return str(delivery.get("production_route") or "") in {
-        "adaptive_v1e", "legacy_fallback",
+        "adaptive_v1e", "adaptive_v1f", "legacy_fallback",
     }
 
 

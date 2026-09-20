@@ -2,10 +2,12 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-DATA_ROOT="${HERMES_EMAIL_WATCHDOG_DATA_ROOT:-/opt/data}"
-SKILL_DIR="${HERMES_EMAIL_WATCHDOG_SKILL_DIR:-${DATA_ROOT}/skills/hermes-email-watchdog}"
-ACTIVE_DIR="${HERMES_EMAIL_WATCHDOG_ACTIVE_HOOK_DIR:-${DATA_ROOT}/hooks/hermes-email-watchdog}"
-STATE_DIR="${HERMES_EMAIL_WATCHDOG_INSTALL_STATE_DIR:-${DATA_ROOT}/.hermes-home/.hermes/email_watchdog_install}"
+HERMES_HOME_DIR="${HERMES_HOME:-${HERMES_EMAIL_WATCHDOG_DATA_ROOT:-/opt/data}}"
+SKILL_DIR="${HERMES_EMAIL_WATCHDOG_SKILL_DIR:-${HERMES_HOME_DIR}/skills/hermes-email-watchdog}"
+ACTIVE_DIR="${HERMES_EMAIL_WATCHDOG_ACTIVE_HOOK_DIR:-${HERMES_HOME_DIR}/hooks/hermes-email-watchdog}"
+PLUGIN_STATE="${HERMES_EMAIL_WATCHDOG_STATE_ROOT:-${HERMES_HOME_DIR}/plugin-data/hermes-email-watchdog}"
+STATE_DIR="${HERMES_EMAIL_WATCHDOG_INSTALL_STATE_DIR:-${PLUGIN_STATE}/install}"
+LEGACY_STATE="${HERMES_EMAIL_WATCHDOG_LEGACY_STATE_ROOT:-${HERMES_HOME_DIR}/.hermes-home/.hermes}"
 MANIFEST="${STATE_DIR}/install-manifest.json"
 CHECKSUMS="${ROOT}/checksums/SHA256SUMS"
 OPERATION="${HERMES_EMAIL_WATCHDOG_OPERATION:-install}"
@@ -15,7 +17,38 @@ fail() { printf 'INSTALL_FAILED=%s\n' "$1" >&2; exit 1; }
 python3 "${ROOT}/scripts/repository_contract_check.py" "${ROOT}" >/dev/null
 python3 "${ROOT}/scripts/verify_checksums.py" "${ROOT}" "${CHECKSUMS}"
 
-mkdir -p "$(dirname "${SKILL_DIR}")" "$(dirname "${ACTIVE_DIR}")" "${STATE_DIR}/backups"
+mkdir -p "$(dirname "${SKILL_DIR}")" "$(dirname "${ACTIVE_DIR}")" "${PLUGIN_STATE}" "${STATE_DIR}/backups"
+
+# One-way, non-destructive migration from the pre-v0.21 layout. Existing
+# canonical files always win, so upgrades cannot overwrite live state.
+migrate_if_absent() {
+  local old="$1" new="$2"
+  [[ ! -e "${new}" && -e "${old}" ]] || return 0
+  mkdir -p "$(dirname "${new}")"
+  cp -a -- "${old}" "${new}"
+}
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_config.json" "${PLUGIN_STATE}/config.json"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_enabled" "${PLUGIN_STATE}/enabled"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_interval_seconds" "${PLUGIN_STATE}/interval_seconds"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_status.json" "${PLUGIN_STATE}/status.json"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_outbox.json" "${PLUGIN_STATE}/outbox.json"
+migrate_if_absent "${LEGACY_STATE}/email_watch_seen.json" "${PLUGIN_STATE}/seen.json"
+migrate_if_absent "${LEGACY_STATE}/email.db" "${PLUGIN_STATE}/email.db"
+migrate_if_absent "${LEGACY_STATE}/email_learning" "${PLUGIN_STATE}/learning"
+migrate_if_absent "${LEGACY_STATE}/email_cache" "${PLUGIN_STATE}/email_cache"
+migrate_if_absent "${LEGACY_STATE}/email_threads.json" "${PLUGIN_STATE}/email_threads.json"
+migrate_if_absent "${LEGACY_STATE}/email_contacts.json" "${PLUGIN_STATE}/email_contacts.json"
+migrate_if_absent "${LEGACY_STATE}/email_decision_engine_config.json" "${PLUGIN_STATE}/decision_engine_config.json"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_onboarding.json" "${PLUGIN_STATE}/onboarding.json"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_onboarding.lock" "${PLUGIN_STATE}/onboarding.lock"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_onboarding_backups" "${PLUGIN_STATE}/onboarding-backups"
+migrate_if_absent "${LEGACY_STATE}/email_watchdog_himalaya" "${PLUGIN_STATE}/himalaya"
+if [[ ! -f "${MANIFEST}" && -f "${LEGACY_STATE}/email_watchdog_install/install-manifest.json" ]]; then
+  cp -a -- "${LEGACY_STATE}/email_watchdog_install/install-manifest.json" "${MANIFEST}"
+  if [[ -d "${LEGACY_STATE}/email_watchdog_install/backups" ]]; then
+    cp -a -n -- "${LEGACY_STATE}/email_watchdog_install/backups/." "${STATE_DIR}/backups/"
+  fi
+fi
 root_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${ROOT}")"
 skill_real="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${SKILL_DIR}")"
 
@@ -67,7 +100,7 @@ install -m 0644 "${SKILL_DIR}/hooks/hermes-email-watchdog/HOOK.yaml" "${ACTIVE_D
 mv -f "${ACTIVE_DIR}/.handler.py.tmp.$$" "${ACTIVE_DIR}/handler.py"
 mv -f "${ACTIVE_DIR}/.HOOK.yaml.tmp.$$" "${ACTIVE_DIR}/HOOK.yaml"
 
-enabled_file="${DATA_ROOT}/.hermes-home/.hermes/email_watchdog_enabled"
+enabled_file="${PLUGIN_STATE}/enabled"
 if [[ ! -e "${enabled_file}" ]]; then
   mkdir -p "$(dirname "${enabled_file}")"
   printf 'false\n' > "${enabled_file}"

@@ -129,6 +129,7 @@ async def handle(event_type: str, context: dict):
 
     _task = asyncio.create_task(_loop(), name="hermes-email-watchdog-loop")
     _task.add_done_callback(_task_done)
+    _write_status({"state": "starting", "started_at": _now()})
     logger.warning("Hermes Email Watchdog: readonly scheduler task created")
 
 
@@ -209,15 +210,23 @@ def _now() -> str:
 
 
 def _enabled() -> bool:
+    # The profile-owned marker is authoritative once present.  Container
+    # images may carry a stale baked HERMES_EMAIL_WATCHDOG_ENABLED=false;
+    # allowing that value to override an explicit CLI enable caused repeated
+    # production startup failures.
+    if ENABLED_FILE.is_file():
+        try:
+            return ENABLED_FILE.read_text(encoding="utf-8").strip().lower() in {
+                "1", "true", "yes", "on",
+            }
+        except Exception:
+            return False
     env = os.getenv("HERMES_EMAIL_WATCHDOG_ENABLED", "").strip().lower()
     if env in {"1", "true", "yes", "on"}:
         return True
     if env in {"0", "false", "no", "off"}:
         return False
-    try:
-        return ENABLED_FILE.read_text(encoding="utf-8").strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
-        return False
+    return False
 
 
 def _interval_seconds() -> int:
@@ -262,6 +271,13 @@ def _write_status(data: dict):
             except Exception:
                 old = {}
         merged = {**old, **data, "updated_at": _now()}
+        if str(data.get("state") or "") in {"starting", "running"}:
+            for stale in (
+                "disabled_at", "last_error_at", "last_error", "traceback_tail",
+                "last_delivery_pending_at", "last_delivery_error",
+            ):
+                if stale not in data:
+                    merged.pop(stale, None)
         tmp = STATUS_FILE.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, STATUS_FILE)

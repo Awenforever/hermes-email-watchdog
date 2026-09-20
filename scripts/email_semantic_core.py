@@ -72,6 +72,7 @@ ROOT_ALIASES = {
     "summary_type": "summary_style",
     "bullets": "key_points",
     "points": "key_points",
+    "evidence": "summary_evidence",
     "original": "original_policy",
     "original_text_policy": "original_policy",
     "attachment_value": "attachment_reason",
@@ -163,6 +164,18 @@ def _category(value: Any) -> str:
 
 def _apply_root_aliases(source: Dict[str, Any], repairs: List[str]) -> Dict[str, Any]:
     out = dict(source)
+    # Some OpenAI-compatible models occasionally emit an empty JSON member
+    # whose key consists only of punctuation (for example `", "`).  It carries
+    # no information, but previously made an otherwise grounded result fail
+    # closed as an unknown field.  Only discard structurally empty junk; a
+    # punctuation key with a meaningful value remains a hard schema error.
+    for key, value in list(out.items()):
+        key_text = str(key).strip()
+        punctuation_only = bool(key_text) and not re.search(r"[\w\u3400-\u9fff]", key_text)
+        structurally_empty = value is None or value == "" or value == [] or value == {}
+        if punctuation_only and structurally_empty:
+            del out[key]
+            repairs.append("cleanup:drop_empty_punctuation_key")
     for alias, canonical in ROOT_ALIASES.items():
         if alias not in out:
             continue
@@ -350,8 +363,8 @@ def _supported_quotes(value: Any, source: str, max_items: int = 8) -> Tuple[List
 
 _ACTION_SIGNAL_RE = re.compile(
     r"(?i)(?:\bplease\b|\bkindly\b|\bsubmit\b|\bupload\b|\bconfirm\b|"
-    r"\bcomplete\b|\bsign\b|请于|请在|请尽快|请务必|务必|须于|需要.{0,12}"
-    r"(?:提交|上传|确认|完成|签字|填写|参加)|(?:提交|上传|确认|完成|签字|填写).{0,8}(?:前|截止))"
+    r"\bcomplete\b|\bsign\b|\bpay\b|请于|请在|请尽快|请(?:您)?及时|请务必|务必|须于|需要.{0,12}"
+    r"(?:提交|上传|确认|完成|签字|填写|参加|缴纳|缴费|支付)|(?:提交|上传|确认|完成|签字|填写|缴纳|缴费|支付).{0,8}(?:前|截止))"
 )
 
 
@@ -365,7 +378,12 @@ def _semantic_hints(facts: Mapping[str, Any]) -> Dict[str, bool]:
 def _extract_action_quote(source: str) -> str:
     for part in re.split(r"[\\n。！？；!?;]+", _text(source)):
         text = part.strip()
-        if text and _ACTION_SIGNAL_RE.search(text):
+        match = _ACTION_SIGNAL_RE.search(text) if text else None
+        if match:
+            # Drop a decorative lead-in before the actual imperative, while
+            # retaining the source wording as grounded evidence.
+            if match.start() > 0 and re.match(r"(?i)(?:请|please\b|kindly\b)", text[match.start():]):
+                text = text[match.start():]
             return text[:240]
     return ""
 
@@ -979,8 +997,7 @@ def normalize_and_expand_detailed(
         if inferred_evidence:
             action_required = True
             action_type = "review_and_complete"
-            action_description = (key_points[0] if key_points else summary) or inferred_evidence
-            action_description = _text(action_description, 600)
+            action_description = _text(inferred_evidence, 600)
             action_next = ""
             action_evidence = inferred_evidence
             repairs.append("consistency:infer_grounded_direct_action")

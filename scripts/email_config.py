@@ -7,21 +7,32 @@ import os
 import sys
 from pathlib import Path
 
-CONFIG_PATH = os.environ.get("EMAIL_WATCHDOG_CONFIG", "~/.hermes/email_watchdog_config.json")
+HERMES_HOME_RAW = os.environ.get("HERMES_HOME", "~/.hermes")
+HERMES_HOME = Path(os.path.expandvars(os.path.expanduser(HERMES_HOME_RAW)))
+STATE_ROOT_RAW = os.environ.get(
+    "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+    HERMES_HOME_RAW.rstrip("/\\") + "/plugin-data/hermes-email-watchdog",
+)
+STATE_ROOT = Path(
+    os.path.expandvars(
+        os.path.expanduser(STATE_ROOT_RAW)
+    )
+)
+CONFIG_PATH = os.environ.get("EMAIL_WATCHDOG_CONFIG", str(STATE_ROOT / "config.json"))
 
 _WARNED = False
 _CACHE = None
 
 DEFAULT_CONFIG = {
-    "version": 1,
+    "version": 2,
     "default_account": "",
     "accounts": [],
     "paths": {
-        "db": "~/.hermes/email.db",
-        "seen": "~/.hermes/email_watch_seen.json",
-        "cache_dir": "~/.hermes/email_cache",
-        "threads": "~/.hermes/email_threads.json",
-        "contacts": "~/.hermes/email_contacts.json",
+        "db": STATE_ROOT_RAW.rstrip("/\\") + "/email.db",
+        "seen": STATE_ROOT_RAW.rstrip("/\\") + "/seen.json",
+        "cache_dir": STATE_ROOT_RAW.rstrip("/\\") + "/email_cache",
+        "threads": STATE_ROOT_RAW.rstrip("/\\") + "/email_threads.json",
+        "contacts": STATE_ROOT_RAW.rstrip("/\\") + "/email_contacts.json",
         "attachment_dir": "~/Documents/EmailAttachments",
     },
     "watchdog": {
@@ -45,12 +56,14 @@ DEFAULT_CONFIG = {
     "semantic_engine": {
         "enabled": True,
         "mode": "shadow",
-        "provider": "ollama",
-        "endpoint": "http://127.0.0.1:11434",
-        "model": "qwen2.5:3b",
-        "timeout_seconds": 300,
-        "temperature": 0.1,
-        "max_body_chars": 12000,
+        "provider": "hermes_openai",
+        "provider_name": "USTC",
+        "endpoint": "",
+        "api_key_env": "",
+        "model": "qwen3.6-chat",
+        "timeout_seconds": 120,
+        "temperature": 0.0,
+        "max_body_chars": 16000,
         "max_parallel": 1,
         "cache_by_message_hash": True,
         "protocol": "readable_grounded_core_v1u",
@@ -58,16 +71,16 @@ DEFAULT_CONFIG = {
         # EMAIL_WATCHDOG_ADAPTIVE_OUTPUT_BUDGET_CONFIG_V1
         "num_predict_mode": "adaptive",
         "num_predict": 1800,
-        "num_predict_simple": 600,
-        "num_predict_standard": 1000,
-        "num_predict_complex": 1600,
-        "num_predict_hard_cap": 1800,
+        "num_predict_simple": 1400,
+        "num_predict_standard": 2400,
+        "num_predict_complex": 4000,
+        "num_predict_hard_cap": 4096,
     },
     # EMAIL_WATCHDOG_ADAPTIVE_RENDERER_CONFIG_SHADOW_V1
     "notification": {
-        "renderer": "adaptive_v1e",
-        "mode": "shadow",
-        "production_route_enabled": False,
+        "renderer": "adaptive_v1f",
+        "mode": "production",
+        "production_route_enabled": True,
         "all_mail_push": False,
         "legacy_fallback_enabled": True,
         "fast_lane_enabled": True,

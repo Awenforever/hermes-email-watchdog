@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0 — 2026-09-20
+
+- Use the Hermes USTC OpenAI-compatible provider with `qwen3.6-chat` for the
+  production semantic path; retain user-selected custom providers unchanged.
+- Promote the compact mobile notification renderer to `adaptive_v1f` and keep
+  explicit action clauses even when they overlap with the summary.
+- Unify runtime state under the active Hermes profile at
+  `plugin-data/hermes-email-watchdog/`; migrate the known legacy layout only
+  when the canonical destination is absent.
+- Make the profile enable marker authoritative over stale image environment
+  defaults, and clear stale disabled/error fields when the scheduler starts.
+- Repair rollback metadata and cross-platform line endings; validate install,
+  upgrade, rollback, uninstall, purge, and reinstall in an isolated Linux
+  container.
+
 ## 0.1.0 — 2026-07-18
 
 - Publish the first stable Email Watchdog release after the complete `rc.5`

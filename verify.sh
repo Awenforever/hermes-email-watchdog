@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-DATA_ROOT="${HERMES_EMAIL_WATCHDOG_DATA_ROOT:-/opt/data}"
-SKILL_DIR="${HERMES_EMAIL_WATCHDOG_SKILL_DIR:-${DATA_ROOT}/skills/hermes-email-watchdog}"
-ACTIVE_DIR="${HERMES_EMAIL_WATCHDOG_ACTIVE_HOOK_DIR:-${DATA_ROOT}/hooks/hermes-email-watchdog}"
-STATE_DIR="${HERMES_EMAIL_WATCHDOG_INSTALL_STATE_DIR:-${DATA_ROOT}/.hermes-home/.hermes/email_watchdog_install}"
+HERMES_HOME_DIR="${HERMES_HOME:-${HERMES_EMAIL_WATCHDOG_DATA_ROOT:-/opt/data}}"
+SKILL_DIR="${HERMES_EMAIL_WATCHDOG_SKILL_DIR:-${HERMES_HOME_DIR}/skills/hermes-email-watchdog}"
+ACTIVE_DIR="${HERMES_EMAIL_WATCHDOG_ACTIVE_HOOK_DIR:-${HERMES_HOME_DIR}/hooks/hermes-email-watchdog}"
+PLUGIN_STATE="${HERMES_EMAIL_WATCHDOG_STATE_ROOT:-${HERMES_HOME_DIR}/plugin-data/hermes-email-watchdog}"
+STATE_DIR="${HERMES_EMAIL_WATCHDOG_INSTALL_STATE_DIR:-${PLUGIN_STATE}/install}"
 MANIFEST="${STATE_DIR}/install-manifest.json"
 fail(){ printf 'VERIFY_FAILED=%s\n' "$1" >&2; exit 1; }
 for p in "${SKILL_DIR}/checksums/SHA256SUMS" "${ACTIVE_DIR}/handler.py" "${ACTIVE_DIR}/HOOK.yaml" "${MANIFEST}"; do

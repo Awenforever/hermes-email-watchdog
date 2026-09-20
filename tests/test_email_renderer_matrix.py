@@ -118,8 +118,8 @@ class RendererTests(unittest.TestCase):
         )
 
     def test_01_marker(self):
-        self.assertEqual(renderer.MARKER, "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1E")
-        self.assertEqual(renderer.RENDERER_VERSION, "adaptive_v1e")
+        self.assertEqual(renderer.MARKER, "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1F")
+        self.assertEqual(renderer.RENDERER_VERSION, "adaptive_v1f")
 
     def test_02_fixed_header(self):
         text = self.render()["text"]
@@ -489,6 +489,29 @@ class RendererTests(unittest.TestCase):
         d = decision(mode="summary_plus_original", original="full")
         text = self.render(d=d, e=email(body="第一段\n\n第二段"))["text"]
         self.assertIn("**原文**\n> 第一段\n>\n> 第二段", text)
+
+
+    def test_39_v1f_mobile_layout_avoids_markdown_scaffolding(self):
+        result = renderer.render_notification(
+            email(), decision(action=True), {"attachments": [], "schedule": []}, {},
+            settings_override=self.settings(renderer="adaptive_v1f", mode="production"),
+        )
+        text = result["text"]
+        self.assertTrue(text.startswith("📬 USTC｜新邮件\n重要 · 学校通知"))
+        self.assertIn("\n\n来自：Miracle <sender@example.com>\n主题：中期检查通知", text)
+        self.assertIn("\n\n摘要\n", text)
+        self.assertIn("\n\n待办\n准备并提交材料", text)
+        self.assertNotIn("###", text)
+        self.assertNotIn("**", text)
+        self.assertNotIn("\n> ", text)
+
+    def test_40_v1f_keeps_required_action_even_when_summary_repeats_it(self):
+        d = decision(action=True, summary="准备并提交材料")
+        text = renderer.render_notification(
+            email(), d, {"attachments": [], "schedule": []}, {},
+            settings_override=self.settings(renderer="adaptive_v1f", mode="production"),
+        )["text"]
+        self.assertIn("\n\n待办\n准备并提交材料", text)
 
 
 if __name__ == "__main__":

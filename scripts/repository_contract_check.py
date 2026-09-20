@@ -53,7 +53,7 @@ checks={
  "onboarding_transaction_lock":"EMAIL_WATCHDOG_ONBOARDING_TRANSACTION_LOCK_V1" in onboarding,
  "handler_baseline_identical":handler==baseline,
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
- "renderer_v1e":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1E" in renderer and "adaptive_v1e" in renderer,
+ "renderer_v1f":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1F" in renderer and "adaptive_v1f" in renderer,
  "protocol_v1u":"readable_grounded_core_v1u" in config_text,
  "safe_thread_tracker":"email_thread_tracker" in watch and "email_reply" not in watch,
  "weixin_not_present":not any(p.name=="weixin.py" for p in root.rglob("weixin.py")),

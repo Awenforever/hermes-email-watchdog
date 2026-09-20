@@ -26,8 +26,8 @@ try:
 except Exception:  # pragma: no cover - defensive import for isolated tests
     email_config = None
 
-MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1E"
-RENDERER_VERSION = "adaptive_v1e"
+MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1F"
+RENDERER_VERSION = "adaptive_v1f"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 STATE_ROOT = Path(
     os.environ.get(
@@ -43,7 +43,7 @@ DEFAULT_DB_PATH = Path(
 )
 
 _DEFAULT_SETTINGS: Dict[str, Any] = {
-    "renderer": "adaptive_v1e",
+    "renderer": "adaptive_v1f",
     "mode": "shadow",
     "original_policy": "auto",
     "original_max_chars": 5000,
@@ -103,7 +103,7 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
             pass
     if isinstance(override, Mapping):
         result.update(override)
-    result["renderer"] = _text(result.get("renderer"), 64) or "adaptive_v1e"
+    result["renderer"] = _text(result.get("renderer"), 64) or "adaptive_v1f"
     result["mode"] = _text(result.get("mode"), 32).lower() or "shadow"
     result["original_policy"] = _text(result.get("original_policy"), 32).lower() or "auto"
     try:
@@ -358,6 +358,24 @@ def _append_block(lines: List[str], blocks: List[str], title: str, body_lines: S
     blocks.append(title)
 
 
+def _append_plain_block(lines: List[str], blocks: List[str], title: str, body_lines: Sequence[str]) -> None:
+    clean: List[str] = []
+    for item in body_lines:
+        value = _text(item)
+        if not value:
+            continue
+        for raw in value.splitlines():
+            line = raw.rstrip()
+            if line.startswith("- "):
+                line = "• " + line[2:]
+            clean.append(line)
+    if not clean:
+        return
+    lines.extend(["", title])
+    lines.extend(clean)
+    blocks.append(title)
+
+
 def _append_code_block(lines: List[str], blocks: List[str], title: str, body_lines: Sequence[str]) -> None:
     """Render only genuinely copy-oriented code, command, log, or raw structured text."""
     clean = [_text(item) for item in body_lines if _text(item)]
@@ -546,6 +564,8 @@ def render_notification(
     decision = decision or {}
     delivery = delivery or {}
     settings = _settings(settings_override)
+    plain_layout = settings.get("renderer") == "adaptive_v1f"
+    append_block = _append_plain_block if plain_layout else _append_block
     notification = _mapping(decision.get("notification"))
     mode = _text(notification.get("content_mode"), 64).lower() or "summary_only"
     if mode not in _ALLOWED_MODES:
@@ -553,7 +573,10 @@ def render_notification(
     subject = _text(email.get("subject"), 260) or "无主题"
     body = clean_body(_body_source(email))
     importance = _mapping(decision.get("importance"))
-    lines: List[str] = [f"### 📬 新邮件｜{_account(email, account)}"]
+    lines: List[str] = [
+        f"📬 {_account(email, account)}｜新邮件"
+        if plain_layout else f"### 📬 新邮件｜{_account(email, account)}"
+    ]
     blocks: List[str] = []
     meta: List[str] = []
     if settings.get("show_priority"):
@@ -565,17 +588,25 @@ def render_notification(
         if sent:
             meta.append(sent)
     if meta:
-        lines.extend(["", " · ".join(f"`{item}`" for item in meta if item)])
-    _append_block(lines, blocks, "发件人", [_sender(email)])
-    _append_block(lines, blocks, "主题", [subject])
+        rendered_meta = (
+            " · ".join(item for item in meta if item)
+            if plain_layout else " · ".join(f"`{item}`" for item in meta if item)
+        )
+        lines.extend(([rendered_meta] if plain_layout else ["", rendered_meta]))
+    if plain_layout:
+        lines.extend(["", f"来自：{_sender(email)}", f"主题：{subject}"])
+        blocks.extend(["发件人", "主题"])
+    else:
+        append_block(lines, blocks, "发件人", [_sender(email)])
+        append_block(lines, blocks, "主题", [subject])
 
     duplicate_suppressions = 0
     summary_fallback = ""
     if mode in {"code_card", "finance_card", "event_card", "deadline_card"}:
         title, card_lines = _special_card_lines(mode, email, decision, body)
-        _append_block(lines, blocks, title, card_lines)
+        append_block(lines, blocks, title, card_lines)
         if mode == "code_card":
-            _append_block(
+            append_block(
                 lines,
                 blocks,
                 "安全提示",
@@ -598,7 +629,7 @@ def render_notification(
             if summary_lines:
                 summary_fallback = "academic_body_highlights"
         if mode != "original_only":
-            _append_block(lines, blocks, "摘要", summary_lines)
+            append_block(lines, blocks, "摘要", summary_lines)
 
     action = _mapping(decision.get("action"))
     if mode != "deadline_card" and bool(action.get("required")):
@@ -606,20 +637,20 @@ def render_notification(
         description = _text(action.get("description"), 500)
         next_step = _text(action.get("next_step"), 500)
         summary_text = "\n".join(_summary_lines(subject, decision, suppress_redundant=False)[0])
-        if description and not _redundant(description, summary_text):
+        if description and (plain_layout or not _redundant(description, summary_text)):
             action_lines.append(description)
         elif description:
             duplicate_suppressions += 1
-        if next_step and not _redundant(next_step, description) and not _redundant(next_step, summary_text):
+        if next_step and not _redundant(next_step, description) and (plain_layout or not _redundant(next_step, summary_text)):
             action_lines.append(f"下一步：{next_step}")
         elif next_step:
             duplicate_suppressions += 1
-        _append_block(lines, blocks, "待办", action_lines)
+        append_block(lines, blocks, "待办", action_lines)
 
     deadline = _mapping(decision.get("deadline"))
     if mode != "deadline_card" and bool(deadline.get("has_deadline")):
         when = _format_time(deadline.get("datetime")) or _text(deadline.get("date_text"), 160)
-        _append_block(lines, blocks, "截止时间", [when])
+        append_block(lines, blocks, "截止时间", [when])
 
     names = _attachment_names(email, delivery, decision)
     semantic_attachments = _mapping(decision.get("attachments"))
@@ -629,11 +660,11 @@ def render_notification(
             attachment_lines = [f"- 📎 {name}" for name in names]
         else:
             attachment_lines = ["- 📎 有附件，文件名未解析，请在邮箱查看"]
-        _append_block(lines, blocks, "附件", attachment_lines)
+        append_block(lines, blocks, "附件", attachment_lines)
 
     schedule_lines = _schedule_lines(delivery)
     if schedule_lines:
-        _append_block(lines, blocks, "提醒", [f"- {item}" for item in schedule_lines])
+        append_block(lines, blocks, "提醒", [f"- {item}" for item in schedule_lines])
 
     risk = _mapping(decision.get("risk"))
     if _text(risk.get("level"), 32).lower() not in {"", "none"}:
@@ -644,7 +675,7 @@ def render_notification(
             if clean_body(note)
         ]
         risk_line = risk_level + (f" | {'；'.join(risk_notes)}" if risk_notes else "")
-        _append_block(lines, blocks, "风险提示", [risk_line])
+        append_block(lines, blocks, "风险提示", [risk_line])
 
     original_policy = _effective_original_policy(notification, settings)
     original_heading = "原文"
@@ -659,7 +690,7 @@ def render_notification(
     if original_policy in {"full", "excerpt"} and original_text:
         if truncated:
             original_text += "\n\n已截断，完整正文请在邮箱中查看。"
-        _append_block(lines, blocks, original_heading, [original_text])
+        append_block(lines, blocks, original_heading, [original_text])
 
     text = "\n".join(lines).strip()
     return {
@@ -819,7 +850,7 @@ def shadow_compare(
 ) -> Dict[str, Any]:
     """Render and persist shadow comparison while preserving production output."""
     settings = _settings(settings_override)
-    if settings.get("renderer") != "adaptive_v1":
+    if not str(settings.get("renderer") or "").startswith("adaptive_v1"):
         return {"ok": True, "skipped": True, "reason": "adaptive renderer disabled"}
     if settings.get("mode") != "shadow":
         return {"ok": True, "skipped": True, "reason": "phase2 requires shadow mode"}

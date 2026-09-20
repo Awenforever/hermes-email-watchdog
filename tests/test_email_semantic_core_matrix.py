@@ -750,17 +750,20 @@ class EngineIntegrationTests(unittest.TestCase):
 
     def test_22_config_defaults(self):
         settings = email_config.DEFAULT_CONFIG["semantic_engine"]
-        self.assertEqual(settings["timeout_seconds"], 300)
+        self.assertEqual(settings["timeout_seconds"], 120)
+        self.assertEqual(settings["provider"], "hermes_openai")
+        self.assertEqual(settings["provider_name"], "USTC")
+        self.assertEqual(settings["model"], "qwen3.6-chat")
         self.assertEqual(settings["num_thread"], 5)
         self.assertEqual(settings["num_predict_mode"], "adaptive")
         self.assertEqual(settings["num_predict"], 1800)
-        self.assertEqual(settings["num_predict_standard"], 1000)
+        self.assertEqual(settings["num_predict_standard"], 2400)
         self.assertEqual(settings["protocol"], "readable_grounded_core_v1u")
         self.assertEqual(settings["num_predict_mode"], "adaptive")
-        self.assertEqual(settings["num_predict_simple"], 600)
-        self.assertEqual(settings["num_predict_standard"], 1000)
-        self.assertEqual(settings["num_predict_complex"], 1600)
-        self.assertEqual(settings["num_predict_hard_cap"], 1800)
+        self.assertEqual(settings["num_predict_simple"], 1400)
+        self.assertEqual(settings["num_predict_standard"], 2400)
+        self.assertEqual(settings["num_predict_complex"], 4000)
+        self.assertEqual(settings["num_predict_hard_cap"], 4096)
         self.assertEqual(settings["mode"], "shadow")
         self.assertFalse(email_config.DEFAULT_CONFIG["llm"]["enabled"])
 

@@ -1,7 +1,7 @@
 ---
 name: hermes-email-watchdog
 description: Install, configure, and run read-only multi-account email monitoring with grounded Hermes notifications.
-version: 0.2.0-rc.1
+version: 0.2.0
 tags: [email, watchdog, notification, read-only, hermes, onboarding]
 ---
 
@@ -96,7 +96,7 @@ Active Hook:
 User data:
 
 ```text
-/opt/data/.hermes-home/.hermes/
+/opt/data/plugin-data/hermes-email-watchdog/
 ```
 
 The Weixin transport and `hermes-wechat-enhance` are separate components.

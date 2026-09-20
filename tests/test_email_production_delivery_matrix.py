@@ -41,18 +41,18 @@ class DeliveryRouteTests(unittest.TestCase):
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
-       mock.patch('email_notification_renderer.render_notification',return_value={"ok":True,"text":"ADAPTIVE","renderer_version":"adaptive_v1e"}) as render, \
+       mock.patch('email_notification_renderer.render_notification',return_value={"ok":True,"text":"ADAPTIVE","renderer_version":"adaptive_v1f"}) as render, \
        mock.patch.object(email_delivery,'_ew_v4_original_deliver_email') as legacy:
    m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
    r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
-   self.assertEqual(render.call_args.kwargs['settings_override']['renderer'], 'adaptive_v1e')
+   self.assertEqual(render.call_args.kwargs['settings_override']['renderer'], 'adaptive_v1f')
    self.assertEqual(r['notification_text'],'ADAPTIVE')
-   self.assertEqual(r['production_route'],'adaptive_v1e')
-   self.assertEqual(r['renderer'].get('renderer_version'),'adaptive_v1e')
+   self.assertEqual(r['production_route'],'adaptive_v1f')
+   self.assertEqual(r['renderer'].get('renderer_version'),'adaptive_v1f')
    self.assertFalse(r['legacy_fallback_used'])
    legacy.assert_not_called()
    m['_persist_delivery'].assert_called_once()
-   persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'adaptive_v1e')
+   persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'adaptive_v1f')
  def test_02_fast_lane_skips_llm(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \

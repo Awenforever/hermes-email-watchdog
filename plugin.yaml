@@ -25,3 +25,15 @@ config_schema:
     type: bool
     default: true
     description: Notify when a Weekly Report email arrives.
+  semantic_provider:
+    type: str
+    default: USTC
+    description: Hermes OpenAI-compatible provider used for semantic analysis.
+  semantic_model:
+    type: str
+    default: qwen3.6-chat
+    description: Model used for grounded classification and formatting.
+  notification_renderer:
+    type: str
+    default: adaptive_v1f
+    description: Compact mobile notification renderer.

@@ -134,6 +134,8 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
         "enabled": True,
         "mode": "shadow",
         "provider": "ollama",
+        "provider_name": "",
+        "api_key_env": "",
         "endpoint": "http://127.0.0.1:11434",
         "model": "qwen2.5:3b",
         "timeout_seconds": 300,
@@ -160,7 +162,10 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     defaults["enabled"] = bool(defaults.get("enabled", True))
     defaults["mode"] = str(defaults.get("mode") or "shadow").strip().lower()
     defaults["provider"] = str(defaults.get("provider") or "ollama").strip().lower()
-    defaults["endpoint"] = str(defaults.get("endpoint") or "http://127.0.0.1:11434").rstrip("/")
+    defaults["provider_name"] = str(defaults.get("provider_name") or "").strip()
+    defaults["api_key_env"] = str(defaults.get("api_key_env") or "").strip()
+    endpoint_default = "http://127.0.0.1:11434" if defaults["provider"] == "ollama" else ""
+    defaults["endpoint"] = str(defaults.get("endpoint") or endpoint_default).rstrip("/")
     defaults["model"] = str(defaults.get("model") or "qwen2.5:3b")
     defaults["timeout_seconds"] = max(1, min(1800, int(defaults.get("timeout_seconds") or 300)))
     defaults["temperature"] = max(0.0, min(1.0, float(defaults.get("temperature", 0.1))))
@@ -172,19 +177,19 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     defaults["num_predict_mode"] = str(defaults.get("num_predict_mode") or "adaptive").strip().lower()
     if defaults["num_predict_mode"] not in {"adaptive", "fixed"}:
         defaults["num_predict_mode"] = "adaptive"
-    defaults["num_predict"] = max(256, min(2400, int(defaults.get("num_predict") or 1800)))
-    defaults["num_predict_simple"] = max(384, min(1000, int(defaults.get("num_predict_simple") or 600)))
+    defaults["num_predict"] = max(256, min(8192, int(defaults.get("num_predict") or 1800)))
+    defaults["num_predict_simple"] = max(384, min(2400, int(defaults.get("num_predict_simple") or 600)))
     defaults["num_predict_standard"] = max(
         defaults["num_predict_simple"],
-        min(1600, int(defaults.get("num_predict_standard") or 1000)),
+        min(4096, int(defaults.get("num_predict_standard") or 1000)),
     )
     defaults["num_predict_complex"] = max(
         defaults["num_predict_standard"],
-        min(2200, int(defaults.get("num_predict_complex") or 1600)),
+        min(6144, int(defaults.get("num_predict_complex") or 1600)),
     )
     defaults["num_predict_hard_cap"] = max(
         384,
-        min(2400, int(defaults.get("num_predict_hard_cap") or defaults["num_predict"])),
+        min(8192, int(defaults.get("num_predict_hard_cap") or defaults["num_predict"])),
     )
     return defaults
 
@@ -306,9 +311,9 @@ def _semantic_hints(email: Mapping[str, Any], subject: str, body: str, features:
         ),
         "direct_request_phrase": has(
             r"\bplease\b|\bkindly\b|\bsubmit\b|\bupload\b|\bconfirm\b|"
-            r"\bcomplete\b|\bsign\b|请于|请在|请尽快|请务必|务必|须于|"
-            r"需要.{0,12}(?:提交|上传|确认|完成|签字|填写|参加)|"
-            r"(?:提交|上传|确认|完成|签字|填写).{0,8}(?:前|截止)"
+            r"\bcomplete\b|\bsign\b|\bpay\b|请于|请在|请尽快|请(?:您)?及时|请务必|务必|须于|"
+            r"需要.{0,12}(?:提交|上传|确认|完成|签字|填写|参加|缴纳|缴费|支付)|"
+            r"(?:提交|上传|确认|完成|签字|填写|缴纳|缴费|支付).{0,8}(?:前|截止)"
         ),
         "deadline_phrase": has_non_negated(
             r"deadline|due by|截止|不晚于|请于.{0,24}前|须于.{0,24}前|"
@@ -784,6 +789,133 @@ def _ollama_request(
     }
 
 
+def _hermes_config_path() -> Path:
+    explicit = os.environ.get("HERMES_CONFIG", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    for candidate in (
+        HERMES_HOME / "config.yaml",
+        HERMES_HOME / ".hermes" / "config.yaml",
+        Path("/opt/data/config.yaml"),
+    ):
+        if candidate.is_file():
+            return candidate
+    return HERMES_HOME / "config.yaml"
+
+
+def _resolve_openai_credentials(settings: Mapping[str, Any]) -> tuple[str, str]:
+    endpoint = str(settings.get("endpoint") or "").strip().rstrip("/")
+    key = str(settings.get("api_key") or "").strip()
+    key_env = str(settings.get("api_key_env") or "").strip()
+    if not key and key_env:
+        key = os.environ.get(key_env, "").strip()
+    if endpoint and key:
+        return endpoint, key
+
+    path = _hermes_config_path()
+    try:
+        import yaml
+
+        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise SemanticEngineError(f"cannot read Hermes provider config: {_safe_error(exc)}") from exc
+    providers = config.get("custom_providers") or []
+    if isinstance(providers, Mapping):
+        providers = list(providers.values())
+    wanted_name = str(settings.get("provider_name") or "").strip().casefold()
+    wanted_model = str(settings.get("model") or "").strip()
+    candidates = []
+    for item in providers if isinstance(providers, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        item_name = str(item.get("name") or "").strip().casefold()
+        item_model = str(item.get("model") or "").strip()
+        models = item.get("models") if isinstance(item.get("models"), Mapping) else {}
+        name_match = not wanted_name or item_name == wanted_name
+        model_match = not wanted_model or item_model == wanted_model or wanted_model in models
+        if name_match and model_match:
+            candidates.append(item)
+    if not candidates:
+        raise SemanticEngineError(
+            f"Hermes custom provider not found for name={wanted_name or '*'} model={wanted_model or '*'}"
+        )
+    selected = candidates[0]
+    endpoint = endpoint or str(selected.get("base_url") or "").strip().rstrip("/")
+    key = key or str(selected.get("api_key") or "").strip()
+    if not endpoint or not key:
+        raise SemanticEngineError("Hermes custom provider is missing base_url or api_key")
+    return endpoint, key
+
+
+def _openai_compatible_request(
+    prompt: str,
+    settings: Mapping[str, Any],
+    *,
+    timeout_seconds: int,
+    temperature: float,
+    num_predict: int,
+    response_format: Any = None,
+) -> Dict[str, Any]:
+    endpoint, api_key = _resolve_openai_credentials(settings)
+    url = endpoint if endpoint.endswith("/chat/completions") else endpoint + "/chat/completions"
+    body: Dict[str, Any] = {
+        "model": str(settings.get("model") or "qwen3.6-chat"),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": float(temperature),
+        "max_tokens": int(num_predict),
+        "stream": False,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+    )
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=max(1, int(timeout_seconds))) as response:
+            outer_text = response.read().decode("utf-8", "replace")
+    except TimeoutError as exc:
+        raise SemanticEngineTimeout("OpenAI-compatible request timed out") from exc
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(500).decode("utf-8", "replace") if hasattr(exc, "read") else ""
+        raise SemanticEngineError(f"OpenAI-compatible request failed: HTTP {exc.code} {detail}") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise SemanticEngineTimeout("OpenAI-compatible request timed out") from exc
+        raise SemanticEngineError(f"OpenAI-compatible request failed: {exc}") from exc
+
+    try:
+        outer = json.loads(outer_text)
+        choice = (outer.get("choices") or [])[0]
+        content = str((choice.get("message") or {}).get("content") or "")
+    except Exception as exc:
+        raise SemanticEngineError("OpenAI-compatible response is not valid JSON") from exc
+    usage = outer.get("usage") if isinstance(outer.get("usage"), Mapping) else {}
+    finish_reason = str(choice.get("finish_reason") or "")[:80]
+    return {
+        "content": content,
+        "latency_ms": int((time.monotonic() - started) * 1000),
+        "metrics": {
+            "total_duration_ms": int((time.monotonic() - started) * 1000),
+            "prompt_eval_count": int(usage.get("prompt_tokens") or 0),
+            "eval_count": int(usage.get("completion_tokens") or 0),
+            "done_reason": finish_reason,
+            "response_chars": len(content),
+            "eval_tokens_per_second": 0.0,
+        },
+    }
+
+
+def _provider_request(prompt: str, settings: Mapping[str, Any], **kwargs: Any) -> Dict[str, Any]:
+    provider = str(settings.get("provider") or "ollama").strip().lower()
+    if provider == "ollama":
+        return _ollama_request(prompt, settings, **kwargs)
+    if provider in {"openai", "openai_compatible", "hermes_openai", "custom"}:
+        return _openai_compatible_request(prompt, settings, **kwargs)
+    raise SemanticEngineError(f"unsupported semantic provider: {provider}")
+
+
 def _json_repair_prompt(primary_content: str) -> str:
     """Build a format-only repair request from the first model output.
 
@@ -819,14 +951,11 @@ def call_ollama(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
     worst-case wall time is 300 + 180 seconds, while normal valid responses still
     perform exactly one call.
     """
-    if str(settings.get("provider") or "ollama").lower() != "ollama":
-        raise SemanticEngineError("unsupported semantic provider")
-
     total_started = time.monotonic()
     primary_budget = max(1, int(settings.get("timeout_seconds") or 300))
     repair_budget = max(120, min(240, int(primary_budget * 0.6)))
 
-    primary = _ollama_request(
+    primary = _provider_request(
         prompt,
         settings,
         timeout_seconds=primary_budget,
@@ -880,7 +1009,7 @@ def call_ollama(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
             280,
             min(420, int(int(settings.get("num_predict", 1800)) * 0.5)),
         )
-        repair = _ollama_request(
+        repair = _provider_request(
             repair_prompt,
             settings,
             timeout_seconds=repair_budget,

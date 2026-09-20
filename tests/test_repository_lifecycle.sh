@@ -8,26 +8,33 @@ trap cleanup EXIT
 
 export HERMES_EMAIL_WATCHDOG_DATA_ROOT="${DATA}/data"
 
+legacy="${DATA}/data/.hermes-home/.hermes"
+mkdir -p "${legacy}/email_learning" "${legacy}/email_cache" \
+  "${legacy}/email_watchdog_onboarding_backups" "${legacy}/email_watchdog_himalaya"
+printf '{"version":1,"sentinel":"legacy"}\n' > "${legacy}/email_watchdog_config.json"
+printf 'true\n' > "${legacy}/email_watchdog_enabled"
+printf '{}\n' > "${legacy}/email_watch_seen.json"
+printf 'imap-only\n' > "${legacy}/email_watchdog_himalaya/primary.toml"
+
 echo STEP=initial-install
 bash "${REPO}/install.sh"
 bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
-[[ "$(cat "${DATA}/data/.hermes-home/.hermes/email_watchdog_enabled")" == "false" ]]
+home="${DATA}/data/plugin-data/hermes-email-watchdog"
+[[ "$(cat "${home}/enabled")" == "true" ]]
+grep -q '"sentinel":"legacy"' "${home}/config.json"
+[[ -f "${home}/himalaya/primary.toml" ]]
 
-home="${DATA}/data/.hermes-home/.hermes"
-mkdir -p "${home}/email_learning" "${home}/email_cache" \
-  "${home}/email_watchdog_onboarding_backups" "${home}/email_watchdog_himalaya"
-printf '{}\n' > "${home}/email_watchdog_config.json"
-printf '{}\n' > "${home}/email_watch_seen.json"
-printf '{"entries":{}}\n' > "${home}/email_watchdog_outbox.json"
-printf '{"state":"disabled"}\n' > "${home}/email_watchdog_status.json"
-printf '{"configured":true}\n' > "${home}/email_watchdog_onboarding.json"
-printf 'lock\n' > "${home}/email_watchdog_onboarding.lock"
-printf 'lock\n' > "${home}/.email_watchdog_onboarding.json.lock"
-printf 'lock\n' > "${home}/.email_watchdog_outbox.json.lock"
-printf 'backup\n' > "${home}/email_watchdog_onboarding_backups/state.txt"
-printf 'imap-only\n' > "${home}/email_watchdog_himalaya/primary.toml"
+mkdir -p "${home}/learning" "${home}/email_cache" \
+  "${home}/onboarding-backups" "${home}/himalaya"
+printf '{"entries":{}}\n' > "${home}/outbox.json"
+printf '{"state":"disabled"}\n' > "${home}/status.json"
+printf '{"configured":true}\n' > "${home}/onboarding.json"
+printf 'lock\n' > "${home}/onboarding.lock"
+printf 'lock\n' > "${home}/.onboarding.json.lock"
+printf 'lock\n' > "${home}/.outbox.json.lock"
+printf 'backup\n' > "${home}/onboarding-backups/state.txt"
 printf 'db-placeholder\n' > "${home}/email.db"
-printf 'learning\n' > "${home}/email_learning/state.txt"
+printf 'learning\n' > "${home}/learning/state.txt"
 
 echo STEP=fake-user-data-created
 # Idempotent install.
@@ -37,14 +44,14 @@ bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 
 # Upgrade from a modified, checksummed checkout and roll back.
 cp -a "${REPO}" "${DATA}/repo-v2"
-printf '0.2.0\n' > "${DATA}/repo-v2/VERSION"
+printf '0.3.0\n' > "${DATA}/repo-v2/VERSION"
 python3 "${DATA}/repo-v2/scripts/generate_checksums.py" "${DATA}/repo-v2"
 echo STEP=upgrade
 bash "${DATA}/repo-v2/upgrade.sh"
-[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.2.0" ]]
+[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.3.0" ]]
 echo STEP=rollback
 bash "${DATA}/data/skills/hermes-email-watchdog/rollback.sh"
-[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.1.0" ]]
+[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.2.0" ]]
 bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 
 echo STEP=rollback-verified
@@ -53,7 +60,7 @@ echo STEP=uninstall
 bash "${DATA}/data/skills/hermes-email-watchdog/uninstall.sh"
 [[ ! -e "${DATA}/data/skills/hermes-email-watchdog" ]]
 [[ ! -e "${DATA}/data/hooks/hermes-email-watchdog" ]]
-for p in email_watchdog_config.json email_watch_seen.json email_watchdog_outbox.json email_watchdog_status.json email_watchdog_onboarding.json email_watchdog_onboarding.lock .email_watchdog_onboarding.json.lock .email_watchdog_outbox.json.lock email_watchdog_onboarding_backups email_watchdog_himalaya email.db email_learning; do
+for p in config.json seen.json outbox.json status.json onboarding.json onboarding.lock .onboarding.json.lock .outbox.json.lock onboarding-backups himalaya email.db learning; do
   [[ -e "${home}/${p}" ]]
 done
 
@@ -73,7 +80,7 @@ set -e
 bash "${DATA}/data/skills/hermes-email-watchdog/uninstall.sh"
 echo STEP=purge
 bash "${REPO}/purge.sh" --confirm-purge-user-data
-for p in email_watchdog_config.json email_watch_seen.json email_watchdog_outbox.json email_watchdog_status.json email_watchdog_onboarding.json email_watchdog_onboarding.lock .email_watchdog_onboarding.json.lock .email_watchdog_outbox.json.lock email_watchdog_onboarding_backups email_watchdog_himalaya email.db email_learning email_cache email_watchdog_install; do
+for p in config.json seen.json outbox.json status.json onboarding.json onboarding.lock .onboarding.json.lock .outbox.json.lock onboarding-backups himalaya email.db learning email_cache install; do
   [[ ! -e "${home}/${p}" ]]
 done
 

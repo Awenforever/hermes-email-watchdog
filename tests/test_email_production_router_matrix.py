@@ -14,7 +14,7 @@ class ProductionRouterTests(unittest.TestCase):
         self.settings_patch = mock.patch.object(router, "settings", return_value={
             "production_route_enabled": True, "all_mail_push": False,
             "legacy_fallback_enabled": True, "fast_lane_enabled": True,
-            "renderer": "adaptive_v1e", "mode": "production",
+            "renderer": "adaptive_v1f", "mode": "production",
         })
         self.settings_patch.start()
     def tearDown(self): self.settings_patch.stop()
@@ -22,7 +22,7 @@ class ProductionRouterTests(unittest.TestCase):
         return {"message_key":"m1", "code_candidates": codes or [], "semantic_hints": hints or {}}
     def test_01_enabled(self):
         self.assertTrue(router.production_enabled())
-        self.assertEqual(router.settings()["renderer"], "adaptive_v1e")
+        self.assertEqual(router.settings()["renderer"], "adaptive_v1f")
     def test_02_grounded_code_fast(self):
         lane=router.classify_fast_lane({"subject":"登录验证码","body":"验证码 482731"}, self.features(["482731"], {"verification_code_phrase":True}))
         self.assertEqual(lane["kind"], "verification_code")

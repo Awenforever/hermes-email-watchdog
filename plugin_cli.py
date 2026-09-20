@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -69,6 +70,20 @@ def _env() -> dict[str, str]:
     return env
 
 
+def _atomic_marker(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    tmp = Path(raw)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _run_once() -> int:
     result = subprocess.run(
         [sys.executable, str(_root() / "scripts" / "email_watch.py")],
@@ -84,17 +99,24 @@ def _run_once() -> int:
     return result.returncode
 
 
+def _load_json(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
 def email_watchdog_command(args: argparse.Namespace) -> int:
     action = getattr(args, "email_watchdog_action", None)
     if action == "install-runtime":
         return _install_runtime()
     if action == "enable":
-        _state().mkdir(parents=True, exist_ok=True)
-        (_state() / "enabled").write_text("enabled\n", encoding="utf-8")
+        _atomic_marker(_state() / "enabled", "true\n")
         print(json.dumps({"ok": True, "enabled": True, "restart_required": True}))
         return 0
     if action == "disable":
-        (_state() / "enabled").unlink(missing_ok=True)
+        _atomic_marker(_state() / "enabled", "false\n")
         print(json.dumps({"ok": True, "enabled": False, "restart_required": True}))
         return 0
     if action == "run-once":
@@ -102,6 +124,10 @@ def email_watchdog_command(args: argparse.Namespace) -> int:
     if action in {None, "status"}:
         state = _state()
         config = state / "config.json"
+        config_data = _load_json(config)
+        semantic = config_data.get("semantic_engine") if isinstance(config_data.get("semantic_engine"), dict) else {}
+        notification = config_data.get("notification") if isinstance(config_data.get("notification"), dict) else {}
+        runtime = _load_json(state / "status.json")
         print(
             json.dumps(
                 {
@@ -111,6 +137,10 @@ def email_watchdog_command(args: argparse.Namespace) -> int:
                     "enabled": (state / "enabled").is_file(),
                     "config_present": config.is_file(),
                     "status_file": str(state / "status.json"),
+                    "scheduler_state": str(runtime.get("state") or "not_started"),
+                    "semantic_provider": str(semantic.get("provider_name") or semantic.get("provider") or "USTC"),
+                    "semantic_model": str(semantic.get("model") or "qwen3.6-chat"),
+                    "notification_renderer": str(notification.get("renderer") or "adaptive_v1f"),
                     "notification_policy": "actionable",
                     "mailbox_mode": "read-only",
                 },

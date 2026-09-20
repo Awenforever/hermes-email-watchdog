@@ -34,10 +34,18 @@ if str(SCRIPT_DIR) not in sys.path:
 import email_config
 from portable_lock import acquire_file_lock, release_file_lock
 
+HERMES_HOME = Path(
+    os.path.expandvars(
+        os.path.expanduser(os.environ.get("HERMES_HOME", "~/.hermes"))
+    )
+)
 STATE_ROOT = Path(
     os.path.expandvars(
         os.path.expanduser(
-            os.environ.get("HERMES_EMAIL_WATCHDOG_STATE_ROOT", "~/.hermes")
+            os.environ.get(
+                "HERMES_EMAIL_WATCHDOG_STATE_ROOT",
+                str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
+            )
         )
     )
 )
@@ -46,7 +54,7 @@ CONFIG_PATH = Path(
         os.path.expanduser(
             os.environ.get(
                 "EMAIL_WATCHDOG_CONFIG",
-                str(STATE_ROOT / "email_watchdog_config.json"),
+                str(STATE_ROOT / "config.json"),
             )
         )
     )
@@ -56,7 +64,7 @@ ENABLED_FILE = Path(
         os.path.expanduser(
             os.environ.get(
                 "HERMES_EMAIL_WATCHDOG_ENABLED_FILE",
-                str(STATE_ROOT / "email_watchdog_enabled"),
+                str(STATE_ROOT / "enabled"),
             )
         )
     )
@@ -66,7 +74,7 @@ ONBOARDING_FILE = Path(
         os.path.expanduser(
             os.environ.get(
                 "HERMES_EMAIL_WATCHDOG_ONBOARDING_FILE",
-                str(STATE_ROOT / "email_watchdog_onboarding.json"),
+                str(STATE_ROOT / "onboarding.json"),
             )
         )
     )
@@ -76,7 +84,7 @@ BACKUP_DIR = Path(
         os.path.expanduser(
             os.environ.get(
                 "HERMES_EMAIL_WATCHDOG_ONBOARDING_BACKUP_DIR",
-                str(STATE_ROOT / "email_watchdog_onboarding_backups"),
+                str(STATE_ROOT / "onboarding-backups"),
             )
         )
     )
@@ -86,7 +94,7 @@ OWNED_HIMALAYA_DIR = Path(
         os.path.expanduser(
             os.environ.get(
                 "HERMES_EMAIL_WATCHDOG_OWNED_HIMALAYA_DIR",
-                str(STATE_ROOT / "email_watchdog_himalaya"),
+                str(STATE_ROOT / "himalaya"),
             )
         )
     )
@@ -98,7 +106,7 @@ TRANSACTION_LOCK_FILE = Path(
         os.path.expanduser(
             os.environ.get(
                 "HERMES_EMAIL_WATCHDOG_ONBOARDING_LOCK_FILE",
-                str(STATE_ROOT / "email_watchdog_onboarding.lock"),
+                str(STATE_ROOT / "onboarding.lock"),
             )
         )
     )
@@ -278,10 +286,55 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[s
 
 def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     source = data if isinstance(data, dict) else {}
+    try:
+        source_version = int(source.get("version", 1))
+    except (TypeError, ValueError):
+        source_version = 1
     allowed = {k: copy.deepcopy(v) for k, v in source.items() if k in ALLOWED_TOP_LEVEL}
     allowed.pop("safety", None)
+
+    # Migrate only the repository's known v1 defaults.  Explicitly customized
+    # providers, endpoints, models, and notification policies remain untouched.
+    if source_version < 2:
+        semantic = allowed.get("semantic_engine")
+        if isinstance(semantic, dict):
+            provider = str(semantic.get("provider") or "ollama").strip().lower()
+            endpoint = str(semantic.get("endpoint") or "http://127.0.0.1:11434").rstrip("/")
+            model = str(semantic.get("model") or "qwen2.5:3b").strip().lower()
+            if (
+                provider == "ollama"
+                and endpoint in {"http://127.0.0.1:11434", "http://localhost:11434"}
+                and model == "qwen2.5:3b"
+            ):
+                allowed["semantic_engine"] = copy.deepcopy(
+                    email_config.DEFAULT_CONFIG["semantic_engine"]
+                )
+
+        notification = allowed.get("notification")
+        if isinstance(notification, dict):
+            renderer = str(notification.get("renderer") or "adaptive_v1").strip().lower()
+            mode = str(notification.get("mode") or "shadow").strip().lower()
+            route_enabled = bool(notification.get("production_route_enabled", False))
+            if renderer in {"adaptive_v1", "adaptive_v1e"} and mode == "shadow" and not route_enabled:
+                migrated = copy.deepcopy(email_config.DEFAULT_CONFIG["notification"])
+                for key in (
+                    "all_mail_push",
+                    "legacy_fallback_enabled",
+                    "fast_lane_enabled",
+                    "original_policy",
+                    "original_max_chars",
+                    "show_priority",
+                    "show_category",
+                    "show_time",
+                    "show_debug_reason",
+                    "suppress_redundant_summary",
+                ):
+                    if key in notification:
+                        migrated[key] = copy.deepcopy(notification[key])
+                allowed["notification"] = migrated
+
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
-    cfg["version"] = 1
+    cfg["version"] = 2
     cfg["paths"] = {
         key: cfg.get("paths", {}).get(key, email_config.DEFAULT_CONFIG["paths"][key])
         for key in sorted(ALLOWED_PATH_KEYS)

@@ -1305,7 +1305,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     "schedule": [],
                     "cron_entries": [],
                     "status": "suppressed",
-                    "production_route": "adaptive_v1e",
+                    "production_route": "adaptive_v1f",
                     "route_lane": route_lane,
                     "route_reasons": route_reason,
                     "semantic": semantic_meta,
@@ -1323,7 +1323,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 {"attachments": attachments, "schedule": schedule},
                 account or {},
                 settings_override={
-                    "renderer": "adaptive_v1e", "mode": "production",
+                    "renderer": "adaptive_v1f", "mode": "production",
                     "original_policy": "auto", "show_debug_reason": False,
                 },
             )
@@ -1338,7 +1338,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 "schedule": schedule,
                 "cron_entries": cron_entries,
                 "status": "pushed",
-                "production_route": "adaptive_v1e",
+                "production_route": "adaptive_v1f",
                 "route_lane": route_lane,
                 "route_reasons": route_reason,
                 "semantic": semantic_meta,
@@ -1347,7 +1347,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
             }
             try:
                 semantic_meta["production_persist"] = email_semantic_engine.persist_production_observation(
-                    email or {}, semantic_meta, production_route="adaptive_v1e"
+                    email or {}, semantic_meta, production_route="adaptive_v1f"
                 )
             except Exception:
                 pass
