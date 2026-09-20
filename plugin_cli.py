@@ -38,6 +38,12 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
     actions.add_parser("enable", help="Enable read-only polling")
     actions.add_parser("disable", help="Disable polling")
     actions.add_parser("run-once", help="Poll once and print the normalized result")
+    plan = actions.add_parser("onboarding-plan", help="Preview account setup without changing live state")
+    plan.add_argument("--input-json", required=True)
+    apply = actions.add_parser("onboarding-apply", help="Validate and atomically apply account setup")
+    apply.add_argument("--input-json", required=True)
+    actions.add_parser("doctor", help="Validate mailbox access and read-only safety")
+    actions.add_parser("export-redacted", help="Export configuration without credentials")
     parser.set_defaults(func=email_watchdog_command)
 
 
@@ -99,12 +105,36 @@ def _run_once() -> int:
     return result.returncode
 
 
+def _run_onboarding(action: str, input_json: str | None = None) -> int:
+    command = [sys.executable, str(_root() / "scripts" / "email_onboarding.py"), action]
+    if input_json is not None:
+        command.extend(["--input-json", input_json])
+    else:
+        command.append("--json")
+    result = subprocess.run(command, env=_env(), text=True, capture_output=True, timeout=180)
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print(result.stderr.rstrip(), file=sys.stderr)
+    return result.returncode
+
+
 def _load_json(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
+
+
+def _enabled() -> bool:
+    marker = _state() / "enabled"
+    try:
+        return marker.read_text(encoding="utf-8").strip().casefold() in {
+            "1", "true", "yes", "on", "enabled",
+        }
+    except OSError:
+        return False
 
 
 def email_watchdog_command(args: argparse.Namespace) -> int:
@@ -121,6 +151,14 @@ def email_watchdog_command(args: argparse.Namespace) -> int:
         return 0
     if action == "run-once":
         return _run_once()
+    if action == "onboarding-plan":
+        return _run_onboarding("plan", getattr(args, "input_json", None))
+    if action == "onboarding-apply":
+        return _run_onboarding("apply", getattr(args, "input_json", None))
+    if action == "doctor":
+        return _run_onboarding("validate")
+    if action == "export-redacted":
+        return _run_onboarding("export-redacted")
     if action in {None, "status"}:
         state = _state()
         config = state / "config.json"
@@ -134,7 +172,7 @@ def email_watchdog_command(args: argparse.Namespace) -> int:
                     "ok": True,
                     "hermes_home": str(_home()),
                     "hook_installed": (_hook() / "HOOK.yaml").is_file(),
-                    "enabled": (state / "enabled").is_file(),
+                    "enabled": _enabled(),
                     "config_present": config.is_file(),
                     "status_file": str(state / "status.json"),
                     "scheduler_state": str(runtime.get("state") or "not_started"),

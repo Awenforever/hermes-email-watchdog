@@ -58,6 +58,7 @@ class PluginCliPortableTests(unittest.TestCase):
         self.assertNotIn("api_key", json.dumps(status).lower())
         self.assertFalse(self.command("disable")["enabled"])
         self.assertEqual((state / "enabled").read_text(encoding="utf-8"), "false\n")
+        self.assertFalse(self.command("status")["enabled"])
 
     def test_install_runtime_is_profile_scoped_and_backed_up(self):
         first = self.command("install-runtime")

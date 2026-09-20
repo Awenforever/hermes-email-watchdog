@@ -31,6 +31,16 @@ hermes plugins enable hermes-email-watchdog
 hermes email-watchdog install-runtime
 ```
 
+让 Hermes 引导完成邮箱、Himalaya 配置和微信通知目标后，可先预览再原子应用：
+
+```bash
+hermes email-watchdog onboarding-plan --input-json @setup.json
+hermes email-watchdog onboarding-apply --input-json @setup.json
+hermes email-watchdog doctor
+```
+
+引导只询问尚未解析的账户信息，并要求通过系统密钥环、密码管理器或环境变量命令读取凭据；不会要求在聊天或配置中填写明文密码。应用阶段只执行一封信的只读列表验证，失败会恢复原配置并保持禁用。
+
 配置邮箱后，先做一次只读试运行：
 
 ```bash
