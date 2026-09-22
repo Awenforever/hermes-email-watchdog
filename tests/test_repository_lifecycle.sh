@@ -7,6 +7,10 @@ cleanup(){ rm -rf "${DATA}"; }
 trap cleanup EXIT
 
 export HERMES_EMAIL_WATCHDOG_DATA_ROOT="${DATA}/data"
+# An enclosing Hermes image may export its own production HERMES_HOME. The
+# isolated lifecycle matrix must only touch its temporary data root.
+unset HERMES_HOME
+base_version="$(cat "${REPO}/VERSION")"
 
 legacy="${DATA}/data/.hermes-home/.hermes"
 mkdir -p "${legacy}/email_learning" "${legacy}/email_cache" \
@@ -51,7 +55,7 @@ bash "${DATA}/repo-v2/upgrade.sh"
 [[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.3.0" ]]
 echo STEP=rollback
 bash "${DATA}/data/skills/hermes-email-watchdog/rollback.sh"
-[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.2.0" ]]
+[[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "${base_version}" ]]
 bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 
 echo STEP=rollback-verified

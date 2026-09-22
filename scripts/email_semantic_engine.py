@@ -940,7 +940,7 @@ def _json_repair_prompt(primary_content: str) -> str:
     )
 
 
-def call_ollama(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
+def _call_model_once(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
     """Call Ollama with deterministic recovery and one format-only repair call.
 
     ``timeout_seconds`` is the full budget for the primary semantic analysis.
@@ -1047,6 +1047,35 @@ def call_ollama(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
             "model": str(settings.get("model") or "qwen2.5:3b"),
             "metrics": metrics,
         }
+
+
+def call_ollama(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
+    """Run the configured model, then one explicitly configured sibling model.
+
+    The fallback reuses the same provider credentials and bounded request
+    policy. It is attempted only when ``fallback_model`` is present and differs
+    from the primary, preserving legacy behavior for existing configurations.
+    """
+    primary_model = str(settings.get("model") or "qwen2.5:3b").strip()
+    fallback_model = str(settings.get("fallback_model") or "").strip()
+    try:
+        return _call_model_once(prompt, settings)
+    except Exception as primary_error:
+        if not fallback_model or fallback_model == primary_model:
+            raise
+        fallback_settings = dict(settings)
+        fallback_settings["model"] = fallback_model
+        result = _call_model_once(prompt, fallback_settings)
+        metrics = dict(result.get("metrics") or {})
+        metrics.update({
+            "model_fallback_used": True,
+            "primary_model": primary_model,
+            "fallback_model": fallback_model,
+            "primary_error_type": type(primary_error).__name__,
+        })
+        result["metrics"] = metrics
+        result["model"] = fallback_model
+        return result
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:

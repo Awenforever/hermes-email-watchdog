@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# Repository contracts describe portable defaults. A release image can bake
+# profile-specific paths into these variables, so isolate them before importing
+# the runtime configuration for the parity check.
+unset HERMES_HOME HERMES_EMAIL_WATCHDOG_STATE_ROOT EMAIL_WATCHDOG_CONFIG
 python3 "${ROOT}/scripts/repository_contract_check.py" "${ROOT}"
 python3 "${ROOT}/scripts/verify_checksums.py" "${ROOT}" "${ROOT}/checksums/SHA256SUMS"
 find "${ROOT}" -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

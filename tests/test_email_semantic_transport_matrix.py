@@ -25,6 +25,35 @@ class _FakeResponse:
 
 
 class SemanticTransportRecoveryMatrix(unittest.TestCase):
+    def test_configured_model_fallback_is_bounded_and_attributed(self):
+        calls = []
+        original = engine._call_model_once
+
+        def fake_call(prompt, settings):
+            calls.append(str(settings.get("model") or ""))
+            if len(calls) == 1:
+                raise engine.SemanticEngineTimeout("primary unavailable")
+            return {
+                "parsed": {"category": "academic_report_digest"},
+                "latency_ms": 12,
+                "model": str(settings.get("model") or ""),
+                "metrics": {"retry_count": 0},
+            }
+
+        engine._call_model_once = fake_call
+        try:
+            result = engine.call_ollama(
+                "test prompt",
+                {"model": "deepseek-flash", "fallback_model": "qwen3.6-chat"},
+            )
+        finally:
+            engine._call_model_once = original
+
+        self.assertEqual(calls, ["deepseek-flash", "qwen3.6-chat"])
+        self.assertEqual(result["model"], "qwen3.6-chat")
+        self.assertTrue(result["metrics"]["model_fallback_used"])
+        self.assertEqual(result["metrics"]["primary_error_type"], "SemanticEngineTimeout")
+
     def test_direct_object(self):
         value, strategy = engine._extract_json_object_detailed('{"category":"x"}')
         self.assertEqual(value["category"], "x")

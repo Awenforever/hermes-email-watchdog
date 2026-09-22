@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3 — 2026-09-21
+
+- Make the portable CI contract independent of profile paths baked into a
+  production image, so clean-container installation checks exercise the
+  repository defaults deterministically.
+- Synchronize the release version recorded by `VERSION` and `plugin.yaml`.
+- Use USTC `deepseek-flash` for semantic analysis and retry once with
+  `qwen3.6-chat` when the primary model is unavailable or returns unusable JSON.
+
 ## 0.2.0 — 2026-09-20
 
 - Use the Hermes USTC OpenAI-compatible provider with `qwen3.6-chat` for the

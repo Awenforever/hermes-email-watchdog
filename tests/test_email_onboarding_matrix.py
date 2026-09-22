@@ -211,8 +211,16 @@ def main() -> None:
         account = explicit_account(standard)
         natural_input = json.dumps({"accounts": [account], "enable": False})
         natural, _ = run_setup(env, "plan", "--input-json", natural_input)
-        parity_env = env_for(root / "case-parity", fake)
-        write_existing_himalaya(root / "case-parity/existing.toml")
+        # Reuse the same filesystem/config environment so the only changed
+        # input is where the delivery target came from (session vs explicit).
+        parity_env = env.copy()
+        for key in (
+            "HERMES_SESSION_PLATFORM",
+            "HERMES_SESSION_CHAT_ID",
+            "HERMES_SESSION_THREAD_ID",
+            "HERMES_SESSION_CHAT_TYPE",
+        ):
+            parity_env.pop(key, None)
         explicit_input = json.dumps(
             {
                 "accounts": [explicit_account(root / "case-parity/existing.toml")],

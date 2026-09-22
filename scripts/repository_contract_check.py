@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import ast,json,re,sys
+import ast,json,os,re,sys
 
 root=Path(sys.argv[1]).resolve()
 required=[
@@ -45,7 +45,21 @@ hook_yaml=(root/"hooks/hermes-email-watchdog/HOOK.yaml").read_text(encoding="utf
 toml=(root/"references/config_template.toml").read_text(encoding="utf-8").lower()
 template=json.loads((root/"references/email_watchdog_config.template.json").read_text(encoding="utf-8"))
 namespace={}
-exec(compile(config_text,str(root/"scripts/email_config.py"),"exec"),namespace)
+# Repository parity describes portable defaults, not paths injected by the
+# host where this checker happens to run (for example a production image).
+# Keep the check hermetic even when it is called indirectly by install/verify.
+_path_env=("HERMES_HOME","HERMES_EMAIL_WATCHDOG_STATE_ROOT","EMAIL_WATCHDOG_CONFIG")
+_saved_env={key:os.environ.get(key) for key in _path_env}
+try:
+    for key in _path_env:
+        os.environ.pop(key,None)
+    exec(compile(config_text,str(root/"scripts/email_config.py"),"exec"),namespace)
+finally:
+    for key,value in _saved_env.items():
+        if value is None:
+            os.environ.pop(key,None)
+        else:
+            os.environ[key]=value
 checks={
  "handler_nonblocking":"EMAIL_WATCHDOG_OUTBOX_NONBLOCKING_BACKOFF_V1" in handler,
  "handler_onboarding":"EMAIL_WATCHDOG_ONBOARDING_CONTEXT_CAPTURE_V1" in handler,

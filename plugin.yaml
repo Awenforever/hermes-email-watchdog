@@ -1,5 +1,5 @@
 name: hermes-email-watchdog
-version: 0.2.2
+version: 0.2.3
 manifest_version: 1
 api_version: 1
 description: Read-only email triage with grounded classification and actionable messaging alerts.
