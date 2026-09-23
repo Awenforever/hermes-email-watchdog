@@ -15,6 +15,7 @@ import hashlib
 import contextlib
 import tempfile
 import threading
+from types import SimpleNamespace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -56,7 +57,9 @@ OUTBOX_DEFAULT_TTL_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_TTL_SEC
 
 _task: asyncio.Task | None = None
 _once_lock = asyncio.Lock()
-_LAST_WATCHDOG_METADATA: dict = {"model_name": "hermes", "model_generated": False}
+_LAST_WATCHDOG_METADATA: dict = {
+    "model_name": "hermes", "model_generated": False, "attachments": [],
+}
 
 # EMAIL_WATCHDOG_STATE_TRANSACTION_LOCK_V1
 _STATE_LOCKS_GUARD = threading.Lock()
@@ -423,6 +426,7 @@ def _outbox_prepare(text: str, metadata: dict | None = None) -> dict:
                 ).isoformat(timespec="seconds"),
                 "source": "hermes-email-watchdog",
                 "metadata": dict(metadata or {}),
+                "parts": {},
             }
             entries[delivery_id] = entry
         elif entry.get("status") not in {"accepted", "delivered"}:
@@ -609,6 +613,36 @@ def _outbox_mark_delivered(entry: dict, result: object) -> None:
         _outbox_save(data)
 
 
+def _outbox_part_done(delivery_id: str, part_id: str) -> bool:
+    try:
+        entry = (_outbox_load().get("entries") or {}).get(delivery_id) or {}
+        part = (entry.get("parts") or {}).get(part_id) or {}
+        return part.get("status") in {"accepted", "delivered"}
+    except Exception:
+        return False
+
+
+def _outbox_mark_part_done(delivery_id: str, part_id: str, result: object) -> None:
+    """Persist progress after every acknowledged physical part."""
+    with _state_file_lock(OUTBOX_FILE):
+        data = _outbox_load()
+        entry = (data.get("entries") or {}).get(delivery_id)
+        if not isinstance(entry, dict):
+            return
+        now = _outbox_now()
+        message_id = str(getattr(result, "message_id", None) or "")
+        queued = message_id.startswith("queued:")
+        parts = entry.setdefault("parts", {})
+        parts[part_id] = {
+            "status": "accepted" if queued else "delivered",
+            "updated_at": now,
+            "message_id_present": bool(message_id),
+            "adapter_state": "queued" if queued else "sent",
+        }
+        entry["updated_at"] = now
+        _outbox_save(data)
+
+
 async def _flush_outbox(limit: int = 3) -> dict:
     summary = {
         "attempted": 0,
@@ -762,6 +796,7 @@ def _call_watchdog() -> str:
     _LAST_WATCHDOG_METADATA = {
         "model_name": model_name if model_generated else "hermes",
         "model_generated": model_generated,
+        "attachments": list(metadata.get("attachments") or [])[:12],
     }
     return result or ""
 def _runner_ref():
@@ -806,30 +841,111 @@ async def _send_weixin(
     for key, adapter in adapters.items():
         key_value = getattr(key, "value", key)
         if key_value == "weixin":
-            result = await adapter.send(
-                chat_id,
-                text,
-                metadata={
-                    "is_system": not model_generated,
-                    "model_name": model_name,
-                    "model": model_name,
-                    "resolved_model": model_name,
-                    "routed_model": model_name,
-                    "source": "hermes-email-watchdog",
-                    "_delivery_source": "hermes-email-watchdog",
-                    "_delivery_id": delivery_id,
-                    "_delivery_ttl_seconds": _notification_ttl_seconds(text, attribution),
-                },
-            )
-            if not getattr(result, "success", False):
-                error = getattr(result, "error", "") or "adapter.send returned success=false"
-                raise RuntimeError(f"Weixin delivery not acknowledged: {str(error)[:800]}")
+            transport_metadata = {
+                "is_system": not model_generated,
+                "model_name": model_name,
+                "model": model_name,
+                "resolved_model": model_name,
+                "routed_model": model_name,
+                "source": "hermes-email-watchdog",
+                "_delivery_source": "hermes-email-watchdog",
+                "_delivery_id": delivery_id,
+                "_delivery_ttl_seconds": _notification_ttl_seconds(text, attribution),
+            }
+            result = SimpleNamespace(success=True, message_id=f"dedup:{delivery_id}", error="")
+            if not _outbox_part_done(delivery_id, "text"):
+                result = await adapter.send(
+                    chat_id,
+                    text,
+                    metadata=transport_metadata,
+                )
+                if not getattr(result, "success", False):
+                    error = getattr(result, "error", "") or "adapter.send returned success=false"
+                    raise RuntimeError(f"Weixin delivery not acknowledged: {str(error)[:800]}")
+                _outbox_mark_part_done(delivery_id, "text", result)
+            forwarded = 0
+            for index, attachment in enumerate(_safe_forward_attachments(attribution), start=1):
+                path = attachment["local_path"]
+                suffix = Path(path).suffix.lower()
+                part_metadata = dict(transport_metadata)
+                part_id = (
+                    f"{delivery_id}-attachment-{index}-"
+                    f"{hashlib.sha256(path.encode('utf-8', errors='replace')).hexdigest()[:12]}"
+                )
+                part_metadata["_delivery_id"] = part_id
+                if _outbox_part_done(delivery_id, part_id):
+                    continue
+                if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                    sender = getattr(adapter, "send_image_file", None)
+                    if not callable(sender):
+                        raise RuntimeError("weixin adapter does not support image forwarding")
+                    file_result = await sender(
+                        chat_id, path, caption=None, metadata=part_metadata
+                    )
+                else:
+                    sender = getattr(adapter, "send_document", None)
+                    if not callable(sender):
+                        raise RuntimeError("weixin adapter does not support document forwarding")
+                    file_result = await sender(
+                        chat_id, path, caption=None,
+                        file_name=attachment.get("filename") or Path(path).name,
+                        metadata=part_metadata,
+                    )
+                if not getattr(file_result, "success", False):
+                    error = getattr(file_result, "error", "") or "attachment send returned success=false"
+                    raise RuntimeError(f"Weixin attachment delivery not acknowledged: {str(error)[:800]}")
+                _outbox_mark_part_done(delivery_id, part_id, file_result)
+                forwarded += 1
+                result = file_result
             logger.warning(
-                "Hermes Email Watchdog: sent notification chars=%s delivery_id=%s message_id_present=%s",
-                len(text or ""),
-                delivery_id,
+                "Hermes Email Watchdog: sent notification chars=%s attachments=%s delivery_id=%s message_id_present=%s",
+                len(text or ""), forwarded, delivery_id,
                 bool(getattr(result, "message_id", None)),
             )
             return result
 
     raise RuntimeError("weixin adapter unavailable")
+
+
+def _safe_forward_attachments(metadata: dict | None) -> list[dict]:
+    """Validate persisted attachment paths again at the transport boundary."""
+    metadata = metadata if isinstance(metadata, dict) else {}
+    raw_items = metadata.get("attachments") or []
+    try:
+        root = HERMES_HOME.resolve(strict=True)
+    except Exception:
+        root = HERMES_HOME.resolve()
+    try:
+        max_bytes = int(os.getenv("HERMES_EMAIL_WATCHDOG_ATTACHMENT_MAX_BYTES", str(25 * 1024 * 1024)))
+    except Exception:
+        max_bytes = 25 * 1024 * 1024
+    max_bytes = max(1 * 1024 * 1024, min(max_bytes, 100 * 1024 * 1024))
+    safe_suffixes = {
+        ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".txt", ".csv",
+        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".7z",
+    }
+    result = []
+    seen = set()
+    for item in raw_items[:12]:
+        if not isinstance(item, dict):
+            continue
+        raw_path = str(item.get("local_path") or "").strip()
+        if not raw_path:
+            continue
+        try:
+            path = Path(raw_path).expanduser().resolve(strict=True)
+            path.relative_to(root)
+            stat = path.stat()
+        except Exception:
+            continue
+        if not path.is_file() or path.is_symlink() or stat.st_size <= 0 or stat.st_size > max_bytes:
+            continue
+        if path.suffix.lower() not in safe_suffixes or str(path) in seen:
+            continue
+        seen.add(str(path))
+        result.append({
+            "local_path": str(path),
+            "filename": str(item.get("filename") or path.name)[:240],
+            "size_bytes": int(stat.st_size),
+        })
+    return result

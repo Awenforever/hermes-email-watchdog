@@ -143,7 +143,7 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
         "max_body_chars": 12000,
         "max_parallel": 1,
         "cache_by_message_hash": True,
-        "protocol": "readable_grounded_core_v1u",
+        "protocol": "readable_grounded_core_v1v",
         "num_thread": 5,
         "num_predict_mode": "adaptive",
         "num_predict": 1800,
@@ -172,7 +172,7 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     defaults["max_body_chars"] = max(1000, min(50000, int(defaults.get("max_body_chars") or 12000)))
     defaults["max_parallel"] = max(1, min(4, int(defaults.get("max_parallel") or 1)))
     defaults["cache_by_message_hash"] = bool(defaults.get("cache_by_message_hash", True))
-    defaults["protocol"] = str(defaults.get("protocol") or "readable_grounded_core_v1u").strip().lower()
+    defaults["protocol"] = str(defaults.get("protocol") or "readable_grounded_core_v1v").strip().lower()
     defaults["num_thread"] = max(1, min(32, int(defaults.get("num_thread") or 5)))
     defaults["num_predict_mode"] = str(defaults.get("num_predict_mode") or "adaptive").strip().lower()
     if defaults["num_predict_mode"] not in {"adaptive", "fixed"}:
@@ -1383,6 +1383,7 @@ def analyze_email(
     raw_summary = ""
     fallback_reason = ""
     llm_called = False
+    model_fallback_used = False
     ollama_metrics: Dict[str, Any] = {}
     model = str(settings.get("model") or "qwen2.5:3b")
 
@@ -1391,27 +1392,73 @@ def analyze_email(
         with _CALL_LOCK:
             llm_called = True
             response = caller(prompt, effective_settings)
+        def normalize_response(candidate: Mapping[str, Any]):
+            if hasattr(email_semantic_core, "normalize_and_expand_detailed"):
+                return email_semantic_core.normalize_and_expand_detailed(
+                    candidate.get("parsed"), message_key=message_key, facts=facts
+                )
+            normalized, candidate_errors = email_semantic_core.normalize_and_expand(
+                candidate.get("parsed"), message_key=message_key, facts=facts
+            )
+            keys = sorted(
+                str(key) for key in (candidate.get("parsed") or {}).keys()
+            ) if isinstance(candidate.get("parsed"), Mapping) else []
+            return normalized, candidate_errors, [], keys
+
+        decision, errors, normalization_repairs, model_core_keys = normalize_response(response)
+        # Transport-level fallback already handles timeouts and malformed JSON.
+        # A syntactically valid response can still fail our grounded schema;
+        # give the configured sibling model one clean attempt before using the
+        # conservative deterministic fallback.
+        fallback_model = str(effective_settings.get("fallback_model") or "").strip()
+        response_model = str(response.get("model") or model).strip()
+        if (
+            (errors or decision is None)
+            and transport is None
+            and fallback_model
+            and fallback_model != response_model
+        ):
+            primary_validation_errors = list(errors or ["schema normalization failed"])
+            fallback_settings = dict(effective_settings)
+            fallback_settings["model"] = fallback_model
+            fallback_settings["fallback_model"] = ""
+            with _CALL_LOCK:
+                fallback_response = _call_model_once(prompt, fallback_settings)
+            fallback_decision, fallback_errors, fallback_repairs, fallback_keys = normalize_response(
+                fallback_response
+            )
+            if not fallback_errors and fallback_decision is not None:
+                response = fallback_response
+                decision = fallback_decision
+                errors = []
+                normalization_repairs = fallback_repairs
+                model_core_keys = fallback_keys
+                model_fallback_used = True
+                fallback_metrics = dict(fallback_response.get("metrics") or {})
+                fallback_metrics.update({
+                    "model_fallback_used": True,
+                    "primary_model": response_model,
+                    "fallback_model": fallback_model,
+                    "fallback_trigger": "schema_validation",
+                    "primary_validation_errors": primary_validation_errors[:8],
+                })
+                response["metrics"] = fallback_metrics
+            else:
+                errors = primary_validation_errors + [
+                    "fallback: " + value for value in (fallback_errors or ["schema normalization failed"])
+                ]
+
         raw_fields = _raw_semantic_fields(response.get("parsed"))
         raw_category = raw_fields["raw_category"]
         raw_importance = raw_fields["raw_importance"]
         raw_risk_level = raw_fields["raw_risk_level"]
         raw_summary = raw_fields["raw_summary"]
-        latency_ms = int(response.get("latency_ms") or ((time.monotonic() - started) * 1000))
+        latency_ms = int((time.monotonic() - started) * 1000)
         model = str(response.get("model") or model)
         ollama_metrics = dict(response.get("metrics") or {})
-        if hasattr(email_semantic_core, "normalize_and_expand_detailed"):
-            decision, errors, normalization_repairs, model_core_keys = (
-                email_semantic_core.normalize_and_expand_detailed(
-                    response.get("parsed"), message_key=message_key, facts=facts
-                )
-            )
-        else:
-            decision, errors = email_semantic_core.normalize_and_expand(
-                response.get("parsed"), message_key=message_key, facts=facts
-            )
-            model_core_keys = sorted(
-                str(key) for key in (response.get("parsed") or {}).keys()
-            ) if isinstance(response.get("parsed"), Mapping) else []
+        model_fallback_used = bool(
+            model_fallback_used or ollama_metrics.get("model_fallback_used")
+        )
         if errors or decision is None:
             raw_errors = errors or ["schema normalization failed"]
             raise SemanticEngineError("; ".join(raw_errors[:6]))
@@ -1474,6 +1521,7 @@ def analyze_email(
         "latency_ms": latency_ms,
         "schema_valid": True,
         "fallback_used": fallback_used,
+        "model_fallback_used": model_fallback_used,
         "timeout": timeout,
         "error_code": error_code,
         "raw_errors": raw_errors[:10],
@@ -1489,7 +1537,7 @@ def analyze_email(
         "normalization_repairs": normalization_repairs[:40],
         "model_core_keys": model_core_keys[:40],
         "prompt_hash": _sha(prompt),
-        "core_protocol": str(settings.get("protocol") or "readable_grounded_core_v1u"),
+        "core_protocol": str(settings.get("protocol") or "readable_grounded_core_v1v"),
         "num_thread": int(settings.get("num_thread") or 5),
         "num_predict": int(output_budget.get("num_predict") or 0),
         "num_predict_hard_cap": int(output_budget.get("hard_cap") or 0),

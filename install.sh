@@ -75,6 +75,7 @@ if [[ -e "${SKILL_DIR}" && "${root_real}" != "${skill_real}" ]]; then
   mkdir -p "${backup_dir}"
   cp -a "${SKILL_DIR}" "${backup_dir}/skill.before"
   [[ ! -e "${ACTIVE_DIR}" ]] || cp -a "${ACTIVE_DIR}" "${backup_dir}/active-hook.before"
+  [[ ! -f "${PLUGIN_STATE}/config.json" ]] || cp -a "${PLUGIN_STATE}/config.json" "${backup_dir}/config.before"
 fi
 
 if [[ "${root_real}" != "${skill_real}" ]]; then
@@ -99,6 +100,11 @@ install -m 0644 "${SKILL_DIR}/hooks/hermes-email-watchdog/handler.py" "${ACTIVE_
 install -m 0644 "${SKILL_DIR}/hooks/hermes-email-watchdog/HOOK.yaml" "${ACTIVE_DIR}/.HOOK.yaml.tmp.$$"
 mv -f "${ACTIVE_DIR}/.handler.py.tmp.$$" "${ACTIVE_DIR}/handler.py"
 mv -f "${ACTIVE_DIR}/.HOOK.yaml.tmp.$$" "${ACTIVE_DIR}/HOOK.yaml"
+
+# Upgrade only the exact v0.2.x release-default policy. The migration is
+# independently backed up and atomic; customized configs are left byte-for-byte
+# untouched. It never accesses or mutates the mailbox.
+python3 "${SKILL_DIR}/scripts/email_onboarding.py" migrate-current --json >/dev/null
 
 enabled_file="${PLUGIN_STATE}/enabled"
 if [[ ! -e "${enabled_file}" ]]; then

@@ -209,7 +209,11 @@ def decision_to_legacy_analysis(decision: Mapping[str, Any], original: Mapping[s
         },
         "reminder_schedule": [],
         "attachment_handling": {
-            "policy": "list_only" if attachments.get("present") else "none",
+            "policy": (
+                _text(attachments.get("policy"), 40)
+                if attachments.get("present")
+                else "none"
+            ) or ("list_only" if attachments.get("present") else "none"),
             "wanted_types": [], "reason": _text(attachments.get("reason"), 300),
         },
         "body_rendering": {"header_lines": [], "body_sections": [], "signature": None},
@@ -231,6 +235,13 @@ def should_push_notification(decision: Mapping[str, Any]) -> bool:
     deadline = decision.get("deadline") if isinstance(decision.get("deadline"), Mapping) else {}
     risk = decision.get("risk") if isinstance(decision.get("risk"), Mapping) else {}
     category = _text(classification.get("category"), 80).lower()
+    attachment_info = decision.get("attachments") if isinstance(decision.get("attachments"), Mapping) else {}
+    if category in {"verification_code", "account_security", "invoice_receipt"}:
+        return True
+    if bool(attachment_info.get("present")) and _text(attachment_info.get("policy"), 40) in {
+        "download_safe", "download_all",
+    }:
+        return True
     if category == "academic_report_digest":
         return bool(notification.get("should_notify", True))
     if _text(importance.get("level"), 32).lower() in {"high", "critical", "urgent"}:

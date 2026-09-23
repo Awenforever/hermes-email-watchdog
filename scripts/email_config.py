@@ -24,7 +24,7 @@ _WARNED = False
 _CACHE = None
 
 DEFAULT_CONFIG = {
-    "version": 2,
+    "version": 3,
     "default_account": "",
     "accounts": [],
     "paths": {
@@ -67,15 +67,15 @@ DEFAULT_CONFIG = {
         "max_body_chars": 16000,
         "max_parallel": 1,
         "cache_by_message_hash": True,
-        "protocol": "readable_grounded_core_v1u",
+        "protocol": "readable_grounded_core_v1v",
         "num_thread": 5,
         # EMAIL_WATCHDOG_ADAPTIVE_OUTPUT_BUDGET_CONFIG_V1
         "num_predict_mode": "adaptive",
         "num_predict": 1800,
-        "num_predict_simple": 1400,
-        "num_predict_standard": 2400,
-        "num_predict_complex": 4000,
-        "num_predict_hard_cap": 4096,
+        "num_predict_simple": 700,
+        "num_predict_standard": 1200,
+        "num_predict_complex": 1800,
+        "num_predict_hard_cap": 2048,
     },
     # EMAIL_WATCHDOG_ADAPTIVE_RENDERER_CONFIG_SHADOW_V1
     "notification": {
@@ -84,7 +84,10 @@ DEFAULT_CONFIG = {
         "production_route_enabled": True,
         "all_mail_push": False,
         "legacy_fallback_enabled": True,
-        "fast_lane_enabled": True,
+        # Every production semantic decision is made by the configured model.
+        # Deterministic extraction remains a grounding/safety layer, not a
+        # parallel classifier that silently bypasses deepseek-flash.
+        "fast_lane_enabled": False,
         "original_policy": "auto",
         "original_max_chars": 5000,
         "show_priority": True,
@@ -103,7 +106,14 @@ DEFAULT_CONFIG = {
         "runtime_activation": False,
     },
     "delivery": {
-        "auto_download_attachments": False,
+        "auto_download_attachments": True,
+        "forward_attachments_to_weixin": True,
+        "attachment_max_bytes": 25 * 1024 * 1024,
+        "attachment_safe_extensions": [
+            ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+            ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx",
+            ".ppt", ".pptx", ".zip", ".7z",
+        ],
         "create_reminders": False,
         "managed_cron": False,
         "timezone": "auto",

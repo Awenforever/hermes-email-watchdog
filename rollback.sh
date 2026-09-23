@@ -24,6 +24,9 @@ else
   mkdir -p "${ACTIVE_DIR}"
   cp -a "${SKILL_DIR}/hooks/hermes-email-watchdog/." "${ACTIVE_DIR}/"
 fi
+if [[ -f "${backup}/config.before" ]]; then
+  install -m 0600 "${backup}/config.before" "${PLUGIN_STATE}/config.json"
+fi
 python3 - "${MANIFEST}" "${SKILL_DIR}" "${ACTIVE_DIR}" <<'PY'
 from pathlib import Path
 from datetime import datetime

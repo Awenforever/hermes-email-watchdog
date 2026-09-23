@@ -16,7 +16,7 @@ except Exception:
     email_semantic_schema = None
 
 MARKER = "EMAIL_WATCHDOG_READABLE_GROUNDED_SEMANTIC_CORE_V1O"
-PROTOCOL_VERSION = "readable_grounded_core_v1u"
+PROTOCOL_VERSION = "readable_grounded_core_v1v"
 
 CORE_KEYS = {
     "category", "confidence", "importance", "importance_reason",
@@ -387,6 +387,21 @@ def _extract_action_quote(source: str) -> str:
             return text[:240]
     return ""
 
+
+def _extract_deadline_quote(source: str) -> str:
+    deadline_signal = re.compile(
+        r"(?i)(deadline|due\s+by|截止|不晚于|请于|须于|前完成|前提交|前回复)"
+    )
+    time_signal = re.compile(
+        r"(?i)((?:19|20)\d{2}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|"
+        r"\d{1,2}[-/.月]\d{1,2}日?|\d{1,2}:\d{2}|今天|明天|本周|下周)"
+    )
+    for part in re.split(r"[\n。！？；!?;]+", _text(source)):
+        text = part.strip()
+        if text and deadline_signal.search(text) and time_signal.search(text):
+            return text[:240]
+    return ""
+
 def looks_like_full_decision(raw: Any) -> bool:
     return isinstance(raw, Mapping) and (
         "schema_version" in raw or "classification" in raw or "notification" in raw
@@ -540,6 +555,12 @@ def build_prompt(payload: Mapping[str, Any]) -> str:
         "- summary_plus_original: detailed school/administrative, manuscript or compliance requests where exact wording matters.\n"
         "- original_only: only a very short personal message that cannot usefully be summarized; never use for system tests, receipts or school notices.\n"
         "- event_card: only a real meeting/event. deadline_card: only a real recipient task with a deadline.\n\n"
+        "ATTACHMENT GUIDE:\n"
+        "- attachment_policy describes what the deterministic delivery layer should do; it does not authorize opening, executing, or trusting a file.\n"
+        "- choose download_safe when an attachment is materially useful to the recipient: invoices/receipts, requested forms, manuscripts/reviews, meeting material, tickets, reports, or documents the user must inspect or act on.\n"
+        "- choose list_only when names matter but automatic forwarding adds little value, or when sender/content confidence is insufficient.\n"
+        "- choose none for marketing/newsletters and irrelevant bulk mail. Use download_all only when the message explicitly requires all attached files; executable or otherwise dangerous files are still blocked by deterministic safety policy.\n"
+        "- for invoice_receipt with a stated attached invoice/receipt, prefer download_safe. For actionable mail whose required document is attached, prefer download_safe.\n\n"
         "Grounding is mandatory. GROUNDING RULES:\n"
         "- summary_evidence must contain short verbatim quotes copied from the subject or body. For bullets, provide at least one supporting quote per key point. For a paragraph, provide at least one supporting quote.\n"
         "- If action is present, action.evidence must be a short verbatim quote that directly proves the requested action.\n"
@@ -804,6 +825,16 @@ def normalize_and_expand_detailed(
     deadline = _mapping(deadline_value)
     if deadline_value is not None and not isinstance(deadline_value, (str, Mapping)):
         hard_errors.append("core.deadline must be null, string, or object")
+    # Common OpenAI-compatible model shape: {date, time}. Canonicalize it
+    # before the closed-schema check instead of discarding a grounded deadline.
+    alias_date = _text(deadline.pop("date", ""), 120)
+    alias_time = _text(deadline.pop("time", ""), 80)
+    alias_due = _text(deadline.pop("due", ""), 160)
+    if not deadline.get("date_text") and (alias_date or alias_time or alias_due):
+        deadline["date_text"] = " ".join(
+            value for value in (alias_date, alias_time, alias_due) if value
+        )
+        repairs.append("canonicalize:deadline_date_time_to_date_text")
     deadline_allowed = set(DEADLINE_KEYS) | {"has_deadline"}
     hard_errors.extend(_unknown_keys(deadline, deadline_allowed, "core.deadline"))
     deadline.pop("has_deadline", None)
@@ -811,6 +842,11 @@ def normalize_and_expand_detailed(
     deadline_text = _text(deadline.get("date_text"), 200)
     deadline_evidence = _text(deadline.get("evidence"), 240)
     has_deadline = bool(deadline_datetime or deadline_text)
+    if has_deadline and not _quote_supported(deadline_evidence, grounding_source):
+        inferred_deadline_evidence = _extract_deadline_quote(grounding_source)
+        if inferred_deadline_evidence:
+            deadline_evidence = inferred_deadline_evidence
+            repairs.append("grounding:infer_deadline_evidence_from_source")
     if has_deadline and not _quote_supported(deadline_evidence, grounding_source):
         has_deadline = False
         deadline_datetime = ""
@@ -923,9 +959,13 @@ def normalize_and_expand_detailed(
     if content_mode != "original_only":
         required_evidence = max(1, len(key_points)) if summary_style == "bullets" else 1
         if len(summary_evidence) < required_evidence:
-            hard_errors.append(
-                f"semantic summary grounding insufficient: need {required_evidence} supported quote(s), got {len(summary_evidence)}"
-            )
+            if summary_style == "bullets" and summary_evidence:
+                key_points = key_points[: len(summary_evidence)]
+                repairs.append("grounding:truncate_bullets_to_supported_evidence")
+            else:
+                hard_errors.append(
+                    f"semantic summary grounding insufficient: need {required_evidence} supported quote(s), got {len(summary_evidence)}"
+                )
 
     action_value = source.get("action")
     if isinstance(action_value, str):
@@ -958,6 +998,10 @@ def normalize_and_expand_detailed(
         repairs.append("grounding:drop_unsupported_action")
     if action and not action_required:
         repairs.append("repair:empty_action_to_null")
+        # A model may put the requested task sentence in ``type`` while omitting
+        # description/next_step. Treat that incomplete object as empty, then let
+        # the grounded deterministic inference below reconstruct a safe action.
+        action_type = ""
     if action_required and not action_type:
         action_type = "review"
         repairs.append("default:action.type=review")
@@ -977,10 +1021,6 @@ def normalize_and_expand_detailed(
         if (
             action_required
             and hints.get("direct_request_phrase")
-            and category in {
-                "school_notice", "task_deadline", "paper_manuscript_feedback",
-                "personal_or_general", "meeting_event",
-            }
         ):
             action_type = "review_and_complete"
             repairs.append("safety:canonicalize_descriptive_action_type=review_and_complete")
@@ -1178,4 +1218,3 @@ def normalize_and_expand(
         raw, message_key=message_key, facts=facts
     )
     return decision, errors
-

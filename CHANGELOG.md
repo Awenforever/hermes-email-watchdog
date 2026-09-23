@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 - 2026-09-23
+
+- Make USTC `deepseek-flash` the owner of every production semantic decision;
+  retain `qwen3.6-chat` as bounded transport and schema-validation fallback.
+- Add context-aware attachment policy, safe automatic download, per-message
+  storage, and real Weixin image/document forwarding through the reliable outbox.
+- Keep marketing and low-value bulk mail silent while always surfacing grounded
+  verification codes, account-security notices, invoices, and useful attachments.
+- Repair common model deadline/action shapes without weakening grounding, and
+  expose accurate model-fallback attribution.
+- Add config v3 migration and customizable model, notification, attachment,
+  forwarding, size, and timezone choices for independent installations.
+- Apply the v3 policy migration only to the exact v0.2.x release-default
+  signature, preserve custom/identity fields, and restore the prior config on
+  plugin rollback.
+
 ## 0.2.3 — 2026-09-21
 
 - Make the portable CI contract independent of profile paths baked into a

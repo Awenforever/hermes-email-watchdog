@@ -2,7 +2,7 @@
 
 This result package freezes the current production source/config boundary for repository construction:
 
-- Semantic protocol: `readable_grounded_core_v1u`
+- Semantic protocol: `readable_grounded_core_v1v`
 - Renderer: `adaptive_v1e`
 - Handler: `EMAIL_WATCHDOG_OUTBOX_NONBLOCKING_BACKOFF_V1`
 - Mobile visual E2E: accepted from the phone screenshot in the current chat

@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import email_onboarding
 
 
-class ConfigV2MigrationTests(unittest.TestCase):
+class ConfigMigrationTests(unittest.TestCase):
     def test_known_v1_defaults_move_to_production_backend(self):
         old = {
             "version": 1,
@@ -27,7 +27,7 @@ class ConfigV2MigrationTests(unittest.TestCase):
             },
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["version"], 2)
+        self.assertEqual(cfg["version"], 3)
         self.assertEqual(cfg["semantic_engine"]["provider"], "hermes_openai")
         self.assertEqual(cfg["semantic_engine"]["provider_name"], "USTC")
         self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")
@@ -54,11 +54,66 @@ class ConfigV2MigrationTests(unittest.TestCase):
         original = copy.deepcopy(old)
         cfg = email_onboarding._sanitize_existing_config(old)
         self.assertEqual(old, original)
-        self.assertEqual(cfg["version"], 2)
+        self.assertEqual(cfg["version"], 3)
         self.assertEqual(cfg["semantic_engine"]["provider"], "custom")
         self.assertEqual(cfg["semantic_engine"]["endpoint"], "https://example.invalid/v1")
         self.assertEqual(cfg["semantic_engine"]["model"], "private-model")
         self.assertEqual(cfg["notification"]["renderer"], "private_renderer")
+
+    def test_known_v2_policy_moves_to_model_owned_attachment_assistant(self):
+        old = {
+            "version": 2,
+            "semantic_engine": {
+                "model": "deepseek-flash", "fallback_model": "qwen3.6-chat",
+                "protocol": "readable_grounded_core_v1u",
+            },
+            "notification": {"fast_lane_enabled": True},
+            "delivery": {"auto_download_attachments": False},
+        }
+        cfg = email_onboarding._sanitize_existing_config(old)
+        self.assertEqual(cfg["version"], 3)
+        self.assertEqual(cfg["semantic_engine"]["protocol"], "readable_grounded_core_v1v")
+        self.assertFalse(cfg["notification"]["fast_lane_enabled"])
+        self.assertTrue(cfg["delivery"]["auto_download_attachments"])
+        self.assertTrue(cfg["delivery"]["forward_attachments_to_weixin"])
+
+    def test_release_migration_preserves_unknown_and_identity_fields(self):
+        raw = {
+            "version": 2,
+            "custom_extension": {"keep": "exactly"},
+            "accounts": [{"id": "private", "email": "user@example.invalid"}],
+            "semantic_engine": {
+                "model": "deepseek-flash",
+                "fallback_model": "qwen3.6-chat",
+                "protocol": "readable_grounded_core_v1u",
+            },
+            "notification": {"fast_lane_enabled": True},
+            "delivery": {
+                "auto_download_attachments": False,
+                "target": {"platform": "weixin", "chat_id": "secret-chat"},
+            },
+        }
+        migrated, changed = email_onboarding._migrate_known_v2_assistant_policy(raw)
+        self.assertTrue(changed)
+        self.assertEqual(migrated["custom_extension"], {"keep": "exactly"})
+        self.assertEqual(migrated["accounts"], raw["accounts"])
+        self.assertEqual(migrated["delivery"]["target"], raw["delivery"]["target"])
+        self.assertEqual(raw["version"], 2)
+
+    def test_release_migration_leaves_custom_v2_unchanged(self):
+        raw = {
+            "version": 2,
+            "semantic_engine": {
+                "model": "deepseek-flash",
+                "fallback_model": "qwen3.6-chat",
+                "protocol": "my-custom-protocol",
+            },
+            "notification": {"fast_lane_enabled": True},
+            "delivery": {"auto_download_attachments": False},
+        }
+        migrated, changed = email_onboarding._migrate_known_v2_assistant_policy(raw)
+        self.assertFalse(changed)
+        self.assertEqual(migrated, raw)
 
 
 if __name__ == "__main__":

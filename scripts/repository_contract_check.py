@@ -68,7 +68,7 @@ checks={
  "handler_baseline_identical":handler==baseline,
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
  "renderer_v1f":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1F" in renderer and "adaptive_v1f" in renderer,
- "protocol_v1u":"readable_grounded_core_v1u" in config_text,
+ "protocol_v1v":"readable_grounded_core_v1v" in config_text,
  "safe_thread_tracker":"email_thread_tracker" in watch and "email_reply" not in watch,
  "weixin_not_present":not any(p.name=="weixin.py" for p in root.rglob("weixin.py")),
  "onboarding_json_commands":all(x in onboarding for x in (

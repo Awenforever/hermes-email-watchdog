@@ -73,21 +73,44 @@ else:
 # Structured attribution for the final notification bytes. This is consumed by
 # the Email Watchdog hook; it never changes mailbox state or transport routing.
 _LAST_OUTPUT_MODELS = set()
+_LAST_OUTPUT_ATTACHMENTS = []
 
 def _reset_output_metadata():
     _LAST_OUTPUT_MODELS.clear()
+    _LAST_OUTPUT_ATTACHMENTS.clear()
 
 def _record_output_model(model):
     value = str(model or "").strip()
     if value and value.lower() != "hermes":
         _LAST_OUTPUT_MODELS.add(value)
 
+def _record_output_attachments(items):
+    if HAS_V3 and not email_config.get_delivery_settings().get("forward_attachments_to_weixin", True):
+        return
+    for item in items or []:
+        if not isinstance(item, dict) or not item.get("send_to_weixin"):
+            continue
+        path = str(item.get("local_path") or "").strip()
+        if not path or not os.path.isfile(path):
+            continue
+        record = {
+            "filename": str(item.get("filename") or os.path.basename(path))[:240],
+            "local_path": path,
+            "size_bytes": int(item.get("size_bytes") or os.path.getsize(path)),
+            "download_status": str(item.get("download_status") or "downloaded")[:40],
+        }
+        if all(existing.get("local_path") != path for existing in _LAST_OUTPUT_ATTACHMENTS):
+            _LAST_OUTPUT_ATTACHMENTS.append(record)
+
 def get_last_output_metadata():
     if not _LAST_OUTPUT_MODELS:
-        return {"model_name": "hermes", "model_generated": False}
-    if len(_LAST_OUTPUT_MODELS) == 1:
-        return {"model_name": next(iter(_LAST_OUTPUT_MODELS)), "model_generated": True}
-    return {"model_name": "mixed-model", "model_generated": True}
+        result = {"model_name": "hermes", "model_generated": False}
+    elif len(_LAST_OUTPUT_MODELS) == 1:
+        result = {"model_name": next(iter(_LAST_OUTPUT_MODELS)), "model_generated": True}
+    else:
+        result = {"model_name": "mixed-model", "model_generated": True}
+    result["attachments"] = list(_LAST_OUTPUT_ATTACHMENTS)
+    return result
 
 
 # ── Email Content Cache ──────────────────────────────────────
@@ -937,9 +960,19 @@ def check_account(acct, pushed_count=None):
             from_addr = env.get("from", {}).get("addr", "")
             from_name = env.get("from", {}).get("name", "")
             subject = env.get("subject", "")
-            has_attachments = env.get("has_attachment", False)
+            has_attachments = bool(
+                env.get("has_attachment", False)
+                or env.get("has_attachments", False)
+                or (msg.get("has_attachment") if isinstance(msg, dict) else False)
+                or (msg.get("has_attachments") if isinstance(msg, dict) else False)
+            )
             to_addr = env.get("to", {}).get("addr", "") if isinstance(env.get("to"), dict) else ""
-            attachments = env.get("attachments", [])
+            attachments = (
+                env.get("attachments")
+                or (msg.get("attachments") if isinstance(msg, dict) else None)
+                or (msg.get("attachment_list") if isinstance(msg, dict) else None)
+                or []
+            )
         else:
             body = msg.get("body", "") if isinstance(msg, dict) else ""
             from_addr = env.get("from", {}).get("email", "")
@@ -1061,6 +1094,8 @@ def check_account(acct, pushed_count=None):
             alert = rule_result.get("summary") or subject
 
         if alert:
+            if HAS_V3:
+                _record_output_attachments(delivery.get("attachments") or [])
             if (
                 delivery.get("route_lane") == "fast"
                 or analysis.get("user_relevance") == "urgent"

@@ -25,6 +25,7 @@ export EMAIL_WATCHDOG_CONFIG="${TMP_STATE}/config.json"
 export HOME="${TMP_STATE}/home"
 mkdir -p "${HOME}"
 tests=(
+  test_email_assistant_experience_matrix.py
   test_email_renderer_matrix.py
   test_email_production_router_matrix.py
   test_email_production_delivery_matrix.py

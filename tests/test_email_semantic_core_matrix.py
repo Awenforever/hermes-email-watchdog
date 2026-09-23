@@ -100,7 +100,7 @@ class CoreSchemaTests(unittest.TestCase):
 
     def test_01_marker(self):
         self.assertEqual(core.MARKER, "EMAIL_WATCHDOG_READABLE_GROUNDED_SEMANTIC_CORE_V1O")
-        self.assertEqual(core.PROTOCOL_VERSION, "readable_grounded_core_v1u")
+        self.assertEqual(core.PROTOCOL_VERSION, "readable_grounded_core_v1v")
 
     def test_02_valid_bullets(self):
         decision, errors = self.expand(valid_core())
@@ -758,13 +758,13 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(settings["num_thread"], 5)
         self.assertEqual(settings["num_predict_mode"], "adaptive")
         self.assertEqual(settings["num_predict"], 1800)
-        self.assertEqual(settings["num_predict_standard"], 2400)
-        self.assertEqual(settings["protocol"], "readable_grounded_core_v1u")
+        self.assertEqual(settings["num_predict_standard"], 1200)
+        self.assertEqual(settings["protocol"], "readable_grounded_core_v1v")
         self.assertEqual(settings["num_predict_mode"], "adaptive")
-        self.assertEqual(settings["num_predict_simple"], 1400)
-        self.assertEqual(settings["num_predict_standard"], 2400)
-        self.assertEqual(settings["num_predict_complex"], 4000)
-        self.assertEqual(settings["num_predict_hard_cap"], 4096)
+        self.assertEqual(settings["num_predict_simple"], 700)
+        self.assertEqual(settings["num_predict_standard"], 1200)
+        self.assertEqual(settings["num_predict_complex"], 1800)
+        self.assertEqual(settings["num_predict_hard_cap"], 2048)
         self.assertEqual(settings["mode"], "shadow")
         self.assertFalse(email_config.DEFAULT_CONFIG["llm"]["enabled"])
 

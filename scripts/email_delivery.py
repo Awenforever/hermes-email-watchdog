@@ -10,6 +10,7 @@ import shutil
 from html import unescape
 import sys
 from datetime import datetime
+from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -447,7 +448,12 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         return _list_attachments(email, attachments, "listed")
 
     save_root = _save_root(policy)
-    save_dir = os.path.join(save_root, datetime.now().strftime("%Y-%m"))
+    message_part = re.sub(
+        r"[^A-Za-z0-9._-]+", "_", str(email.get("msg_id") or email.get("id") or "message")
+    ).strip("._")[:96] or "message"
+    # A per-message directory avoids filename collisions and makes a repeated
+    # attachment command observable even when another mail used the same name.
+    save_dir = os.path.join(save_root, datetime.now().strftime("%Y-%m"), message_part)
     os.makedirs(save_dir, exist_ok=True)
     saved_paths = []
 
@@ -466,11 +472,15 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
     result = []
     if saved_paths:
         for path in saved_paths:
+            allowed, reason, size_bytes = _attachment_forward_policy(path, settings)
             att = {
                 "filename": os.path.basename(path),
                 "local_path": path,
                 "download_status": "downloaded",
                 "policy": policy,
+                "size_bytes": size_bytes,
+                "send_to_weixin": allowed,
+                "forward_reason": reason,
             }
             _persist_attachment(email, att)
             result.append(att)
@@ -479,6 +489,43 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         for att in result:
             _persist_attachment(email, att)
     return result
+
+
+def _attachment_forward_policy(path: str, settings: dict | None = None) -> tuple[bool, str, int]:
+    """Return whether a downloaded file is safe and bounded for Weixin forwarding."""
+    settings = settings or (email_config.get_delivery_settings() if email_config else {})
+    try:
+        resolved = Path(path).expanduser().resolve(strict=True)
+        if not resolved.is_file() or resolved.is_symlink():
+            return False, "not_regular_file", 0
+        size = int(resolved.stat().st_size)
+    except Exception:
+        return False, "file_unavailable", 0
+
+    try:
+        max_bytes = int(settings.get("attachment_max_bytes") or 25 * 1024 * 1024)
+    except Exception:
+        max_bytes = 25 * 1024 * 1024
+    max_bytes = max(1 * 1024 * 1024, min(max_bytes, 100 * 1024 * 1024))
+    if size <= 0:
+        return False, "empty_file", size
+    if size > max_bytes:
+        return False, "file_too_large", size
+
+    configured = settings.get("attachment_safe_extensions") or []
+    safe_exts = {
+        str(item).strip().lower() if str(item).strip().startswith(".") else "." + str(item).strip().lower()
+        for item in configured if str(item).strip()
+    }
+    if not safe_exts:
+        safe_exts = {
+            ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".txt", ".csv",
+            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".7z",
+        }
+    suffix = resolved.suffix.lower()
+    if suffix not in safe_exts:
+        return False, "unsafe_extension", size
+    return True, "safe_bounded_attachment", size
 
 
 def upsert_schedule(email: dict, analysis: dict) -> list:
@@ -1279,7 +1326,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     "raw_category": "", "validated_category": str((decision.get("classification") or {}).get("category") or ""),
                     "normalization_repairs": [], "trace_signals": {},
                     "fast_lane": True, "fast_lane_kind": lane.get("kind") or "",
-                    "core_protocol": "readable_grounded_core_v1u",
+                    "core_protocol": "readable_grounded_core_v1v",
                 }
             else:
                 semantic_meta = email_semantic_engine.analyze_email(

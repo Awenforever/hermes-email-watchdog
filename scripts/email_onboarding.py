@@ -284,6 +284,49 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[s
     return result
 
 
+def _migrate_known_v2_assistant_policy(
+    data: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Upgrade only the exact v0.2.x default policy, preserving every other key."""
+    source = copy.deepcopy(data) if isinstance(data, dict) else {}
+    try:
+        source_version = int(source.get("version") or 0)
+    except (TypeError, ValueError):
+        source_version = 0
+    semantic = source.get("semantic_engine") if isinstance(source.get("semantic_engine"), dict) else {}
+    notification = source.get("notification") if isinstance(source.get("notification"), dict) else {}
+    delivery = source.get("delivery") if isinstance(source.get("delivery"), dict) else {}
+    known_v2_signature = bool(
+        source_version == 2
+        and str(semantic.get("model") or "") == "deepseek-flash"
+        and str(semantic.get("fallback_model") or "") == "qwen3.6-chat"
+        and str(semantic.get("protocol") or "") == "readable_grounded_core_v1u"
+        and notification.get("fast_lane_enabled") is True
+        and delivery.get("auto_download_attachments") is False
+    )
+    if not known_v2_signature:
+        return source, False
+
+    semantic["protocol"] = "readable_grounded_core_v1v"
+    semantic["num_predict_simple"] = 700
+    semantic["num_predict_standard"] = 1200
+    semantic["num_predict_complex"] = 1800
+    semantic["num_predict_hard_cap"] = 2048
+    notification["fast_lane_enabled"] = False
+    delivery["auto_download_attachments"] = True
+    delivery["forward_attachments_to_weixin"] = True
+    delivery.setdefault("attachment_max_bytes", 25 * 1024 * 1024)
+    delivery.setdefault(
+        "attachment_safe_extensions",
+        copy.deepcopy(email_config.DEFAULT_CONFIG["delivery"]["attachment_safe_extensions"]),
+    )
+    source["semantic_engine"] = semantic
+    source["notification"] = notification
+    source["delivery"] = delivery
+    source["version"] = 3
+    return source, True
+
+
 def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     source = data if isinstance(data, dict) else {}
     try:
@@ -333,8 +376,12 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
                         migrated[key] = copy.deepcopy(notification[key])
                 allowed["notification"] = migrated
 
+    # v0.2.x shipped this exact assistant-policy signature. Upgrade it as one
+    # unit; if any of these fields was customized, preserve the whole policy.
+    allowed, _ = _migrate_known_v2_assistant_policy(allowed)
+
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
-    cfg["version"] = 2
+    cfg["version"] = 3
     cfg["paths"] = {
         key: cfg.get("paths", {}).get(key, email_config.DEFAULT_CONFIG["paths"][key])
         for key in sorted(ALLOWED_PATH_KEYS)
@@ -730,10 +777,39 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
     options = input_data.get("options") if isinstance(input_data.get("options"), dict) else {}
     if options.get("timezone"):
         cfg["delivery"]["timezone"] = str(options["timezone"])
-    if "ollama_enabled" in options:
-        cfg.setdefault("semantic_engine", {})["enabled"] = bool(options["ollama_enabled"])
+    semantic = cfg.setdefault("semantic_engine", {})
+    if "semantic_enabled" in options:
+        semantic["enabled"] = bool(options["semantic_enabled"])
+    elif "ollama_enabled" in options:  # compatibility with early onboarding payloads
+        semantic["enabled"] = bool(options["ollama_enabled"])
+    if options.get("semantic_model"):
+        semantic["model"] = str(options["semantic_model"]).strip()
+    if options.get("semantic_fallback_model"):
+        semantic["fallback_model"] = str(options["semantic_fallback_model"]).strip()
+
+    notification = cfg.setdefault("notification", {})
+    notification["fast_lane_enabled"] = False
+    policy = str(options.get("notification_policy") or "").strip().lower()
+    if policy:
+        if policy not in {"actionable", "all"}:
+            raise OnboardingError("notification_policy must be actionable or all")
+        notification["all_mail_push"] = policy == "all"
+
+    delivery = cfg.setdefault("delivery", {})
+    if "auto_download_attachments" in options:
+        delivery["auto_download_attachments"] = bool(options["auto_download_attachments"])
+    if "forward_attachments_to_weixin" in options:
+        delivery["forward_attachments_to_weixin"] = bool(options["forward_attachments_to_weixin"])
+    if options.get("attachment_max_mb") is not None:
+        try:
+            max_mb = int(options["attachment_max_mb"])
+        except (TypeError, ValueError) as exc:
+            raise OnboardingError("attachment_max_mb must be an integer") from exc
+        if not 1 <= max_mb <= 100:
+            raise OnboardingError("attachment_max_mb must be between 1 and 100")
+        delivery["attachment_max_bytes"] = max_mb * 1024 * 1024
     cfg["safety"] = copy.deepcopy(email_config.DEFAULT_CONFIG["safety"])
-    cfg["version"] = 1
+    cfg["version"] = 3
 
     unresolved = sorted(set(unresolved))
     return {
@@ -884,6 +960,44 @@ def validate_current() -> dict[str, Any]:
     raw = _load_json(CONFIG_PATH, {})
     config = _sanitize_existing_config(raw if isinstance(raw, dict) else {})
     return validate_config(config)
+
+
+def migrate_current_config() -> dict[str, Any]:
+    """Atomically migrate a known release default without touching custom configs."""
+    with _transaction_lock():
+        raw = _load_json(CONFIG_PATH, {})
+        if not isinstance(raw, dict) or not CONFIG_PATH.is_file():
+            return {
+                "passed": True,
+                "changed": False,
+                "reason": "config_missing",
+                "mailbox_mutation": False,
+            }
+        migrated, changed = _migrate_known_v2_assistant_policy(raw)
+        if not changed:
+            return {
+                "passed": True,
+                "changed": False,
+                "reason": "custom_or_current_config_preserved",
+                "config_sha256": _canonical_sha(raw),
+                "mailbox_mutation": False,
+            }
+        operation_id = datetime.now().astimezone().strftime("migration-%Y%m%d-%H%M%S-%f")
+        backup = _write_backup(_snapshot([CONFIG_PATH]), operation_id)
+        _atomic_write_json(CONFIG_PATH, migrated)
+        return {
+            "passed": True,
+            "changed": True,
+            "from_version": 2,
+            "to_version": 3,
+            "backup": {
+                "basename": backup.name,
+                "exists": backup.is_dir(),
+                "path_sha256": hashlib.sha256(str(backup).encode("utf-8")).hexdigest(),
+            },
+            "config_sha256": _canonical_sha(migrated),
+            "mailbox_mutation": False,
+        }
 
 
 def _snapshot(paths: list[Path]) -> dict[str, tuple[bool, bytes, int]]:
@@ -1137,6 +1251,7 @@ def _build_parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name)
         cmd.add_argument("--input-json", required=True)
     sub.add_parser("validate").add_argument("--json", action="store_true")
+    sub.add_parser("migrate-current").add_argument("--json", action="store_true")
     sub.add_parser("enable").add_argument("--json", action="store_true")
     sub.add_parser("disable").add_argument("--json", action="store_true")
     sub.add_parser("capture-context").add_argument("--json", action="store_true")
@@ -1155,6 +1270,8 @@ def main(argv: list[str] | None = None) -> int:
             result = apply(_load_input(args.input_json))
         elif args.command == "validate":
             result = validate_current()
+        elif args.command == "migrate-current":
+            result = migrate_current_config()
         elif args.command == "enable":
             result = enable()
         elif args.command == "disable":
