@@ -1151,6 +1151,7 @@ def normalize_and_expand_detailed(
 
     if (
         not action_required
+        and category != "newsletter_marketing"
         and hints.get("direct_request_phrase")
         and not hints.get("no_action_phrase")
         and not hints.get("receipt_phrase")
@@ -1163,6 +1164,14 @@ def normalize_and_expand_detailed(
             action_next = ""
             action_evidence = inferred_evidence
             repairs.append("consistency:infer_grounded_direct_action")
+
+    if category == "newsletter_marketing" and action_required:
+        action_required = False
+        action_type = ""
+        action_description = ""
+        action_next = ""
+        action_evidence = ""
+        repairs.append("consistency:marketing_clears_promotional_action")
 
     if (
         action_required
@@ -1225,6 +1234,9 @@ def normalize_and_expand_detailed(
         )
 
     should_notify = _bool(source.get("should_notify"), True)
+    if category == "newsletter_marketing" and should_notify:
+        should_notify = False
+        repairs.append("policy:marketing_suppressed")
     if category == "verification_code" and verification_code_grounded and not should_notify:
         should_notify = True
         repairs.append("consistency:verification_code_requires_notification")
@@ -1244,7 +1256,7 @@ def normalize_and_expand_detailed(
     ):
         should_notify = True
         repairs.append("consistency:academic_report_requires_notification")
-    if not should_notify:
+    if not should_notify and category != "newsletter_marketing":
         should_notify = True
         repairs.append("policy:all_mail_eventual_push")
 

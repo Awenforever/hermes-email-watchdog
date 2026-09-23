@@ -113,14 +113,14 @@ class FullPolicyMatrix(unittest.TestCase):
         self.assertEqual(decision["classification"]["category"], "research_feedback_thread")
         self.assertIn("consistency:grounded_research_feedback_category", repairs)
 
-    def test_all_mail_eventual_push_marketing(self):
+    def test_marketing_is_suppressed_by_default(self):
         subject = "本周产品资讯与优惠"
         body = "本周产品资讯已更新，同时提供限时优惠，可随时退订。"
         raw = valid_core("newsletter_marketing", "本周产品资讯与优惠已更新。", "本周产品资讯已更新", should_notify=False)
         decision, errors, repairs, _ = self.expand(raw, subject, body)
         self.assertFalse(errors)
-        self.assertTrue(decision["notification"]["should_notify"])
-        self.assertIn("policy:all_mail_eventual_push", repairs)
+        self.assertFalse(decision["notification"]["should_notify"])
+        self.assertIn("policy:marketing_suppressed", repairs)
 
     def test_all_mail_eventual_push_personal(self):
         subject = "周末聚餐安排"

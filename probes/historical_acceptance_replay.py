@@ -209,6 +209,8 @@ def main() -> int:
             errors.append("empty_notification")
         if status == "suppressed" and category not in {"newsletter_marketing"}:
             errors.append(f"unexpected_suppression:{category or 'unknown'}")
+        if category == "newsletter_marketing" and status != "suppressed":
+            errors.append("marketing_not_suppressed")
         errors = sorted(set(errors))
         item = {
             "acceptance_id": acceptance_id,
