@@ -440,6 +440,22 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
     policy = (analysis.get("attachment_handling") or {}).get("policy") or "none"
     policy = _policy_after_domain_guard(policy, email)
     settings = email_config.get_delivery_settings() if email_config else {}
+    category = str(
+        analysis.get("semantic_category") or analysis.get("final_category") or ""
+    ).strip().lower()
+    # A weekly research report is incomplete without its report document.  The
+    # semantic model may conservatively choose list_only for an unfamiliar
+    # sender, but a bounded PDF still passes the normal extension, size and
+    # content checks below and is safe to deliver as a document.  Keep this
+    # override narrow so stale QR images and unrelated attachments remain
+    # governed by the model's list_only decision.
+    if policy in ("none", "list_only") and category == "academic_report_digest":
+        names = [
+            str(item.get("filename") or item.get("name") or "").strip().lower()
+            for item in attachments if isinstance(item, dict)
+        ]
+        if any(name.endswith(".pdf") for name in names):
+            policy = "download_safe"
     if (
         policy in ("none", "list_only")
         and not analysis.get("production_semantic_route")

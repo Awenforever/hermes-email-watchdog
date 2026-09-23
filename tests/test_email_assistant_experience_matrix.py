@@ -364,6 +364,38 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual(result[0]["filename"], "report.pdf")
         self.assertTrue(result[0]["send_to_weixin"])
 
+    def test_15b_semantic_weekly_report_forwards_bounded_pdf(self):
+        with tempfile.TemporaryDirectory() as td:
+            pdf = Path(td) / "report.pdf"
+            pdf.write_bytes(b"%PDF-safe")
+            email = {
+                "id": "weekly", "msg_id": "weekly", "from_domain": "gmail.com",
+                "has_attachments": True,
+                "attachments": [{"filename": "report.pdf", "content_type": "application/pdf"}],
+            }
+            analysis = {
+                "production_semantic_route": True,
+                "semantic_category": "academic_report_digest",
+                "attachment_handling": {"policy": "list_only"},
+            }
+            settings = {
+                "auto_download_attachments": True,
+                "forward_attachments_to_weixin": True,
+                "auto_forward_safe_attachments": True,
+                "attachment_max_bytes": 1024 * 1024,
+                "attachment_safe_extensions": [".pdf"],
+            }
+            with mock.patch.object(email_delivery.email_config, "get_delivery_settings", return_value=settings), mock.patch.object(
+                email_delivery, "_save_root", return_value=td
+            ), mock.patch.object(
+                email_delivery, "_download_himalaya", return_value=[str(pdf)]
+            ), mock.patch.object(email_delivery, "_persist_attachment"):
+                result = email_delivery.download_attachments(
+                    email, analysis, {"type": "himalaya", "config": "mail.toml"}
+                )
+        self.assertEqual(result[0]["filename"], "report.pdf")
+        self.assertTrue(result[0]["send_to_weixin"])
+
     def test_16_himalaya_retry_returns_overwritten_existing_attachment(self):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "report.pdf"
