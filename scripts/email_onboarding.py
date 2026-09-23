@@ -396,7 +396,11 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     if (
         str(notification.get("renderer") or "") == "adaptive_v1f"
         and int(notification.get("original_max_chars") or 0) == 5000
-        and delivery.get("create_reminders") is False
+        # Some v0.3.1 installations enabled reminder extraction manually while
+        # still retaining the shipped plain renderer and disabled scheduler.
+        # Both boolean values remain the known release family; non-booleans are
+        # treated as customization and preserved.
+        and isinstance(delivery.get("create_reminders"), bool)
         and delivery.get("managed_cron") is False
     ):
         notification["renderer"] = "adaptive_v1g"

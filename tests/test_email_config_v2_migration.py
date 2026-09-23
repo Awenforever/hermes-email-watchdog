@@ -77,6 +77,26 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
         self.assertTrue(cfg["delivery"]["forward_attachments_to_weixin"])
 
+    def test_v031_policy_with_reminders_already_enabled_gets_full_assistant_upgrade(self):
+        old = {
+            "version": 3,
+            "notification": {
+                "renderer": "adaptive_v1f",
+                "original_max_chars": 5000,
+            },
+            "delivery": {
+                "create_reminders": True,
+                "managed_cron": False,
+            },
+        }
+        cfg = email_onboarding._sanitize_existing_config(old)
+        self.assertEqual(cfg["notification"]["renderer"], "adaptive_v1g")
+        self.assertEqual(cfg["notification"]["original_max_chars"], 900)
+        self.assertTrue(cfg["delivery"]["create_reminders"])
+        self.assertTrue(cfg["delivery"]["managed_cron"])
+        self.assertTrue(cfg["delivery"]["auto_forward_safe_attachments"])
+        self.assertEqual(cfg["delivery"]["reminder_offsets_minutes"], [1440, 60])
+
     def test_release_migration_preserves_unknown_and_identity_fields(self):
         raw = {
             "version": 2,
