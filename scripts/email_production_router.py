@@ -256,6 +256,8 @@ def should_push_notification(decision: Mapping[str, Any]) -> bool:
     # it has no formal task/deadline and is naturally low priority.
     if category == "personal_or_general":
         return bool(notification.get("should_notify", True))
+    if category in {"school_notice", "research_feedback_thread", "paper_manuscript_feedback"}:
+        return bool(notification.get("should_notify", True))
     if _text(importance.get("level"), 32).lower() in {"high", "critical", "urgent"}:
         return True
     if bool(action.get("required")) or bool(deadline.get("has_deadline")):

@@ -436,6 +436,70 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual(result[0]["source"], "invoice_pdf_link")
         self.assertTrue(result[0]["send_to_weixin"])
 
+    def test_15d_invoice_forwards_documents_not_inline_assets(self):
+        with tempfile.TemporaryDirectory() as td:
+            paths = []
+            for name, data in (
+                ("invoice.pdf", b"%PDF-safe"), ("invoice.ofd", b"ofd"),
+                ("invoice.xml", b"<invoice/>"), ("advertising.png", b"png"),
+            ):
+                path = Path(td) / name
+                path.write_bytes(data)
+                paths.append(str(path))
+            email = {
+                "id": "invoice", "msg_id": "invoice", "from_domain": "example.com",
+                "has_attachments": True,
+                "attachments": [{"filename": Path(path).name} for path in paths],
+            }
+            analysis = {
+                "production_semantic_route": True, "semantic_category": "invoice_receipt",
+                "attachment_handling": {"policy": "download_safe"},
+            }
+            settings = {
+                "auto_download_attachments": True, "forward_attachments_to_weixin": True,
+                "attachment_max_bytes": 1024 * 1024,
+                "attachment_safe_extensions": [".pdf", ".ofd", ".xml", ".png"],
+            }
+            with mock.patch.object(email_delivery.email_config, "get_delivery_settings", return_value=settings), mock.patch.object(
+                email_delivery, "_save_root", return_value=td
+            ), mock.patch.object(
+                email_delivery, "_download_himalaya", return_value=paths
+            ), mock.patch.object(email_delivery, "_persist_attachment"):
+                result = email_delivery.download_attachments(
+                    email, analysis, {"type": "himalaya", "config": "mail.toml"}
+                )
+        by_name = {item["filename"]: item for item in result}
+        self.assertTrue(by_name["invoice.pdf"]["send_to_weixin"])
+        self.assertTrue(by_name["invoice.ofd"]["send_to_weixin"])
+        self.assertEqual(by_name["invoice.xml"]["forward_reason"], "auxiliary_invoice_xml")
+        self.assertEqual(by_name["advertising.png"]["forward_reason"], "invoice_inline_asset")
+
+    def test_15e_research_feedback_forwards_safe_image(self):
+        with tempfile.TemporaryDirectory() as td:
+            image = Path(td) / "figure.png"
+            image.write_bytes(b"png")
+            email = {
+                "id": "feedback", "msg_id": "feedback", "from_domain": "example.com",
+                "has_attachments": True, "attachments": [{"filename": "figure.png"}],
+            }
+            analysis = {
+                "production_semantic_route": True, "semantic_category": "research_feedback_thread",
+                "attachment_handling": {"policy": "list_only"},
+            }
+            settings = {
+                "auto_download_attachments": True, "forward_attachments_to_weixin": True,
+                "attachment_max_bytes": 1024 * 1024, "attachment_safe_extensions": [".png"],
+            }
+            with mock.patch.object(email_delivery.email_config, "get_delivery_settings", return_value=settings), mock.patch.object(
+                email_delivery, "_save_root", return_value=td
+            ), mock.patch.object(
+                email_delivery, "_download_himalaya", return_value=[str(image)]
+            ), mock.patch.object(email_delivery, "_persist_attachment"):
+                result = email_delivery.download_attachments(
+                    email, analysis, {"type": "himalaya", "config": "mail.toml"}
+                )
+        self.assertTrue(result[0]["send_to_weixin"])
+
     def test_16_himalaya_retry_returns_overwritten_existing_attachment(self):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "report.pdf"

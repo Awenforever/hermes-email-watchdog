@@ -466,6 +466,15 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         ]
         if any(name.endswith(".pdf") for name in names):
             policy = "download_safe"
+    if policy in ("none", "list_only") and category in {
+        "personal_or_general", "research_feedback_thread", "paper_manuscript_feedback",
+    }:
+        names = [
+            str(item.get("filename") or item.get("name") or "").strip().lower()
+            for item in attachments if isinstance(item, dict)
+        ]
+        if any(Path(name).suffix in {".pdf", ".png", ".jpg", ".jpeg", ".doc", ".docx"} for name in names):
+            policy = "download_safe"
     if (
         policy in ("none", "list_only")
         and not analysis.get("production_semantic_route")
@@ -518,10 +527,18 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
                     expanded_archives.add(str(path))
                     expanded.extend(children)
         saved_paths.extend(expanded)
+        invoice_primary_present = category == "invoice_receipt" and any(
+            Path(str(path)).suffix.lower() in {".pdf", ".ofd"} for path in saved_paths
+        )
         for path in saved_paths:
             allowed, reason, size_bytes = _attachment_forward_policy(path, settings)
             if str(path) in expanded_archives:
                 allowed, reason = False, "archive_expanded"
+            suffix = Path(str(path)).suffix.lower()
+            if category == "invoice_receipt" and suffix == ".xml":
+                allowed, reason = False, "auxiliary_invoice_xml"
+            elif invoice_primary_present and suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+                allowed, reason = False, "invoice_inline_asset"
             att = {
                 "filename": os.path.basename(path),
                 "local_path": path,

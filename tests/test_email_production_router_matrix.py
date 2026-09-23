@@ -77,6 +77,10 @@ class ProductionRouterTests(unittest.TestCase):
     def test_16_personal_correspondence_respects_semantic_notify(self):
         d={"classification":{"category":"personal_or_general"},"importance":{"level":"low"},"notification":{"should_notify":True},"action":{},"deadline":{},"attachments":{},"risk":{}}
         self.assertTrue(router.should_push_notification(d))
+    def test_17_school_and_research_updates_respect_semantic_notify(self):
+        for category in ("school_notice", "research_feedback_thread", "paper_manuscript_feedback"):
+            d={"classification":{"category":category},"importance":{"level":"normal"},"notification":{"should_notify":True},"action":{},"deadline":{},"attachments":{},"risk":{}}
+            self.assertTrue(router.should_push_notification(d), category)
 
 if __name__ == '__main__':
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(ProductionRouterTests)

@@ -354,7 +354,7 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
     return [(re.sub(r"[\[\]]", "", label)[:120], url.replace(" ", "%20")) for _, label, url in useful[:4]]
 
 
-def _attachment_lines(email: Mapping[str, Any], delivery: Mapping[str, Any]) -> List[str]:
+def _attachment_lines(email: Mapping[str, Any], delivery: Mapping[str, Any], category: str = "") -> List[str]:
     source = _items(delivery.get("attachments")) or _items(email.get("attachments"))
     out: List[str] = []
     for item in source:
@@ -365,6 +365,11 @@ def _attachment_lines(email: Mapping[str, Any], delivery: Mapping[str, Any]) -> 
         else:
             name, status, sent = _text(item, 240), "", None
         if not name or name.casefold() in {"(attachments present)", "attachments present", "attachment present"}:
+            continue
+        reason = _text(item.get("forward_reason"), 60) if isinstance(item, Mapping) else ""
+        if category == "invoice_receipt" and reason in {
+            "archive_expanded", "auxiliary_invoice_xml", "invoice_inline_asset",
+        }:
             continue
         if status == "downloaded" and sent is not False:
             suffix = " · 已附上"
@@ -604,7 +609,7 @@ def render_notification(
         _section(lines, link_title, [f"- [{label}]({url})" for label, url in links])
         blocks.append(link_title)
 
-    attachment_lines = _attachment_lines(email, delivery)
+    attachment_lines = _attachment_lines(email, delivery, category)
     if attachment_lines:
         _section(lines, "附件", attachment_lines)
         blocks.append("附件")

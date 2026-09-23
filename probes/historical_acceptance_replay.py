@@ -116,7 +116,9 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
             if not isinstance(item, dict):
                 continue
             if (item.get("download_status") == "downloaded" and item.get("send_to_weixin") is not True
-                    and item.get("forward_reason") not in {"archive_expanded"}):
+                    and item.get("forward_reason") not in {
+                        "archive_expanded", "auxiliary_invoice_xml", "invoice_inline_asset",
+                    }):
                 errors.append(f"attachment_not_forwardable:{item.get('filename')}")
     return sorted(set(errors))
 
@@ -207,7 +209,11 @@ def main() -> int:
             errors.append("semantic_production_route_failed")
         if not text and status != "suppressed":
             errors.append("empty_notification")
-        if status == "suppressed" and category not in {"newsletter_marketing"}:
+        acceptable_spam_suppression = bool(
+            re.search(r"(?i)^\s*\[(?:spam|junk)\]", email.get("subject") or "")
+            and category in {"academic_opportunity_call", "newsletter_marketing"}
+        )
+        if status == "suppressed" and category not in {"newsletter_marketing"} and not acceptable_spam_suppression:
             errors.append(f"unexpected_suppression:{category or 'unknown'}")
         if category == "newsletter_marketing" and status != "suppressed":
             errors.append("marketing_not_suppressed")
