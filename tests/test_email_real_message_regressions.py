@@ -63,17 +63,19 @@ class RealMessageRegressions(unittest.TestCase):
         self.assertIn("cleanup:drop_empty_punctuation_key", repairs)
         self.assertIn("consistency:infer_grounded_direct_action", repairs)
 
-    def test_nonempty_unknown_punctuation_key_still_fails_closed(self):
+    def test_nonempty_unknown_punctuation_key_is_ignored_as_descriptive_noise(self):
         raw = {
             "category": "personal_or_general",
             ", ": "meaningful-unexpected-content",
         }
-        _, errors, repairs, _ = core.normalize_and_expand_detailed(
+        decision, errors, repairs, _ = core.normalize_and_expand_detailed(
             raw,
             message_key="real:punctuation-hard-error",
             facts={"source_subject": "hello", "source_body": "hello"},
         )
-        self.assertTrue(any("unknown field" in error for error in errors))
+        self.assertFalse(any("unknown field" in item for item in errors))
+        self.assertIsNone(decision)
+        self.assertTrue(any(item.startswith("tolerate:core.unknown=") for item in repairs))
         self.assertNotIn("cleanup:drop_empty_punctuation_key", repairs)
 
 

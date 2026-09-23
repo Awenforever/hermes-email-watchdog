@@ -482,6 +482,22 @@ def conservative_fallback(
         importance = "normal"
 
     subject = re.sub(r"\s+", " ", _text(email.get("subject"), 300)).strip()
+    body = _text(
+        email.get("body") or email.get("body_plain") or email.get("plain") or email.get("text"),
+        5000,
+    )
+    account_status_grounded = bool(re.search(
+        r"(?i)(?:service|account|subscription|access).{0,40}(?:suspension|suspended|"
+        r"deactivat(?:e|ed|ion)|terminat(?:e|ed|ion)|discontinu(?:e|ed|ation)|"
+        r"expir(?:e|ed|ation)|disabled)|"
+        r"(?:suspension|suspended|deactivat(?:e|ed|ion)|terminat(?:e|ed|ion)).{0,40}"
+        r"(?:service|account|subscription|access)|"
+        r"(?:服务|账户|账号|订阅|访问权限).{0,24}(?:暂停|停用|冻结|终止|注销|到期|失效)",
+        subject + "\n" + body,
+    ))
+    if account_status_grounded:
+        category = "account_status_notice"
+        importance = "high"
     code_candidates = [
         _text(item, 16)
         for item in (facts.get("code_candidates") or [])
@@ -508,6 +524,8 @@ def conservative_fallback(
     if category == "academic_report_digest":
         should_notify = True
         importance = "normal"
+    if category == "account_status_notice":
+        should_notify = True
 
     decision["classification"] = {
         "category": "verification_code" if is_code else category,
@@ -515,7 +533,7 @@ def conservative_fallback(
         "confidence": 0.35,
     }
     decision["importance"] = {
-        "level": "high" if is_code else importance,
+        "level": "high" if is_code or category == "account_status_notice" else importance,
         "reason": "确定性降级结果；未使用模型语义结果。",
     }
     summary = "收到验证码邮件，请核对来源后使用。" if is_code else (
@@ -556,6 +574,13 @@ def conservative_fallback(
         "description": _text(action_raw.get("description"), 500) if action_required else "",
         "next_step": _text(action_raw.get("next_step"), 500) if action_required else "",
     }
+    if category == "account_status_notice" and not action_required:
+        decision["action"] = {
+            "required": True,
+            "type": "review_account_status",
+            "description": "请查看该账户或服务状态变更通知。",
+            "next_step": "确认影响范围，并按原邮件要求处理以避免服务中断。",
+        }
     deadline_raw = analysis.get("deadline") if isinstance(analysis.get("deadline"), Mapping) else {}
     has_deadline = bool(deadline_raw.get("has_deadline"))
     decision["deadline"] = {

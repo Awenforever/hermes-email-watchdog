@@ -236,7 +236,9 @@ def should_push_notification(decision: Mapping[str, Any]) -> bool:
     risk = decision.get("risk") if isinstance(decision.get("risk"), Mapping) else {}
     category = _text(classification.get("category"), 80).lower()
     attachment_info = decision.get("attachments") if isinstance(decision.get("attachments"), Mapping) else {}
-    if category in {"verification_code", "account_security", "invoice_receipt"}:
+    if category in {
+        "verification_code", "account_security", "account_status_notice", "invoice_receipt",
+    }:
         return True
     if bool(attachment_info.get("present")) and _text(attachment_info.get("policy"), 40) in {
         "download_safe", "download_all",

@@ -167,9 +167,75 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertTrue(result["model_fallback_used"])
         self.assertEqual(result["model"], "qwen3.6-chat")
 
+    def test_08_open_semantic_fields_do_not_discard_correct_intent(self):
+        email = {
+            "id": "suspension", "account": "USTC",
+            "subject": "Fwd: Service Suspension Notification",
+            "body": "Your service will be suspended on September 30 unless billing details are updated.",
+            "attachments": [],
+        }
+        features = email_semantic_engine.email_feature_extractor.extract_features(email)
+        facts = email_semantic_engine._facts(email, features)
+        raw = {
+            "emailType": "account_status_notice",
+            "confidence": 0.94,
+            "priority": "high",
+            "pushAlert": True,
+            "content_mode": "deadline_card",
+            "summary_style": "paragraph",
+            "summary": "The service may be suspended unless billing details are updated.",
+            "summary_evidence": ["service will be suspended"],
+            "original_policy": "excerpt",
+            "action": {
+                "type": "review",
+                "description": "Update billing details to avoid suspension.",
+                "next_step": "Review the account.",
+                "evidence": "unless billing details are updated",
+                "ui_hint": "prominent",
+            },
+            "deadline": {
+                "dueDate": "September 30",
+                "confidence": 0.9,
+                "evidence": "suspended on September 30",
+                "calendar_hint": "local",
+            },
+            "attachment_policy": "none",
+            "risk": {"level": "none", "notes": [], "explanation": "status change"},
+            "future_descriptive_field": {"display": "account notice"},
+        }
+        decision, errors, repairs, _ = email_semantic_core.normalize_and_expand_detailed(
+            raw, message_key=features["message_key"], facts=facts
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(decision["classification"]["category"], "account_status_notice")
+        self.assertTrue(decision["notification"]["should_notify"])
+        self.assertTrue(decision["deadline"]["has_deadline"])
+        self.assertTrue(any(item.startswith("tolerate:") for item in repairs))
+        self.assertTrue(email_production_router.should_push_notification(decision))
+
+    def test_09_conservative_fallback_never_silences_grounded_service_suspension(self):
+        email = {
+            "id": "suspension-fallback", "account": "USTC",
+            "subject": "Fwd: Service Suspension Notification",
+            "body": "Access will be suspended unless the account is reviewed.",
+            "attachments": [],
+        }
+        features = email_semantic_engine.email_feature_extractor.extract_features(email)
+        facts = email_semantic_engine._facts(email, features)
+        decision = email_semantic_engine.email_semantic_schema.conservative_fallback(
+            message_key=features["message_key"], email=email,
+            rule_result={"category": "个人邮件", "action": "skip"},
+            analysis={"should_notify": False}, facts=facts,
+            reason="model format unavailable",
+        )
+        self.assertEqual(decision["classification"]["category"], "account_status_notice")
+        self.assertTrue(decision["notification"]["should_notify"])
+        self.assertTrue(decision["action"]["required"])
+        self.assertTrue(email_production_router.should_push_notification(decision))
+
 
 class WeixinAttachmentTransportTests(unittest.IsolatedAsyncioTestCase):
-    async def test_08_text_and_safe_attachments_use_real_adapter_methods(self):
+    async def test_10_text_and_safe_attachments_use_real_adapter_methods(self):
         handler = load_handler()
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -219,7 +285,7 @@ class WeixinAttachmentTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([item[0] for item in calls], ["text", "document", "image"])
             self.assertEqual(len({item[2] for item in calls}), 3)
 
-    async def test_09_partial_attachment_retry_does_not_repeat_completed_parts(self):
+    async def test_11_partial_attachment_retry_does_not_repeat_completed_parts(self):
         handler = load_handler()
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

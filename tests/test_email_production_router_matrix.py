@@ -71,6 +71,9 @@ class ProductionRouterTests(unittest.TestCase):
         d={"classification":{"category":"newsletter_marketing"},"importance":{"level":"low"},"notification":{"should_notify":False},"action":{},"deadline":{},"risk":{}}
         with mock.patch.object(router, "settings", return_value={"all_mail_push":True}):
             self.assertTrue(router.should_push_notification(d))
+    def test_15_account_status_notice_always_pushes(self):
+        d={"classification":{"category":"account_status_notice"},"importance":{"level":"normal"},"notification":{"should_notify":False},"action":{},"deadline":{},"attachments":{},"risk":{}}
+        self.assertTrue(router.should_push_notification(d))
 
 if __name__ == '__main__':
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(ProductionRouterTests)

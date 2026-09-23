@@ -80,6 +80,49 @@ ROOT_ALIASES = {
     "risk_notes": "risk",
     "tags": "topic_tags",
 }
+
+
+def _semantic_key(value: Any) -> str:
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(value or "").strip())
+    return re.sub(r"[^a-z0-9\u3400-\u9fff]+", "_", text.lower()).strip("_")
+
+
+def _infer_open_semantic_fields(source: Dict[str, Any], repairs: List[str]) -> Dict[str, Any]:
+    """Recover familiar semantic concepts without requiring an exhaustive field whitelist."""
+    out = dict(source)
+    for key, value in list(source.items()):
+        if key in CORE_KEYS or key in ROOT_ALIASES:
+            continue
+        name = _semantic_key(key)
+        target = ""
+        if re.search(r"(?:^|_)(?:category|classification|intent|purpose|email_type|mail_type)(?:_|$)|类别|分类|意图|邮件类型", name):
+            target = "category"
+        elif re.search(r"(?:^|_)(?:importance|priority|severity|urgency)(?:_|$)|重要性|优先级|紧急度", name):
+            target = "importance"
+        elif re.search(r"(?:^|_)(?:should_notify|notify|push|alert)(?:_|$)|是否通知|是否推送", name) and isinstance(value, (bool, int)):
+            target = "should_notify"
+        elif re.search(r"(?:^|_)(?:summary|abstract|digest|overview)(?:_|$)|摘要|概述", name) and not isinstance(value, Mapping):
+            target = "summary"
+        elif re.search(r"(?:^|_)(?:action|task|todo|next_step|required_action)(?:_|$)|行动|任务|待办|下一步", name):
+            target = "action"
+        elif re.search(r"(?:^|_)(?:deadline|due_date|due_time|expiry|expiration)(?:_|$)|截止|到期", name):
+            target = "deadline"
+        elif re.search(r"(?:^|_)(?:attachment_policy|file_policy)(?:_|$)|附件策略", name):
+            target = "attachment_policy"
+        elif re.search(r"(?:^|_)(?:risk|security_risk|threat)(?:_|$)|风险", name):
+            target = "risk"
+        if target and target not in out:
+            out[target] = value
+            repairs.append(f"semantic-key:{key}->{target}")
+    return out
+
+
+def _tolerate_unknown_fields(
+    value: Mapping[str, Any], allowed: set[str], path: str, repairs: List[str]
+) -> None:
+    unknown = sorted(str(key) for key in set(value) - allowed)
+    if unknown:
+        repairs.append(f"tolerate:{path}.unknown=" + ",".join(unknown[:12]))
 IMPORTANCE_ALIASES = {
     "普通": "normal", "一般": "normal", "正常": "normal",
     "低": "low", "较低": "low",
@@ -600,10 +643,10 @@ def normalize_and_expand_detailed(
     if not isinstance(raw, Mapping):
         return None, ["semantic core root must be an object"], repairs, model_keys
 
-    source = _apply_root_aliases(dict(raw), repairs)
+    source = _infer_open_semantic_fields(_apply_root_aliases(dict(raw), repairs), repairs)
     grounding_source = _source_text(facts)
     hard_errors = _scan_forbidden(source)
-    hard_errors.extend(_unknown_keys(source, CORE_KEYS, "core"))
+    _tolerate_unknown_fields(source, CORE_KEYS, "core", repairs)
 
     category_raw = source.get("category")
     category = _category(category_raw)
@@ -830,13 +873,24 @@ def normalize_and_expand_detailed(
     alias_date = _text(deadline.pop("date", ""), 120)
     alias_time = _text(deadline.pop("time", ""), 80)
     alias_due = _text(deadline.pop("due", ""), 160)
+    open_date_parts = []
+    for key, value in deadline.items():
+        if key in DEADLINE_KEYS or key == "has_deadline" or isinstance(value, (Mapping, list)):
+            continue
+        if re.search(r"date|time|due|deadline|expiry|expiration|截止|日期|时间|到期", _semantic_key(key)):
+            text = _text(value, 160)
+            if text:
+                open_date_parts.append(text)
     if not deadline.get("date_text") and (alias_date or alias_time or alias_due):
         deadline["date_text"] = " ".join(
             value for value in (alias_date, alias_time, alias_due) if value
         )
         repairs.append("canonicalize:deadline_date_time_to_date_text")
+    if not deadline.get("date_text") and open_date_parts:
+        deadline["date_text"] = " ".join(open_date_parts[:3])
+        repairs.append("semantic-key:deadline_open_fields->date_text")
     deadline_allowed = set(DEADLINE_KEYS) | {"has_deadline"}
-    hard_errors.extend(_unknown_keys(deadline, deadline_allowed, "core.deadline"))
+    _tolerate_unknown_fields(deadline, deadline_allowed, "core.deadline", repairs)
     deadline.pop("has_deadline", None)
     deadline_datetime = _text(deadline.get("datetime"), 100)
     deadline_text = _text(deadline.get("date_text"), 200)
@@ -983,7 +1037,7 @@ def normalize_and_expand_detailed(
     if action_value is not None and not isinstance(action_value, (str, Mapping, bool)):
         hard_errors.append("core.action must be null, false, string, or object")
     action_allowed = set(ACTION_KEYS) | {"required"}
-    hard_errors.extend(_unknown_keys(action, action_allowed, "core.action"))
+    _tolerate_unknown_fields(action, action_allowed, "core.action", repairs)
     action.pop("required", None)
     action_type = _text(action.get("type"), 80)
     action_description = _text(action.get("description"), 600)
@@ -1078,7 +1132,7 @@ def normalize_and_expand_detailed(
     risk = _mapping(risk_value)
     if not isinstance(risk_value, Mapping):
         hard_errors.append("core.risk must be an object or string")
-    hard_errors.extend(_unknown_keys(risk, RISK_KEYS, "core.risk"))
+    _tolerate_unknown_fields(risk, RISK_KEYS, "core.risk", repairs)
     risk_level = _enum(risk.get("level"), RISK_LEVELS, RISK_LEVEL_ALIASES, "none")
     risk_notes = _text_list(risk.get("notes"), 8, 360)
     if risk_level == "none" and risk_notes:

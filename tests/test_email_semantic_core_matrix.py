@@ -119,9 +119,11 @@ class CoreSchemaTests(unittest.TestCase):
         self.assertFalse(errors)
         self.assertEqual(decision["classification"]["category"], "school_notice")
 
-    def test_05_unknown_core_key_rejected(self):
+    def test_05_unknown_descriptive_core_key_is_tolerated(self):
         value = valid_core(); value["extra"] = True
-        self.assertIsNone(self.expand(value)[0])
+        decision, errors = self.expand(value)
+        self.assertIsNotNone(decision)
+        self.assertEqual(errors, [])
 
     def test_06_missing_optional_core_key_repaired(self):
         value = valid_core(); del value["topic_tags"]; del value["uncertainties"]
@@ -797,13 +799,14 @@ class EngineIntegrationTests(unittest.TestCase):
         result = engine.analyze_email(email_fixture(), {}, {}, settings_override=self.settings, transport=transport)
         self.assertFalse(result["fallback_used"])
 
-    def test_26_invalid_core_fallback(self):
+    def test_26_unknown_descriptive_field_does_not_force_fallback(self):
         def transport(prompt, settings):
             value = valid_core(); value["unexpected_field"] = "unsafe ambiguity"
             return {"parsed": value, "latency_ms": 3, "model": "test-model"}
         result = engine.analyze_email(email_fixture(), {"category": "学校通知"}, {}, settings_override=self.settings, transport=transport)
-        self.assertTrue(result["fallback_used"])
-        self.assertEqual(result["error_code"], "schema_invalid")
+        self.assertFalse(result["fallback_used"])
+        self.assertEqual(result["error_code"], "")
+        self.assertEqual(result["validated_category"], "school_notice")
 
     def test_27_timeout_fallback(self):
         def transport(prompt, settings):
@@ -813,7 +816,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue(result["timeout"])
 
     def test_28_prompt_version_invalidates_old_cache(self):
-        self.assertIn("readable_grounded_core", engine.PROMPT_VERSION)
+        self.assertIn("tolerant_grounded_core", engine.PROMPT_VERSION)
         self.assertIn("READABLE_GROUNDED_CORE", engine.MARKER)
 
 

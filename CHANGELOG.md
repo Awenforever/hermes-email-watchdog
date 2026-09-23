@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 - 2026-09-23
+
+- Replace closed-whitelist rejection of descriptive model fields with tolerant
+  semantic-key recovery and grounding-first normalization.
+- Ignore harmless future fields while retaining hard rejection for forbidden
+  side effects, ungrounded facts, malformed roots, and unsafe attachment actions.
+- Treat grounded account/service suspension and deactivation notices as
+  actionable even when the model format is unusable, and never suppress the
+  `account_status_notice` category under actionable notification policy.
+- Invalidate old semantic cache entries with the tolerant-core prompt version.
+
 ## 0.3.0 - 2026-09-23
 
 - Make USTC `deepseek-flash` the owner of every production semantic decision;
