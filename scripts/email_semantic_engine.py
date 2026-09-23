@@ -365,7 +365,7 @@ def _semantic_hints(email: Mapping[str, Any], subject: str, body: str, features:
         "verification_code_phrase": has(
             r"验证码|校验码|动态口令|一次性密码|登录码|安全码|认证码|短信码|"
             r"\botp\b|one[- ]time password|verification code|security code|"
-            r"authentication code|auth code|passcode|\b2fa\b"
+            r"authentication code|auth code|passcode|\byour\s+code\b|\b2fa\b"
         ),
         "risk_phrase": has(
             r"\bphishing\b|suspicious (?:login|activity)|unauthori[sz]ed|security alert|"

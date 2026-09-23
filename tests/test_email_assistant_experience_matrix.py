@@ -38,6 +38,14 @@ def load_handler():
 
 
 class AssistantExperienceTests(unittest.TestCase):
+    def test_00_markdown_action_link_keeps_required_token(self):
+        handler = load_handler()
+        source = "[确认账户](https://example.test/confirm?token=secret123)\n\nhttps://tracker.test/open?id=secret"
+        cleaned = handler._sanitize_notification(source)
+        self.assertIn("[确认账户](https://example.test/confirm?token=secret123)", cleaned)
+        self.assertIn("https://tracker.test/open", cleaned)
+        self.assertNotIn("tracker.test/open?id=secret", cleaned)
+
     def test_01_defaults_use_deepseek_with_qwen_fallback_and_no_rule_bypass(self):
         cfg = email_config.DEFAULT_CONFIG
         self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")

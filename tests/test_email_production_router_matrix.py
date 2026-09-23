@@ -74,6 +74,9 @@ class ProductionRouterTests(unittest.TestCase):
     def test_15_account_status_notice_always_pushes(self):
         d={"classification":{"category":"account_status_notice"},"importance":{"level":"normal"},"notification":{"should_notify":False},"action":{},"deadline":{},"attachments":{},"risk":{}}
         self.assertTrue(router.should_push_notification(d))
+    def test_16_personal_correspondence_respects_semantic_notify(self):
+        d={"classification":{"category":"personal_or_general"},"importance":{"level":"low"},"notification":{"should_notify":True},"action":{},"deadline":{},"attachments":{},"risk":{}}
+        self.assertTrue(router.should_push_notification(d))
 
 if __name__ == '__main__':
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(ProductionRouterTests)

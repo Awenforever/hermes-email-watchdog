@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0 - 2026-09-24
+
+- Add a read-only, isolated historical-mail acceptance harness and require new
+  representative samples for every quality round without mutating mailbox,
+  production learning, calendar, or seen state.
+- Replace generic account and mail layouts with intent-specific cards for
+  verification codes, confirmations, service suspension, authorization,
+  approval, invoices, events, personal mail, scholarly alerts, and weekly
+  research reports.
+- Reject incomplete or untranslated model actions, forwarding chrome,
+  redundant excerpts, expired reminder creation, irrelevant policy/footer
+  links, duplicate canonical URLs, and stale awareness-notice pseudo-actions.
+- Preserve functional token-bearing Markdown links through the final transport
+  sanitizer while continuing to scrub exposed plain-text tracking URLs.
+- Safely unpack bounded invoice ZIP files, forward PDF/OFD receipts, and honor
+  semantic `list_only` decisions so expired QR codes and other stale files are
+  not sent automatically.
+- Keep personal correspondence visible, suppress genuine marketing, resolve
+  yearless deadlines against the message date, and render expired deadlines as
+  historical status instead of creating calendars or reminders.
+
 ## 0.5.1 - 2026-09-24
 
 - Normalize provider-specific rich key-point objects to their user-facing text before validation and rendering, preventing Python/JSON object syntax from leaking into WeChat.

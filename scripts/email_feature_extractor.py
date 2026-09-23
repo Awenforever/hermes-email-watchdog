@@ -91,7 +91,7 @@ def tokenize(text: str, max_tokens: int = 120) -> List[str]:
 _CODE_CONTEXT_RE = re.compile(
     r"(?i)(验证码|校验码|动态口令|一次性密码|登录码|安全码|认证码|短信码|"
     r"\botp\b|one[- ]time password|verification code|security code|"
-    r"authentication code|auth code|passcode|\b2fa\b)"
+    r"authentication code|auth code|passcode|\byour\s+code\b|\b2fa\b)"
 )
 
 
@@ -111,6 +111,8 @@ def extract_code_candidates(text: str) -> List[str]:
         if not _CODE_CONTEXT_RE.search(window):
             continue
         code = match.group(1)
+        if len(code) == 4 and 2000 <= int(code) <= 2100:
+            continue
         if code not in seen:
             out.append(code)
             seen.add(code)

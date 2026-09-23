@@ -190,6 +190,76 @@ Best regards""",
         )["text"]
         self.assertIn("**report.pdf** · 下载失败，请在邮箱查看", text)
 
+    def test_truncated_model_action_is_replaced_by_complete_security_guidance(self):
+        email = {
+            "account": "USTC", "subject": "[GitHub] OAuth application added",
+            "from_name": "GitHub", "body": "OpenCode was authorized with read:user.",
+            "links": [{"url": "https://github.com/settings/security-log", "display_text": "security log"}],
+        }
+        decision = {
+            "classification": {"category": "account_security", "label": "账户安全"},
+            "importance": {"level": "high"},
+            "notification": {"summary": "OpenCode 已获授权访问账户。", "key_points": [], "original_policy": "none"},
+            "action": {"required": True, "description": "please co", "next_step": ""},
+            "deadline": {"has_deadline": False}, "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertNotIn("please co", text)
+        self.assertIn("如非本人操作", text)
+
+    def test_scholar_alert_uses_titles_and_cleans_tracking_urls(self):
+        email = {
+            "account": "USTC", "subject": "Kaiming He - 新的结果", "from_addr": "scholaralerts-noreply@google.com",
+            "body": "A Useful Paper on Vision\n( https://example.org/paper.pdf&hl=zh-CN&sa=X&scisig=secret )",
+            "links": [{"url": "https://example.org/paper.pdf&hl=zh-CN&sa=X&scisig=secret", "display_text": ""}],
+        }
+        decision = {
+            "classification": {"category": "academic_report_digest", "label": "学术报告摘要"},
+            "importance": {"level": "low"},
+            "notification": {"summary": "新增一条检索结果。", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False}, "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("[A Useful Paper on Vision](https://example.org/paper.pdf)", text)
+        self.assertNotIn("scisig", text)
+
+    def test_invoice_policy_link_is_not_presented_as_payment_action(self):
+        email = {
+            "account": "USTC", "subject": "网上购票系统-电子发票通知", "from_addr": "12306@rails.com.cn",
+            "body": "发票号码：26349119423004141192，车次：G7449，票价：32.00元。",
+            "links": [{"url": "https://www.12306.cn/mormhweb/mobile_zxdt/notice.html", "display_text": "铁路电子发票政策公告"}],
+        }
+        decision = {
+            "classification": {"category": "invoice_receipt", "label": "发票/收据"},
+            "importance": {"level": "normal"},
+            "notification": {"summary": "", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False}, "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("`26349119423004141192`", text)
+        self.assertIn("`G7449`", text)
+        self.assertNotIn("快捷操作", text)
+        self.assertNotIn("政策公告", text)
+
+    def test_english_model_action_is_rewritten_for_orcid_authorization(self):
+        email = {
+            "account": "USTC", "subject": "[ORCID] You have new notifications",
+            "from_addr": "DoNotReply@notify.orcid.org",
+            "body": "Crossref would like to auto-update your ORCID record. Please click Grant permissions.",
+            "links": [{"url": "https://orcid.org/inbox/encrypted/token/action", "display_text": "Grant permission"}],
+        }
+        decision = {
+            "classification": {"category": "account_status_notice", "label": "账户状态"},
+            "importance": {"level": "normal"},
+            "notification": {"summary": "Crossref 请求更新 ORCID 成果。", "key_points": [], "original_policy": "none"},
+            "action": {"required": True, "description": "please visit your ORCID", "next_step": ""},
+            "deadline": {"has_deadline": False}, "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertNotIn("please visit", text)
+        self.assertIn("确认是否授权 Crossref", text)
+        self.assertIn("授权 Crossref 更新 ORCID", text)
+
 
 if __name__ == "__main__":
     unittest.main()

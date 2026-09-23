@@ -10,6 +10,7 @@ import shutil
 from html import unescape
 import sys
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -441,6 +442,7 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
     settings = email_config.get_delivery_settings() if email_config else {}
     if (
         policy in ("none", "list_only")
+        and not analysis.get("production_semantic_route")
         and settings.get("auto_forward_safe_attachments", True)
         and settings.get("forward_attachments_to_weixin", True)
     ):
@@ -478,8 +480,22 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
 
     result = []
     if saved_paths:
+        # Invoice providers often wrap PDF/OFD receipts in a ZIP.  Expand only
+        # a tightly bounded, traversal-safe set of document members so Weixin
+        # can deliver the actual receipt instead of an opaque archive.
+        expanded = []
+        expanded_archives = set()
+        for path in list(saved_paths):
+            if str(path).lower().endswith(".zip"):
+                children = _extract_safe_archive_documents(path, save_dir, settings)
+                if children:
+                    expanded_archives.add(str(path))
+                    expanded.extend(children)
+        saved_paths.extend(expanded)
         for path in saved_paths:
             allowed, reason, size_bytes = _attachment_forward_policy(path, settings)
+            if str(path) in expanded_archives:
+                allowed, reason = False, "archive_expanded"
             att = {
                 "filename": os.path.basename(path),
                 "local_path": path,
@@ -496,6 +512,47 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         for att in result:
             _persist_attachment(email, att)
     return result
+
+
+def _extract_safe_archive_documents(archive_path, save_dir, settings=None):
+    """Extract safe invoice/report files from a small ZIP without traversal."""
+    import zipfile
+    settings = settings or (email_config.get_delivery_settings() if email_config else {})
+    allowed = {".pdf", ".ofd", ".xml", ".txt", ".png", ".jpg", ".jpeg"}
+    try:
+        max_bytes = min(int(settings.get("attachment_max_bytes") or 25 * 1024 * 1024), 50 * 1024 * 1024)
+    except Exception:
+        max_bytes = 25 * 1024 * 1024
+    root = Path(save_dir).resolve()
+    output = []
+    try:
+        with zipfile.ZipFile(archive_path) as zf:
+            members = [m for m in zf.infolist() if not m.is_dir()]
+            if len(members) > 20 or sum(max(0, m.file_size) for m in members) > max_bytes:
+                return []
+            for member in members:
+                leaf = Path(member.filename.replace("\\", "/")).name
+                if not leaf or Path(leaf).suffix.lower() not in allowed or member.file_size <= 0:
+                    continue
+                target = (root / (Path(archive_path).stem + "_contents") / leaf).resolve()
+                if root not in target.parents:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as source, target.open("wb") as destination:
+                    remaining = max_bytes
+                    while remaining > 0:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        destination.write(chunk)
+                        remaining -= len(chunk)
+                    if source.read(1):
+                        target.unlink(missing_ok=True)
+                        continue
+                output.append(str(target))
+    except Exception:
+        return []
+    return output
 
 
 def _attachment_forward_policy(path: str, settings: dict | None = None) -> tuple[bool, str, int]:
@@ -527,8 +584,11 @@ def _attachment_forward_policy(path: str, settings: dict | None = None) -> tuple
     if not safe_exts:
         safe_exts = {
             ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".txt", ".csv",
-            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".7z",
+            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".7z", ".ofd",
         }
+    # OFD is the official structured e-invoice format used by Chinese tax and
+    # railway systems.  It is a data document, not executable content.
+    safe_exts.add(".ofd")
     suffix = resolved.suffix.lower()
     if suffix not in safe_exts:
         return False, "unsafe_extension", size
@@ -552,6 +612,12 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
     sched_id = f"{msg_id}:main"
     action = analysis.get("action_needed") or {}
     deadline_value = deadline.get("datetime") or deadline.get("date_text") or ""
+    deadline_value = _resolve_deadline_value(deadline_value, email.get("date_sent") or email.get("date"))
+    resolved_deadline = _parse_datetime(deadline_value, deadline.get("timezone") or settings.get("timezone", "Asia/Shanghai"))
+    if resolved_deadline is None or resolved_deadline <= datetime.now(resolved_deadline.tzinfo):
+        # Never create active calendar/reminder state for an ambiguous or
+        # already expired historical deadline.
+        return []
     if not reminders and deadline_value:
         reminders = _default_reminders(
             deadline_value,
@@ -602,6 +668,32 @@ def _parse_datetime(value, tz_name="Asia/Shanghai"):
         except Exception:
             dt = dt.replace(tzinfo=timezone(timedelta(hours=8)))
     return dt
+
+
+def _resolve_deadline_value(value, message_date=""):
+    """Resolve common Chinese/ISO deadline text using the message year."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if _parse_datetime(raw) is not None:
+        return raw
+    match = re.search(r"(?:(20\d{2})\s*[年/-]\s*)?(\d{1,2})\s*[月/-]\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*[:：点时]\s*(\d{2})?)?", raw)
+    if not match:
+        return raw
+    year = int(match.group(1)) if match.group(1) else None
+    if year is None:
+        try:
+            sent = parsedate_to_datetime(str(message_date))
+            year = sent.year
+        except Exception:
+            iso = re.search(r"(20\d{2})", str(message_date))
+            year = int(iso.group(1)) if iso else datetime.now().year
+    month, day = int(match.group(2)), int(match.group(3))
+    hour, minute = int(match.group(4) or 23), int(match.group(5) or (59 if not match.group(4) else 0))
+    try:
+        return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("Asia/Shanghai")).isoformat(timespec="minutes")
+    except Exception:
+        return raw
 
 
 def _default_reminders(deadline_value, title, settings):

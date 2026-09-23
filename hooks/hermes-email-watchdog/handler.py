@@ -388,10 +388,18 @@ def _notification_ttl_seconds(text: str, metadata: dict | None = None) -> int:
 def _sanitize_notification(text: str) -> str:
     """Bound transport size and remove internal or secret-bearing noise."""
     value = str(text or "").replace("production semantic route owns analysis", "")
-    # Query strings commonly contain tracking IDs, signed invoice URLs and
-    # unsubscribe secrets.  Preserve the destination while stripping secrets.
+    # Markdown destinations must remain byte-for-byte usable: confirmation,
+    # password-reset and invoice links frequently carry required tokens.  Hide
+    # them from generic plain-text scrubbing, then restore them.
+    protected = []
+    def _protect(match):
+        protected.append(match.group(0))
+        return f"@@EMAIL_WATCHDOG_LINK_{len(protected)-1}@@"
+    value = re.sub(r"\[[^\]\n]+\]\(https?://[^)\s]+\)", _protect, value)
     value = re.sub(r"(https?://[^\s?#]+)[?#][^\s]+", r"\1", value)
     value = re.sub(r"\b[A-Za-z0-9_\-+/=]{120,}\b", "[敏感长参数已省略]", value)
+    for index, markdown_link in enumerate(protected):
+        value = value.replace(f"@@EMAIL_WATCHDOG_LINK_{index}@@", markdown_link)
     value = re.sub(r"\n{3,}", "\n\n", value).strip()
     max_chars = int(os.getenv("HERMES_EMAIL_WATCHDOG_MAX_NOTIFICATION_CHARS", "1800") or "1800")
     max_chars = max(400, min(max_chars, 4000))
@@ -922,7 +930,7 @@ def _safe_forward_attachments(metadata: dict | None) -> list[dict]:
     max_bytes = max(1 * 1024 * 1024, min(max_bytes, 100 * 1024 * 1024))
     safe_suffixes = {
         ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".txt", ".csv",
-        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".7z",
+        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".zip", ".7z", ".ofd",
     }
     result = []
     seen = set()

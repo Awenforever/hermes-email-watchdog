@@ -19,7 +19,7 @@ MARKER = "EMAIL_WATCHDOG_PRODUCTION_ROUTER_V1"
 _CODE_RE = re.compile(
     r"(?i)(验证码|校验码|动态口令|一次性密码|登录码|安全码|认证码|短信码|"
     r"verification code|one[- ]time password|security code|authentication code|"
-    r"auth code|passcode|\botp\b|2fa)"
+    r"auth code|passcode|\byour\s+code\b|\bcode\b|\botp\b|2fa)"
 )
 _SECURITY_RE = re.compile(
     r"(?i)(可疑登录|异常登录|未经授权|账户被锁|账号被锁|账户入侵|密码重置|"
@@ -86,6 +86,11 @@ def classify_fast_lane(email: Mapping[str, Any], features: Mapping[str, Any]) ->
         _text(item, 16) for item in list(features.get("code_candidates") or [])
         if re.fullmatch(r"\d{4,8}", _text(item, 16))
     ]
+    if not candidates and _CODE_RE.search(scope):
+        candidates = [
+            value for value in re.findall(r"(?<!\d)(\d{4,8})(?!\d)", scope)
+            if not (len(value) == 4 and 2000 <= int(value) <= 2100)
+        ][:3]
     anti_fraud_notice = bool(_ANTI_FRAUD_RE.search(scope))
     if candidates and not anti_fraud_notice and (_CODE_RE.search(scope) or hints.get("verification_code_phrase")):
         return {"fast_lane": True, "kind": "verification_code", "reasons": ["grounded_verification_code"], "code": candidates[0]}
@@ -245,6 +250,11 @@ def should_push_notification(decision: Mapping[str, Any]) -> bool:
     }:
         return True
     if category == "academic_report_digest":
+        return bool(notification.get("should_notify", True))
+    # Personal correspondence is not advertising.  If the semantic model has
+    # explicitly chosen to notify, preserve that human communication even when
+    # it has no formal task/deadline and is naturally low priority.
+    if category == "personal_or_general":
         return bool(notification.get("should_notify", True))
     if _text(importance.get("level"), 32).lower() in {"high", "critical", "urgent"}:
         return True

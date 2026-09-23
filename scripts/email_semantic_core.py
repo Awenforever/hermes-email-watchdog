@@ -732,6 +732,11 @@ def normalize_and_expand_detailed(
     verification_code_grounded = bool(
         code_candidates and hints.get("verification_code_phrase")
     )
+    if verification_code_grounded and category in {
+        "unknown_needs_llm", "personal_or_general", "account_status_notice",
+    }:
+        category = "verification_code"
+        repairs.append("consistency:grounded_code_requires_verification_category")
     if category == "verification_code" and not verification_code_grounded:
         category = (
             "academic_report_digest"
