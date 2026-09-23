@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import copy
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -139,6 +142,24 @@ class ConfigMigrationTests(unittest.TestCase):
         }
         cfg = email_onboarding._sanitize_existing_config(custom)
         self.assertEqual(cfg["paths"]["attachment_dir"], "/srv/private-mail-files")
+
+    def test_migrate_current_executes_v5_storage_migration_atomically(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config = root / "config.json"
+            config.write_text(json.dumps({
+                "version": 4,
+                "notification": {"renderer": "intelligent_v2"},
+                "paths": {"attachment_dir": "/opt/data/.hermes-home/EmailAttachments"},
+            }), encoding="utf-8")
+            with mock.patch.object(email_onboarding, "CONFIG_PATH", config), mock.patch.object(
+                email_onboarding, "BACKUP_DIR", root / "backups"
+            ), mock.patch.object(email_onboarding, "TRANSACTION_LOCK_FILE", root / "onboarding.lock"):
+                result = email_onboarding.migrate_current_config()
+            migrated = json.loads(config.read_text(encoding="utf-8"))
+        self.assertTrue(result["changed"])
+        self.assertEqual(migrated["version"], 5)
+        self.assertIn("plugin-data/hermes-email-watchdog/attachments", migrated["paths"]["attachment_dir"])
 
     def test_release_migration_preserves_unknown_and_identity_fields(self):
         raw = {

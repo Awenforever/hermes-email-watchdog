@@ -1077,7 +1077,8 @@ def migrate_current_config() -> dict[str, Any]:
         migrated, changed_v2 = _migrate_known_v2_assistant_policy(raw)
         migrated, changed_v3 = _migrate_known_v3_assistant_policy(migrated)
         migrated, changed_v4 = _migrate_known_v4_presentation_policy(migrated)
-        changed = changed_v2 or changed_v3 or changed_v4
+        migrated, changed_v5 = _migrate_known_v5_storage_policy(migrated)
+        changed = changed_v2 or changed_v3 or changed_v4 or changed_v5
         if not changed:
             return {
                 "passed": True,
