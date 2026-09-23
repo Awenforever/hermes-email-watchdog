@@ -396,6 +396,46 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual(result[0]["filename"], "report.pdf")
         self.assertTrue(result[0]["send_to_weixin"])
 
+    def test_15c_link_only_invoice_downloads_and_forwards_pdf(self):
+        with tempfile.TemporaryDirectory() as td:
+            email = {
+                "id": "invoice-link", "msg_id": "invoice-link",
+                "has_attachments": False,
+                "links": [{
+                    "display_text": "发票PDF文件下载",
+                    "url": "https://invoice.example.test/files/invoice-42.pdf?token=secret",
+                }],
+            }
+            analysis = {
+                "production_semantic_route": True,
+                "semantic_category": "invoice_receipt",
+                "attachment_handling": {"policy": "none"},
+            }
+            settings = {
+                "auto_download_attachments": True,
+                "forward_attachments_to_weixin": True,
+                "attachment_max_bytes": 1024 * 1024,
+                "attachment_safe_extensions": [".pdf"],
+            }
+            response = mock.MagicMock()
+            response.geturl.return_value = "https://invoice.example.test/files/invoice-42.pdf"
+            response.headers = {"Content-Length": "18"}
+            response.read.return_value = b"%PDF-safe-invoice"
+            context = mock.MagicMock()
+            context.__enter__.return_value = response
+            context.__exit__.return_value = False
+            with mock.patch.object(email_delivery.email_config, "get_delivery_settings", return_value=settings), mock.patch.object(
+                email_delivery, "_save_root", return_value=td
+            ), mock.patch.object(
+                email_delivery, "_public_https_url", return_value=True
+            ), mock.patch.object(
+                email_delivery, "urlopen", return_value=context
+            ), mock.patch.object(email_delivery, "_persist_attachment"):
+                result = email_delivery.download_attachments(email, analysis, {})
+        self.assertEqual(result[0]["filename"], "invoice-42.pdf")
+        self.assertEqual(result[0]["source"], "invoice_pdf_link")
+        self.assertTrue(result[0]["send_to_weixin"])
+
     def test_16_himalaya_retry_returns_overwritten_existing_attachment(self):
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "report.pdf"

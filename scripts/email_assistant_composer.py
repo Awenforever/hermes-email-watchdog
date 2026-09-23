@@ -446,6 +446,13 @@ def _fallback_action(category: str, body: str, points: Sequence[str]) -> str:
     return ""
 
 
+def _is_awareness_notice(source: str) -> bool:
+    return bool(re.search(
+        r"(?i)反诈|防骗|防范.{0,18}(?:诈骗|电诈)|(?:诈骗|电诈).{0,24}(?:提醒|警示|注意防范|增强防范意识)|fraud awareness",
+        source,
+    ))
+
+
 def _deadline_display(deadline: Mapping[str, Any], email: Mapping[str, Any]) -> Tuple[str, bool]:
     raw_datetime = _text(deadline.get("datetime"), 120)
     raw_text = _text(deadline.get("date_text"), 160)
@@ -564,13 +571,14 @@ def render_notification(
                     description = ""
                 else:
                     next_step = ""
-        if re.search(r"防范.*(?:诈骗|电诈)|反诈", subject):
+        awareness_notice = _is_awareness_notice(f"{subject}\n{body}")
+        if awareness_notice:
             description = next_step = ""
         if description:
             action_lines.append(description)
         if next_step and next_step.casefold() != description.casefold():
             action_lines.append(f"下一步：{next_step}")
-        if not action_lines and not re.search(r"防范.*(?:诈骗|电诈)|反诈", subject):
+        if not action_lines and not awareness_notice:
             fallback = _fallback_action(category, f"{subject}\n{body}", points_for_action)
             if fallback:
                 action_lines.append(fallback)

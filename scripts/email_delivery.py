@@ -2,9 +2,11 @@
 """Email delivery planner side effects and chat-ready formatting."""
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import shutil
 from html import unescape
@@ -12,6 +14,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -434,15 +438,21 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
     """Download allowed attachments and persist paths in email_store.attachments."""
     attachments = email.get("attachments") or []
     has_attachments = email.get("has_attachments") or email.get("has_attachment") or bool(attachments)
-    if not has_attachments:
-        return []
-
-    policy = (analysis.get("attachment_handling") or {}).get("policy") or "none"
-    policy = _policy_after_domain_guard(policy, email)
     settings = email_config.get_delivery_settings() if email_config else {}
     category = str(
         analysis.get("semantic_category") or analysis.get("final_category") or ""
     ).strip().lower()
+    if not has_attachments:
+        if (
+            category == "invoice_receipt"
+            and settings.get("auto_download_attachments", True)
+            and settings.get("forward_attachments_to_weixin", True)
+        ):
+            return _download_linked_invoice_pdfs(email, settings)
+        return []
+
+    policy = (analysis.get("attachment_handling") or {}).get("policy") or "none"
+    policy = _policy_after_domain_guard(policy, email)
     # A weekly research report is incomplete without its report document.  The
     # semantic model may conservatively choose list_only for an unfamiliar
     # sender, but a bounded PDF still passes the normal extension, size and
@@ -528,6 +538,97 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         for att in result:
             _persist_attachment(email, att)
     return result
+
+
+def _public_https_url(value):
+    """Reject local/private destinations before and after HTTP redirects."""
+    try:
+        parsed = urlparse(str(value or ""))
+        host = (parsed.hostname or "").strip().lower()
+        if parsed.scheme.lower() != "https" or not host or host in {"localhost", "localhost.localdomain"}:
+            return False
+        try:
+            addresses = [ipaddress.ip_address(host)]
+        except ValueError:
+            addresses = [
+                ipaddress.ip_address(row[4][0])
+                for row in socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+            ]
+        return bool(addresses) and all(
+            not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                 or ip.is_multicast or ip.is_unspecified)
+            for ip in addresses
+        )
+    except Exception:
+        return False
+
+
+def _download_linked_invoice_pdfs(email, settings=None):
+    """Fetch a direct, bounded PDF invoice when the mail only contains a link."""
+    settings = settings or (email_config.get_delivery_settings() if email_config else {})
+    candidates = []
+    for item in email.get("links") or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        label = str(item.get("display_text") or item.get("label") or "").strip()
+        path = unquote(urlparse(url).path or "")
+        if (
+            (re.search(r"(?i)(?:invoice|发票).{0,20}(?:pdf|下载)", f"{label} {path}") or path.lower().endswith(".pdf"))
+            and _public_https_url(url)
+        ):
+            candidates.append((url, label, path))
+    if not candidates:
+        return []
+    try:
+        max_bytes = int(settings.get("attachment_max_bytes") or 25 * 1024 * 1024)
+    except Exception:
+        max_bytes = 25 * 1024 * 1024
+    max_bytes = max(1 * 1024 * 1024, min(max_bytes, 50 * 1024 * 1024))
+    message_part = re.sub(
+        r"[^A-Za-z0-9._-]+", "_", str(email.get("msg_id") or email.get("id") or "message")
+    ).strip("._")[:96] or "message"
+    save_dir = Path(_save_root("download_safe")) / datetime.now().strftime("%Y-%m") / message_part
+    save_dir.mkdir(parents=True, exist_ok=True)
+    for url, _label, raw_path in candidates[:2]:
+        name = Path(raw_path).name or f"invoice-{message_part}.pdf"
+        name = re.sub(r"[^A-Za-z0-9._\-\u4e00-\u9fff]+", "_", name)[:180]
+        if not name.lower().endswith(".pdf"):
+            name += ".pdf"
+        target = save_dir / name
+        partial = target.with_suffix(target.suffix + ".part")
+        try:
+            request = Request(url, headers={"User-Agent": "Hermes-Email-Watchdog/0.6"})
+            with urlopen(request, timeout=20) as response:
+                if not _public_https_url(response.geturl()):
+                    continue
+                length = int(response.headers.get("Content-Length") or 0)
+                if length > max_bytes:
+                    continue
+                data = response.read(max_bytes + 1)
+            if len(data) > max_bytes or not data.startswith(b"%PDF-"):
+                continue
+            partial.write_bytes(data)
+            os.replace(partial, target)
+            allowed, reason, size_bytes = _attachment_forward_policy(str(target), settings)
+            att = {
+                "filename": target.name,
+                "local_path": str(target),
+                "download_status": "downloaded",
+                "policy": "download_safe",
+                "size_bytes": size_bytes,
+                "send_to_weixin": allowed,
+                "forward_reason": reason,
+                "source": "invoice_pdf_link",
+            }
+            _persist_attachment(email, att)
+            return [att]
+        except Exception:
+            try:
+                partial.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return []
 
 
 def _extract_safe_archive_documents(archive_path, save_dir, settings=None):

@@ -135,6 +135,27 @@ Copyright © Mitce, All rights reserved.""",
         self.assertIn("需点击链接激活订阅", text)
         self.assertNotIn("退订", text)
 
+    def test_fraud_awareness_is_not_rendered_as_a_task(self):
+        email = {
+            "account": "USTC", "subject": "重要提醒：多名同学遭遇境外诈骗，请注意防范！",
+            "from_addr": "outgoing@ustc.edu.cn",
+            "body": "请增强防范意识，遇可疑情况通过官方渠道核实，绝不转账。",
+        }
+        decision = {
+            "classification": {"category": "school_notice", "label": "学校通知"},
+            "importance": {"level": "high"},
+            "notification": {
+                "content_mode": "summary_only", "summary_style": "bullets", "summary": "",
+                "key_points": ["学校提醒境外交流同学注意防范电信诈骗。"],
+                "original_policy": "none",
+            },
+            "action": {"required": True, "description": "请务必高度重视，增强防范意识"},
+            "deadline": {"has_deadline": False}, "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("通知重点", text)
+        self.assertNotIn("**需要处理**", text)
+
     def test_curated_original_is_one_coherent_quote_not_mail_chrome(self):
         email = {
             "subject": "Fwd: Please review the draft", "from_addr": "person@example.test",
