@@ -286,6 +286,19 @@ def _text_list(value: Any, max_items: int, max_chars: int) -> List[str]:
         return []
     out: List[str] = []
     for item in value:
+        # OpenAI-compatible providers occasionally return a richer point
+        # object even though the response schema asks for a string, e.g.
+        # {"text": "...", "evidence": "..."}.  The evidence belongs to the
+        # grounding trace, not the user-facing sentence.  Normalize the useful
+        # prose here so no downstream renderer can leak Python/JSON syntax.
+        if isinstance(item, Mapping):
+            item = (
+                item.get("text")
+                or item.get("summary")
+                or item.get("point")
+                or item.get("content")
+                or ""
+            )
         text = _text(item, max_chars)
         if text and text not in out:
             out.append(text)

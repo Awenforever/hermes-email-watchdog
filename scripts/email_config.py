@@ -24,7 +24,7 @@ _WARNED = False
 _CACHE = None
 
 DEFAULT_CONFIG = {
-    "version": 4,
+    "version": 5,
     "default_account": "",
     "accounts": [],
     "paths": {

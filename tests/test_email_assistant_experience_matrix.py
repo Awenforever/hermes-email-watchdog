@@ -356,6 +356,21 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual(result[0]["filename"], "report.pdf")
         self.assertTrue(result[0]["send_to_weixin"])
 
+    def test_16_himalaya_retry_returns_overwritten_existing_attachment(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "report.pdf"
+            target.write_bytes(b"old")
+
+            def successful_download(*_args, **_kwargs):
+                target.write_bytes(b"%PDF-new")
+                return mock.Mock(returncode=0, stdout='"Downloaded 1 attachment!"', stderr="")
+
+            with mock.patch.object(email_delivery, "_himalaya_cmd_variants", return_value=[["himalaya"]]), mock.patch.object(
+                email_delivery.subprocess, "run", side_effect=successful_download
+            ):
+                paths = email_delivery._download_himalaya("mail.toml", "42", td)
+        self.assertEqual(paths, [str(target)])
+
 
 class WeixinAttachmentTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_10_text_and_safe_attachments_use_real_adapter_methods(self):

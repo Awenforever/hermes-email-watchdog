@@ -18,8 +18,8 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 
-COMPOSER_VERSION = "intelligent_v2"
-MARKER = "EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V2"
+COMPOSER_VERSION = "intelligent_v2.1"
+MARKER = "EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V2P1"
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -31,6 +31,14 @@ def _items(value: Any) -> List[Any]:
 
 
 def _text(value: Any, limit: int = 4000) -> str:
+    if isinstance(value, Mapping):
+        value = (
+            value.get("text")
+            or value.get("summary")
+            or value.get("point")
+            or value.get("content")
+            or ""
+        )
     return str(value or "").replace("\x00", "").strip()[:limit]
 
 
@@ -177,7 +185,14 @@ def _summary_points(decision: Mapping[str, Any], category: str) -> List[str]:
 
 
 def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
-    low_value = re.compile(r"(?i)unsubscribe|privacy|terms|contact|support|home|website|退订|隐私|条款")
+    low_value = re.compile(
+        r"(?i)unsubscribe|privacy|terms|contact|support|home|website|退订|隐私|条款|"
+        r"举报|identity|agent\.qq\.com(?:/page/(?:identity|report))?"
+    )
+    research_link = re.compile(
+        r"(?i)arxiv\.org|doi\.org|github\.com|openreview\.net|semanticscholar\.org|"
+        r"(?:paper|论文|代码|code|dataset|数据集|report|报告|pdf)"
+    )
     ranked: List[Tuple[int, str, str]] = []
     seen = set()
     for item in _items(email.get("links")):
@@ -190,6 +205,8 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
         seen.add(url)
         haystack = f"{label} {url}"
         score = 20
+        if category == "academic_report_digest":
+            score = 5 if research_link.search(haystack) else 50
         if category == "invoice_receipt" and re.search(r"(?i)viewinvoice|invoice|payment|billing", haystack):
             score, label = 0, "查看并处理账单"
         elif category == "account_status_notice" and re.search(r"(?i)confirm|verify|activate", haystack):
@@ -221,7 +238,16 @@ def _attachment_lines(email: Mapping[str, Any], delivery: Mapping[str, Any]) -> 
             name, status, sent = _text(item, 240), "", None
         if not name or name.casefold() in {"(attachments present)", "attachments present", "attachment present"}:
             continue
-        suffix = " · 已附上" if status == "downloaded" and sent is not False else (" · 已下载" if status == "downloaded" else "")
+        if status == "downloaded" and sent is not False:
+            suffix = " · 已附上"
+        elif status == "downloaded":
+            suffix = " · 已下载，未附送"
+        elif status in {"download_failed", "processing_failed"}:
+            suffix = " · 下载失败，请在邮箱查看"
+        elif status in {"list_only", "listed"}:
+            suffix = " · 仅列出，请在邮箱查看"
+        else:
+            suffix = ""
         out.append(f"- **{name.replace('*', '')}**{suffix}")
     return out[:8]
 

@@ -107,6 +107,21 @@ class CoreSchemaTests(unittest.TestCase):
         self.assertFalse(errors)
         self.assertEqual(decision["notification"]["key_points"][0], "请核对通知中的处理要求")
 
+    def test_02b_rich_point_objects_are_normalized_to_user_facing_text(self):
+        value = valid_core()
+        value["key_points"] = [
+            {"text": "请查看通知并核对要求", "evidence": "请查看通知并核对要求"},
+            {"text": "无需立即回复邮件", "evidence": "无需立即回复邮件"},
+        ]
+        value["summary_evidence"] = ["请查看通知并核对要求", "无需立即回复邮件"]
+        decision, errors = self.expand(value)
+        self.assertFalse(errors)
+        self.assertEqual(
+            decision["notification"]["key_points"],
+            ["请查看通知并核对要求", "无需立即回复邮件"],
+        )
+        self.assertNotIn("'evidence'", "\n".join(decision["notification"]["key_points"]))
+
     def test_03_valid_paragraph(self):
         value = valid_core()
         value.update(summary_style="paragraph", summary="这是一封需要核对的学校通知。", key_points=[])

@@ -762,7 +762,6 @@ def _himalaya_cmd_variants(config_path, args):
 
 
 def _download_himalaya(config_path, msg_id, save_dir):
-    before = _snapshot(save_dir)
     os.makedirs(save_dir, exist_ok=True)
     for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
         try:
@@ -772,8 +771,11 @@ def _download_himalaya(config_path, msg_id, save_dir):
         except Exception:
             continue
         if result.returncode == 0:
-            after = _snapshot(save_dir)
-            return sorted(after - before)
+            # The directory is scoped to one message.  Himalaya may overwrite
+            # an existing attachment during an idempotent retry; set-diffing
+            # filenames would incorrectly report that successful retry as an
+            # empty download.  Return the complete post-download file set.
+            return sorted(_snapshot(save_dir))
     return []
 
 def _download_agently(msg_id, att_id, save_dir):

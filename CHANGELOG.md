@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 - 2026-09-24
+
+- Normalize provider-specific rich key-point objects to their user-facing text before validation and rendering, preventing Python/JSON object syntax from leaking into WeChat.
+- Filter delivery-service identity, report, and unsubscribe footer links from academic briefings while retaining genuine paper, DOI, code, dataset, and report links.
+- Migrate the shipped legacy attachment directory into plugin-owned writable state without changing a genuinely customized attachment path.
+- Make attachment failures explicit in the Markdown card and make Himalaya retries return successfully overwritten files instead of misreporting an empty download.
+
 ## 0.5.0 - 2026-09-23
 
 - Replace the generic summary/body template with an intent-aware Markdown

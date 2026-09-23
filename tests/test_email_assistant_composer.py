@@ -137,6 +137,59 @@ Best regards""",
         self.assertNotIn("Forwarded message", text)
         self.assertNotIn("Dear Edward", text)
 
+    def test_academic_digest_unwraps_model_points_and_drops_footer_links(self):
+        email = {
+            "account": "USTC",
+            "subject": "Fw: 学术研究周报 2026-W33",
+            "from_name": "吴金宏",
+            "from_addr": "vive@mail.ustc.edu.cn",
+            "body": "本期关注 HighFM 与真实数据质量。",
+            "links": [
+                {"url": "https://agent.qq.com/page/identity?token=x", "display_text": "valentines@agent.qq.com"},
+                {"url": "https://agent.qq.com/page/report?type=report", "display_text": "举报"},
+                {"url": "https://agent.qq.com/page/report?type=unsubscribe", "display_text": "退订"},
+            ],
+            "attachments": [{"filename": "report.pdf"}],
+        }
+        decision = {
+            "classification": {"category": "academic_report_digest", "label": "学术报告摘要"},
+            "importance": {"level": "normal"},
+            "notification": {
+                "summary": "", "key_points": [
+                    {"text": "本期聚焦 HighFM。", "evidence": "HighFM 那篇尤其值得关注"},
+                    {"text": "真实数据质量比数量更重要。", "evidence": "AI 合成数据不如真实数据"},
+                ],
+                "original_policy": "none",
+            },
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(
+            email, decision,
+            {"attachments": [{"filename": "report.pdf", "download_status": "downloaded", "send_to_weixin": True}]},
+        )["text"]
+        self.assertIn("本期聚焦 HighFM。", text)
+        self.assertIn("真实数据质量比数量更重要。", text)
+        self.assertNotIn("{'text'", text)
+        self.assertNotIn("快捷操作", text)
+        self.assertNotIn("agent.qq.com", text)
+        self.assertIn("**report.pdf** · 已附上", text)
+
+    def test_attachment_failure_is_explicit_not_silent(self):
+        email = {"subject": "周报", "from_addr": "x@example.test", "attachments": [{"filename": "report.pdf"}]}
+        decision = {
+            "classification": {"category": "academic_report_digest", "label": "学术报告摘要"},
+            "importance": {"level": "normal"},
+            "notification": {"summary": "本期研究周报。", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(
+            email, decision,
+            {"attachments": [{"filename": "report.pdf", "download_status": "download_failed"}]},
+        )["text"]
+        self.assertIn("**report.pdf** · 下载失败，请在邮箱查看", text)
+
 
 if __name__ == "__main__":
     unittest.main()

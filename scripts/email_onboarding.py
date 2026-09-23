@@ -396,6 +396,30 @@ def _migrate_known_v4_presentation_policy(
     return source, True
 
 
+def _migrate_known_v5_storage_policy(
+    data: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Move only shipped legacy attachment roots into plugin-owned state."""
+    source = copy.deepcopy(data) if isinstance(data, dict) else {}
+    paths = source.get("paths") if isinstance(source.get("paths"), dict) else {}
+    notification = source.get("notification") if isinstance(source.get("notification"), dict) else {}
+    if not (
+        int(source.get("version") or 0) == 4
+        and str(notification.get("renderer") or "") == "intelligent_v2"
+    ):
+        return source, False
+    old_attachment = str(paths.get("attachment_dir") or "")
+    if old_attachment in {
+        "~/Documents/EmailAttachments",
+        "$HOME/Documents/EmailAttachments",
+        "/opt/data/.hermes-home/EmailAttachments",
+    }:
+        paths["attachment_dir"] = email_config.DEFAULT_CONFIG["paths"]["attachment_dir"]
+    source["paths"] = paths
+    source["version"] = 5
+    return source, True
+
+
 def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     source = data if isinstance(data, dict) else {}
     try:
@@ -455,9 +479,10 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     # owned by the user.
     allowed, _ = _migrate_known_v3_assistant_policy(allowed)
     allowed, _ = _migrate_known_v4_presentation_policy(allowed)
+    allowed, _ = _migrate_known_v5_storage_policy(allowed)
 
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
-    cfg["version"] = 4
+    cfg["version"] = 5
     cfg["paths"] = {
         key: cfg.get("paths", {}).get(key, email_config.DEFAULT_CONFIG["paths"][key])
         for key in sorted(ALLOWED_PATH_KEYS)
@@ -885,7 +910,7 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
             raise OnboardingError("attachment_max_mb must be between 1 and 100")
         delivery["attachment_max_bytes"] = max_mb * 1024 * 1024
     cfg["safety"] = copy.deepcopy(email_config.DEFAULT_CONFIG["safety"])
-    cfg["version"] = 4
+    cfg["version"] = 5
 
     unresolved = sorted(set(unresolved))
     return {

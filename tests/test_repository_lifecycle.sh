@@ -62,7 +62,7 @@ cp -a "${home}/config.json" "${DATA}/config.before-upgrade.json"
 echo STEP=upgrade
 bash "${DATA}/repo-v2/upgrade.sh"
 [[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.5.1" ]]
-grep -q '"version": 4' "${home}/config.json"
+grep -q '"version": 5' "${home}/config.json"
 grep -q '"sentinel": "preserve-me"' "${home}/config.json"
 grep -q '"renderer": "intelligent_v2"' "${home}/config.json"
 grep -q '"managed_cron": true' "${home}/config.json"

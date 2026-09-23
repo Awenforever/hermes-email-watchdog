@@ -27,7 +27,7 @@ class ConfigMigrationTests(unittest.TestCase):
             },
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["version"], 4)
+        self.assertEqual(cfg["version"], 5)
         self.assertEqual(cfg["semantic_engine"]["provider"], "hermes_openai")
         self.assertEqual(cfg["semantic_engine"]["provider_name"], "USTC")
         self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")
@@ -54,7 +54,7 @@ class ConfigMigrationTests(unittest.TestCase):
         original = copy.deepcopy(old)
         cfg = email_onboarding._sanitize_existing_config(old)
         self.assertEqual(old, original)
-        self.assertEqual(cfg["version"], 4)
+        self.assertEqual(cfg["version"], 5)
         self.assertEqual(cfg["semantic_engine"]["provider"], "custom")
         self.assertEqual(cfg["semantic_engine"]["endpoint"], "https://example.invalid/v1")
         self.assertEqual(cfg["semantic_engine"]["model"], "private-model")
@@ -71,7 +71,7 @@ class ConfigMigrationTests(unittest.TestCase):
             "delivery": {"auto_download_attachments": False},
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["version"], 4)
+        self.assertEqual(cfg["version"], 5)
         self.assertEqual(cfg["semantic_engine"]["protocol"], "readable_grounded_core_v1v")
         self.assertFalse(cfg["notification"]["fast_lane_enabled"])
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
@@ -121,6 +121,24 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["notification"]["renderer"], "intelligent_v2")
         self.assertIn("plugin-data/hermes-email-watchdog/calendar", migrated["delivery"]["calendar_path"])
         self.assertEqual(old["notification"]["renderer"], "adaptive_v1g")
+
+    def test_v05_storage_moves_shipped_attachment_root_but_preserves_custom_root(self):
+        shipped = {
+            "version": 4,
+            "notification": {"renderer": "intelligent_v2"},
+            "paths": {"attachment_dir": "/opt/data/.hermes-home/EmailAttachments"},
+        }
+        cfg = email_onboarding._sanitize_existing_config(shipped)
+        self.assertEqual(cfg["version"], 5)
+        self.assertIn("plugin-data/hermes-email-watchdog/attachments", cfg["paths"]["attachment_dir"])
+
+        custom = {
+            "version": 4,
+            "notification": {"renderer": "intelligent_v2"},
+            "paths": {"attachment_dir": "/srv/private-mail-files"},
+        }
+        cfg = email_onboarding._sanitize_existing_config(custom)
+        self.assertEqual(cfg["paths"]["attachment_dir"], "/srv/private-mail-files")
 
     def test_release_migration_preserves_unknown_and_identity_fields(self):
         raw = {
