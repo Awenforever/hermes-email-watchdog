@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 - 2026-09-23
+
+- Replace the generic summary/body template with an intent-aware Markdown
+  composer. Sender and subject use inline code; invoices, account actions,
+  security alerts, events, deadlines, digests, and personal mail receive
+  purpose-specific layouts instead of universal "要点 / 原文摘录" blocks.
+- Add an editorial quality gate so forwarding separators, mail headers,
+  greetings, signatures, unsubscribe text, image placeholders, and negative
+  inventory can never become highlights.
+- Keep a validated semantic decision in control when attachment, calendar,
+  persistence, or rendering side effects fail. Optional phase failures are
+  recorded independently and never silently fall back to the mechanical legacy
+  formatter.
+- Move the portable attachment/calendar defaults under plugin-owned state,
+  eliminating home-directory ambiguity and preserving reminders across
+  Windows, WSL, Linux, and NAS-Docker installations.
+- Add exact regression coverage for the production overdue-invoice failure:
+  invoice number, amount, due date, payment method, action link, and PDF are
+  retained while forwarding chrome and raw-body walls are absent.
+
 ## 0.4.0 - 2026-09-23
 
 - Read mail through non-mutating raw MIME export, preserving real HTML links,

@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import email_notification_renderer
+import email_assistant_composer
 import email_semantic_engine
 
 
@@ -47,9 +47,8 @@ def main() -> int:
         email = load_email(path)
         result = email_semantic_engine.analyze_email(email, {}, {}, settings_override=settings)
         decision = result["decision"]
-        rendered = email_notification_renderer.render_notification(
-            email, decision, {}, {"name": email.get("account") or ""},
-            settings_override={"mode": "production", "renderer": "adaptive_v1g"},
+        rendered = email_assistant_composer.render_notification(
+            email, decision, {}, {"name": email.get("account") or ""}
         )
         category = str((decision.get("classification") or {}).get("category") or "")
         action = decision.get("action") or {}

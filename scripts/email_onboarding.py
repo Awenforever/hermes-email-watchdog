@@ -370,6 +370,32 @@ def _migrate_known_v3_assistant_policy(
     return source, True
 
 
+def _migrate_known_v4_presentation_policy(
+    data: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Move the shipped v0.4 renderer to the intent-aware presentation layer."""
+    source = copy.deepcopy(data) if isinstance(data, dict) else {}
+    notification = source.get("notification") if isinstance(source.get("notification"), dict) else {}
+    delivery = source.get("delivery") if isinstance(source.get("delivery"), dict) else {}
+    if not (
+        str(notification.get("renderer") or "") == "adaptive_v1g"
+        and str(notification.get("mode") or "production") == "production"
+        and notification.get("production_route_enabled", True) is True
+    ):
+        return source, False
+
+    notification["renderer"] = "intelligent_v2"
+    old_calendar = str(delivery.get("calendar_path") or "")
+    if old_calendar in {
+        "", "~/Documents/EmailAttachments/email-watchdog-calendar.ics",
+    }:
+        delivery["calendar_path"] = email_config.DEFAULT_CONFIG["delivery"]["calendar_path"]
+    source["notification"] = notification
+    source["delivery"] = delivery
+    source["version"] = 4
+    return source, True
+
+
 def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     source = data if isinstance(data, dict) else {}
     try:
@@ -428,9 +454,10 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     # Upgrade only that exact signature; genuinely customized values remain
     # owned by the user.
     allowed, _ = _migrate_known_v3_assistant_policy(allowed)
+    allowed, _ = _migrate_known_v4_presentation_policy(allowed)
 
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
-    cfg["version"] = 3
+    cfg["version"] = 4
     cfg["paths"] = {
         key: cfg.get("paths", {}).get(key, email_config.DEFAULT_CONFIG["paths"][key])
         for key in sorted(ALLOWED_PATH_KEYS)
@@ -858,7 +885,7 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
             raise OnboardingError("attachment_max_mb must be between 1 and 100")
         delivery["attachment_max_bytes"] = max_mb * 1024 * 1024
     cfg["safety"] = copy.deepcopy(email_config.DEFAULT_CONFIG["safety"])
-    cfg["version"] = 3
+    cfg["version"] = 4
 
     unresolved = sorted(set(unresolved))
     return {
@@ -1024,7 +1051,8 @@ def migrate_current_config() -> dict[str, Any]:
             }
         migrated, changed_v2 = _migrate_known_v2_assistant_policy(raw)
         migrated, changed_v3 = _migrate_known_v3_assistant_policy(migrated)
-        changed = changed_v2 or changed_v3
+        migrated, changed_v4 = _migrate_known_v4_presentation_policy(migrated)
+        changed = changed_v2 or changed_v3 or changed_v4
         if not changed:
             return {
                 "passed": True,

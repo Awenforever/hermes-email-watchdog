@@ -998,6 +998,37 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(decision["notification"]["content_mode"], "summary_plus_original")
         self.assertIn("grounding:academic_safe_summary_from_subject", repairs)
 
+    def test_49_transport_chrome_cannot_become_a_key_point(self):
+        raw = valid_core()
+        raw.update({
+            "category": "invoice_receipt",
+            "content_mode": "summary_only",
+            "summary_style": "bullets",
+            "summary": "",
+            "key_points": [
+                "---------- Forwarded message ---------",
+                "发票21770340已逾期，应付3.00美元。",
+            ],
+            "summary_evidence": [
+                "---------- Forwarded message ---------",
+                "invoice no. 21770340 is now overdue",
+            ],
+            "action": None,
+            "deadline": None,
+        })
+        f = facts(False)
+        f.update({
+            "source_subject": "Fwd: Invoice Overdue Notice",
+            "source_body": "---------- Forwarded message ---------\nYour invoice no. 21770340 is now overdue. Balance Due: $3.00 USD",
+            "semantic_hints": {"receipt_phrase": True},
+        })
+        decision, errors, repairs, _ = core.normalize_and_expand_detailed(
+            raw, message_key="invoice:transport-chrome", facts=f
+        )
+        self.assertFalse(errors)
+        self.assertEqual(decision["notification"]["key_points"], ["发票21770340已逾期，应付3.00美元。"])
+        self.assertIn("editorial:drop_noncontent_key_points=1", repairs)
+
 
 if __name__ == "__main__":
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(CoreSchemaTests)

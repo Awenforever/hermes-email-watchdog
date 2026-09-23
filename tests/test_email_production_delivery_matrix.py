@@ -33,7 +33,7 @@ class DeliveryRouteTests(unittest.TestCase):
     _ew_prod_record_learning=mock.DEFAULT,
     _ew_prod_record_memory=mock.DEFAULT,
   )
- def test_01_durable_adaptive_exactly_one_text(self):
+ def test_01_durable_intelligent_composer_exactly_one_text(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
        mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
@@ -41,18 +41,17 @@ class DeliveryRouteTests(unittest.TestCase):
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
-       mock.patch('email_notification_renderer.render_notification',return_value={"ok":True,"text":"ADAPTIVE","renderer_version":"adaptive_v1g"}) as render, \
+       mock.patch('email_assistant_composer.render_notification',return_value={"ok":True,"text":"INTELLIGENT","renderer_version":"intelligent_v2"}) as render, \
        mock.patch.object(email_delivery,'_ew_v4_original_deliver_email') as legacy:
    m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
    r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
-   self.assertEqual(render.call_args.kwargs['settings_override']['renderer'], 'adaptive_v1g')
-   self.assertEqual(r['notification_text'],'ADAPTIVE')
-   self.assertEqual(r['production_route'],'adaptive_v1g')
-   self.assertEqual(r['renderer'].get('renderer_version'),'adaptive_v1g')
+   self.assertEqual(r['notification_text'],'INTELLIGENT')
+   self.assertEqual(r['production_route'],'intelligent_v2')
+   self.assertEqual(r['renderer'].get('renderer_version'),'intelligent_v2')
    self.assertFalse(r['legacy_fallback_used'])
    legacy.assert_not_called()
    m['_persist_delivery'].assert_called_once()
-   persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'adaptive_v1g')
+   persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'intelligent_v2')
  def test_02_fast_lane_skips_llm(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
@@ -62,7 +61,7 @@ class DeliveryRouteTests(unittest.TestCase):
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
        mock.patch('email_semantic_engine.analyze_email') as llm, \
-       mock.patch('email_notification_renderer.render_notification',return_value={"ok":True,"text":"FAST"}):
+       mock.patch('email_assistant_composer.render_notification',return_value={"ok":True,"text":"FAST"}):
    m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
    r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
    self.assertEqual(r['route_lane'],'fast'); llm.assert_not_called(); persist.assert_called_once()
@@ -78,7 +77,7 @@ class DeliveryRouteTests(unittest.TestCase):
    m['production_route_enabled'].return_value=True
    r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
    self.assertEqual(r['notification_text'],'LEGACY'); self.assertTrue(r['legacy_fallback_used']); legacy.assert_called_once(); persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'legacy_fallback')
- def test_04_renderer_failure_uses_legacy_once(self):
+ def test_04_composer_failure_uses_semantic_emergency_not_legacy(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
        mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
@@ -86,11 +85,24 @@ class DeliveryRouteTests(unittest.TestCase):
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
-       mock.patch('email_notification_renderer.render_notification',side_effect=RuntimeError('render')), \
-       mock.patch('email_production_router.legacy_fallback_analysis',return_value={"should_notify":True}), \
-       mock.patch.object(email_delivery,'_ew_v4_original_deliver_email',return_value={"notification_text":"LEGACY","status":"pushed"}) as legacy:
+       mock.patch('email_assistant_composer.render_notification',side_effect=RuntimeError('render')), \
+       mock.patch('email_notification_renderer.render_notification',return_value={"ok":True,"text":"SEMANTIC-EMERGENCY","renderer_version":"adaptive_v1g"}), \
+       mock.patch.object(email_delivery,'_ew_v4_original_deliver_email') as legacy:
    m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
    r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
-   self.assertTrue(r['legacy_fallback_used']); legacy.assert_called_once(); persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'legacy_fallback')
+   self.assertEqual(r['notification_text'],'SEMANTIC-EMERGENCY'); self.assertFalse(r['legacy_fallback_used']); legacy.assert_not_called(); persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'intelligent_v2')
+ def test_05_schedule_permission_failure_keeps_intelligent_message(self):
+  with self.common() as m, \
+       mock.patch('importlib.reload', side_effect=lambda m:m), \
+       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
+       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
+       mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
+       mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}), \
+       mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
+       mock.patch('email_assistant_composer.render_notification',return_value={"ok":True,"text":"STILL-INTELLIGENT","renderer_version":"intelligent_v2"}), \
+       mock.patch.object(email_delivery,'_ew_v4_original_deliver_email') as legacy:
+   m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].side_effect=PermissionError(13,'denied')
+   r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
+   self.assertEqual(r['notification_text'],'STILL-INTELLIGENT'); self.assertTrue(any(x.startswith('schedule:') for x in r['delivery_warnings'])); self.assertFalse(r['legacy_fallback_used']); legacy.assert_not_called()
 if __name__=='__main__':
  suite=unittest.defaultTestLoader.loadTestsFromTestCase(DeliveryRouteTests); result=unittest.TextTestRunner(verbosity=2).run(suite); print(f"PRODUCTION_DELIVERY_MATRIX={result.testsRun-len(result.failures)-len(result.errors)}/{result.testsRun}"); raise SystemExit(0 if result.wasSuccessful() else 1)

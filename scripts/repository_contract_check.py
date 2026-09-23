@@ -10,6 +10,7 @@ required=[
  "diagnose.sh","VERSION","docs/ONBOARDING.md",
  "hooks/hermes-email-watchdog/HOOK.yaml","hooks/hermes-email-watchdog/handler.py",
  "scripts/email_onboarding.py","scripts/email_notification_renderer.py",
+ "scripts/email_assistant_composer.py",
  "tests/test_email_onboarding_matrix.py","tests/test_email_state_concurrency_recovery_matrix.py",
  "tests/test_email_outbox_nonblocking_backoff_matrix.py",
 ]
@@ -37,6 +38,7 @@ for p in root.rglob("*"):
 handler=(root/"hooks/hermes-email-watchdog/handler.py").read_text(encoding="utf-8")
 baseline=(root/"tests/handler_baseline.py").read_text(encoding="utf-8")
 renderer=(root/"scripts/email_notification_renderer.py").read_text(encoding="utf-8")
+composer=(root/"scripts/email_assistant_composer.py").read_text(encoding="utf-8")
 watch=(root/"scripts/email_watch.py").read_text(encoding="utf-8")
 config_text=(root/"scripts/email_config.py").read_text(encoding="utf-8")
 onboarding=(root/"scripts/email_onboarding.py").read_text(encoding="utf-8")
@@ -68,6 +70,7 @@ checks={
  "handler_baseline_identical":handler==baseline,
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
  "renderer_v1g":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G" in renderer and "adaptive_v1g" in renderer,
+ "intent_composer_v2":"EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V2" in composer and "intelligent_v2" in composer,
  "protocol_v1v":"readable_grounded_core_v1v" in config_text,
  "safe_thread_tracker":"email_thread_tracker" in watch and "email_reply" not in watch,
  "weixin_not_present":not any(p.name=="weixin.py" for p in root.rglob("weixin.py")),

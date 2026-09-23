@@ -1440,11 +1440,13 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         import importlib
         import email_production_router
         import email_feature_extractor
+        import email_assistant_composer
         import email_notification_renderer
         import email_semantic_engine
 
         email_production_router = importlib.reload(email_production_router)
         email_feature_extractor = importlib.reload(email_feature_extractor)
+        email_assistant_composer = importlib.reload(email_assistant_composer)
         email_notification_renderer = importlib.reload(email_notification_renderer)
         email_semantic_engine = importlib.reload(email_semantic_engine)
 
@@ -1496,7 +1498,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     "schedule": [],
                     "cron_entries": [],
                     "status": "suppressed",
-                    "production_route": "adaptive_v1g",
+                    "production_route": "intelligent_v2",
                     "route_lane": route_lane,
                     "route_reasons": route_reason,
                     "semantic": semantic_meta,
@@ -1506,39 +1508,92 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 _ew_prod_record_learning(email, rule_result, prod_analysis, result, account)
                 _ew_prod_record_memory(email, decision, account, semantic_meta, {})
                 return result
-            attachments = download_attachments(email or {}, prod_analysis, account or {})
-            schedule = upsert_schedule(email or {}, prod_analysis)
-            cron_entries = install_reminder_cron(schedule)
-            renderer_meta = email_notification_renderer.render_notification(
-                email or {}, decision,
-                {"attachments": attachments, "schedule": schedule},
-                account or {},
-                settings_override={
-                    "renderer": "adaptive_v1g", "mode": "production",
-                    "original_policy": "auto", "show_debug_reason": False,
-                },
-            )
+            # Once a model decision has passed grounding/schema validation, a
+            # failure in an optional side effect must never throw the message
+            # back into the mechanical legacy formatter.  Each phase degrades
+            # independently while preserving the semantic presentation.
+            delivery_warnings = []
+            try:
+                attachments = download_attachments(email or {}, prod_analysis, account or {})
+            except Exception as phase_exc:
+                delivery_warnings.append("attachments:" + repr(phase_exc)[:300])
+                attachments = _list_attachments(
+                    email or {}, list((email or {}).get("attachments") or []), "processing_failed"
+                )
+            try:
+                schedule = upsert_schedule(email or {}, prod_analysis)
+                cron_entries = install_reminder_cron(schedule)
+            except Exception as phase_exc:
+                delivery_warnings.append("schedule:" + repr(phase_exc)[:300])
+                schedule, cron_entries = [], []
+            try:
+                renderer_meta = email_assistant_composer.render_notification(
+                    email or {}, decision,
+                    {"attachments": attachments, "schedule": schedule},
+                    account or {},
+                )
+            except Exception as phase_exc:
+                delivery_warnings.append("composer:" + repr(phase_exc)[:300])
+                # The old adaptive renderer remains a semantic-only emergency
+                # renderer for this release; it is not the legacy body slicer.
+                try:
+                    renderer_meta = email_notification_renderer.render_notification(
+                        email or {}, decision,
+                        {"attachments": attachments, "schedule": schedule},
+                        account or {},
+                        settings_override={
+                            "renderer": "adaptive_v1g", "mode": "production",
+                            "original_policy": "never", "show_debug_reason": False,
+                        },
+                    )
+                except Exception as emergency_exc:
+                    delivery_warnings.append("emergency_renderer:" + repr(emergency_exc)[:300])
+                    classification = decision.get("classification") or {}
+                    notification = decision.get("notification") or {}
+                    brief = str(notification.get("summary") or "").strip()
+                    if not brief:
+                        brief = "；".join(
+                            str(item).strip() for item in list(notification.get("key_points") or [])[:3]
+                            if str(item).strip()
+                        )
+                    sender = _sender_display(email or {})
+                    subject = str((email or {}).get("subject") or "无主题").replace("`", "′")
+                    renderer_meta = {
+                        "ok": True,
+                        "renderer_version": "semantic_emergency_v1",
+                        "text": (
+                            "### 📬 新邮件\n\n"
+                            f"**发件人** `{sender.replace('`', '′')}`\n\n"
+                            f"**主题** `{subject}`\n\n"
+                            f"**邮件摘要**\n{brief or classification.get('label') or '请查看邮件内容。'}"
+                        ),
+                        "blocks": ["发件人", "主题", "邮件摘要"],
+                    }
             text = str(renderer_meta.get("text") or "").strip()
             if not renderer_meta.get("ok") or not text:
-                raise RuntimeError("adaptive renderer returned empty or invalid text")
+                raise RuntimeError("semantic renderers returned empty or invalid text")
 
-            _persist_delivery(email or {}, prod_analysis, text, "pushed")
+            try:
+                _persist_delivery(email or {}, prod_analysis, text, "pushed")
+            except Exception as phase_exc:
+                delivery_warnings.append("persist:" + repr(phase_exc)[:300])
             result = {
                 "notification_text": text,
                 "attachments": attachments,
                 "schedule": schedule,
                 "cron_entries": cron_entries,
                 "status": "pushed",
-                "production_route": "adaptive_v1g",
+                "production_route": "intelligent_v2",
                 "route_lane": route_lane,
                 "route_reasons": route_reason,
                 "semantic": semantic_meta,
                 "renderer": renderer_meta,
+                "delivery_warnings": delivery_warnings,
                 "legacy_fallback_used": False,
             }
             try:
                 semantic_meta["production_persist"] = email_semantic_engine.persist_production_observation(
-                    email or {}, semantic_meta, production_route="adaptive_v1g"
+                    email or {}, semantic_meta, production_route="intelligent_v2"
                 )
             except Exception:
                 pass

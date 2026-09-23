@@ -60,7 +60,7 @@ def settings() -> Dict[str, Any]:
         "all_mail_push": bool(cfg.get("all_mail_push", False)),
         "legacy_fallback_enabled": bool(cfg.get("legacy_fallback_enabled", True)),
         "fast_lane_enabled": bool(cfg.get("fast_lane_enabled", True)),
-        "renderer": str(cfg.get("renderer") or "adaptive_v1g"),
+        "renderer": str(cfg.get("renderer") or "intelligent_v2"),
         "mode": str(cfg.get("mode") or "shadow"),
     }
 

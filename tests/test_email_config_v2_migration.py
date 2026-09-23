@@ -27,12 +27,12 @@ class ConfigMigrationTests(unittest.TestCase):
             },
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["version"], 3)
+        self.assertEqual(cfg["version"], 4)
         self.assertEqual(cfg["semantic_engine"]["provider"], "hermes_openai")
         self.assertEqual(cfg["semantic_engine"]["provider_name"], "USTC")
         self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")
         self.assertEqual(cfg["semantic_engine"]["fallback_model"], "qwen3.6-chat")
-        self.assertEqual(cfg["notification"]["renderer"], "adaptive_v1g")
+        self.assertEqual(cfg["notification"]["renderer"], "intelligent_v2")
         self.assertEqual(cfg["notification"]["mode"], "production")
         self.assertTrue(cfg["notification"]["production_route_enabled"])
         self.assertEqual(cfg["notification"]["original_policy"], "always")
@@ -54,7 +54,7 @@ class ConfigMigrationTests(unittest.TestCase):
         original = copy.deepcopy(old)
         cfg = email_onboarding._sanitize_existing_config(old)
         self.assertEqual(old, original)
-        self.assertEqual(cfg["version"], 3)
+        self.assertEqual(cfg["version"], 4)
         self.assertEqual(cfg["semantic_engine"]["provider"], "custom")
         self.assertEqual(cfg["semantic_engine"]["endpoint"], "https://example.invalid/v1")
         self.assertEqual(cfg["semantic_engine"]["model"], "private-model")
@@ -71,7 +71,7 @@ class ConfigMigrationTests(unittest.TestCase):
             "delivery": {"auto_download_attachments": False},
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["version"], 3)
+        self.assertEqual(cfg["version"], 4)
         self.assertEqual(cfg["semantic_engine"]["protocol"], "readable_grounded_core_v1v")
         self.assertFalse(cfg["notification"]["fast_lane_enabled"])
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
@@ -90,7 +90,7 @@ class ConfigMigrationTests(unittest.TestCase):
             },
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["notification"]["renderer"], "adaptive_v1g")
+        self.assertEqual(cfg["notification"]["renderer"], "intelligent_v2")
         self.assertEqual(cfg["notification"]["original_max_chars"], 900)
         self.assertTrue(cfg["delivery"]["create_reminders"])
         self.assertTrue(cfg["delivery"]["managed_cron"])
@@ -102,6 +102,25 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["notification"]["renderer"], "adaptive_v1g")
         self.assertTrue(migrated["delivery"]["managed_cron"])
         self.assertNotIn("auto_forward_safe_attachments", old["delivery"])
+
+    def test_v04_presentation_moves_to_intent_composer_and_state_calendar(self):
+        old = {
+            "version": 3,
+            "notification": {
+                "renderer": "adaptive_v1g",
+                "mode": "production",
+                "production_route_enabled": True,
+            },
+            "delivery": {
+                "calendar_path": "~/Documents/EmailAttachments/email-watchdog-calendar.ics",
+            },
+        }
+        migrated, changed = email_onboarding._migrate_known_v4_presentation_policy(old)
+        self.assertTrue(changed)
+        self.assertEqual(migrated["version"], 4)
+        self.assertEqual(migrated["notification"]["renderer"], "intelligent_v2")
+        self.assertIn("plugin-data/hermes-email-watchdog/calendar", migrated["delivery"]["calendar_path"])
+        self.assertEqual(old["notification"]["renderer"], "adaptive_v1g")
 
     def test_release_migration_preserves_unknown_and_identity_fields(self):
         raw = {

@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "default_account": "",
   "accounts": [],
   "paths": {
@@ -8,7 +8,7 @@
     "cache_dir": "~/.hermes/plugin-data/hermes-email-watchdog/email_cache",
     "threads": "~/.hermes/plugin-data/hermes-email-watchdog/email_threads.json",
     "contacts": "~/.hermes/plugin-data/hermes-email-watchdog/email_contacts.json",
-    "attachment_dir": "~/Documents/EmailAttachments"
+    "attachment_dir": "~/.hermes/plugin-data/hermes-email-watchdog/attachments"
   },
   "watchdog": {
     "lookback": 5,
@@ -51,7 +51,7 @@
     "num_predict_hard_cap": 2048
   },
   "notification": {
-    "renderer": "adaptive_v1g",
+    "renderer": "intelligent_v2",
     "mode": "production",
     "production_route_enabled": true,
     "all_mail_push": false,
@@ -86,7 +86,7 @@
     "create_reminders": true,
     "managed_cron": true,
     "reminder_offsets_minutes": [1440, 60],
-    "calendar_path": "~/Documents/EmailAttachments/email-watchdog-calendar.ics",
+    "calendar_path": "~/.hermes/plugin-data/hermes-email-watchdog/calendar/email-watchdog.ics",
     "timezone": "auto",
     "target": {
       "platform": "",

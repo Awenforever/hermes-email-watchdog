@@ -24,7 +24,7 @@ _WARNED = False
 _CACHE = None
 
 DEFAULT_CONFIG = {
-    "version": 3,
+    "version": 4,
     "default_account": "",
     "accounts": [],
     "paths": {
@@ -33,7 +33,7 @@ DEFAULT_CONFIG = {
         "cache_dir": STATE_ROOT_RAW.rstrip("/\\") + "/email_cache",
         "threads": STATE_ROOT_RAW.rstrip("/\\") + "/email_threads.json",
         "contacts": STATE_ROOT_RAW.rstrip("/\\") + "/email_contacts.json",
-        "attachment_dir": "~/Documents/EmailAttachments",
+        "attachment_dir": STATE_ROOT_RAW.rstrip("/\\") + "/attachments",
     },
     "watchdog": {
         "lookback": 5,
@@ -79,7 +79,7 @@ DEFAULT_CONFIG = {
     },
     # EMAIL_WATCHDOG_ADAPTIVE_RENDERER_CONFIG_SHADOW_V1
     "notification": {
-        "renderer": "adaptive_v1g",
+        "renderer": "intelligent_v2",
         "mode": "production",
         "production_route_enabled": True,
         "all_mail_push": False,
@@ -118,7 +118,7 @@ DEFAULT_CONFIG = {
         "create_reminders": True,
         "managed_cron": True,
         "reminder_offsets_minutes": [1440, 60],
-        "calendar_path": "~/Documents/EmailAttachments/email-watchdog-calendar.ics",
+        "calendar_path": STATE_ROOT_RAW.rstrip("/\\") + "/calendar/email-watchdog.ics",
         "timezone": "auto",
         "target": {
             "platform": "",

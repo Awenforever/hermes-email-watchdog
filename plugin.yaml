@@ -1,5 +1,5 @@
 name: hermes-email-watchdog
-version: 0.4.0
+version: 0.5.0
 manifest_version: 1
 api_version: 1
 description: Read-only email triage with grounded classification and actionable messaging alerts.
@@ -47,7 +47,7 @@ config_schema:
     description: Forward safe bounded downloaded attachments with their notification.
   notification_renderer:
     type: str
-    default: adaptive_v1g
+    default: intelligent_v2
     description: Compact mobile notification renderer.
   create_reminders:
     type: bool

@@ -35,7 +35,7 @@ except Exception:  # Import safety: delivery wrapper catches and logs failures.
     email_semantic_core = None
 
 MARKER = "EMAIL_WATCHDOG_SEMANTIC_ENGINE_READABLE_GROUNDED_CORE_ADAPTIVE_OUTPUT_BUDGET_SHADOW_V1"
-PROMPT_VERSION = "semantic_v2_assistant_actions_v1y_20260923"
+PROMPT_VERSION = "semantic_v2_assistant_actions_editorial_v2_20260923"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 STATE_ROOT = Path(
     os.environ.get(

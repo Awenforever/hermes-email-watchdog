@@ -87,6 +87,23 @@ def _semantic_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9\u3400-\u9fff]+", "_", text.lower()).strip("_")
 
 
+def _editorially_useful_claim(value: Any) -> bool:
+    """Reject mail transport/template chrome before it reaches presentation."""
+    text = " ".join(_text(value, 500).split())
+    if not text or re.fullmatch(r"[-_=*#>\s]+", text):
+        return False
+    if re.search(
+        r"(?i)^(?:[-_=]{3,}\s*)?(?:forwarded message|original message|begin forwarded message)"
+        r"|^(?:from|to|cc|bcc|sent|date|subject|发件人|收件人|抄送|发送时间|主题)\s*[:：]"
+        r"|^(?:这?是?一封)?转发(?:的)?邮件|^邮件为转发(?:内容|件|邮件)?"
+        r"|^(?:无|没有|未发现)(?:附件|验证码|截止|明确)"
+        r"|^邮件由.+自动发送|举报退订",
+        text,
+    ):
+        return False
+    return True
+
+
 def _infer_open_semantic_fields(source: Dict[str, Any], repairs: List[str]) -> Dict[str, Any]:
     """Recover familiar semantic concepts without requiring an exhaustive field whitelist."""
     out = dict(source)
@@ -629,6 +646,7 @@ def build_prompt(payload: Mapping[str, Any]) -> str:
         "- If action is present, action.evidence must be a short verbatim quote that directly proves the requested action.\n"
         "- If deadline is present, deadline.evidence must be a short verbatim quote containing the deadline or its direct context. Never use vague placeholder deadlines absent from the email.\n"
         "- Choose summary_style=paragraph with summary filled and key_points empty, or bullets with summary empty and 1-5 factual key_points. Never fill both.\n"
+        "- Key points are user-useful claims, not a transcript inventory. Never use forwarding separators, From/To/Subject headers, greetings, signatures, unsubscribe text, image placeholders, or observations such as 'this is a forwarded email' / 'there is no attachment or code' as key points.\n"
         "- The model only chooses original_policy; it never rewrites the original.\n"
         "Category must be one of: " + ", ".join(categories) + "\n"
         "Deterministic semantic_hints are high-signal text-presence facts, not final labels. Use them to re-check the email, but the actual subject/body remains authoritative.\n"
@@ -811,6 +829,13 @@ def normalize_and_expand_detailed(
 
     summary = _text(source.get("summary"), 1200)
     key_points = _text_list(source.get("key_points"), 8, 360)
+    original_point_count = len(key_points)
+    key_points = [point for point in key_points if _editorially_useful_claim(point)]
+    if len(key_points) != original_point_count:
+        repairs.append(f"editorial:drop_noncontent_key_points={original_point_count-len(key_points)}")
+    if summary and not _editorially_useful_claim(summary):
+        summary = ""
+        repairs.append("editorial:drop_noncontent_summary")
     summary_evidence, invalid_summary_evidence = _supported_quotes(
         source.get("summary_evidence"), grounding_source, 8
     )
