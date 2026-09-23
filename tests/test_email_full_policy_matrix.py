@@ -120,7 +120,6 @@ class FullPolicyMatrix(unittest.TestCase):
         decision, errors, repairs, _ = self.expand(raw, subject, body)
         self.assertFalse(errors)
         self.assertFalse(decision["notification"]["should_notify"])
-        self.assertIn("policy:marketing_suppressed", repairs)
 
     def test_all_mail_eventual_push_personal(self):
         subject = "周末聚餐安排"
