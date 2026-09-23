@@ -104,6 +104,9 @@ mv -f "${ACTIVE_DIR}/.HOOK.yaml.tmp.$$" "${ACTIVE_DIR}/HOOK.yaml"
 # Upgrade only the exact v0.2.x release-default policy. The migration is
 # independently backed up and atomic; customized configs are left byte-for-byte
 # untouched. It never accesses or mutates the mailbox.
+HERMES_HOME="${HERMES_HOME_DIR}" \
+HERMES_EMAIL_WATCHDOG_STATE_ROOT="${PLUGIN_STATE}" \
+EMAIL_WATCHDOG_CONFIG="${PLUGIN_STATE}/config.json" \
 python3 "${SKILL_DIR}/scripts/email_onboarding.py" migrate-current --json >/dev/null
 
 enabled_file="${PLUGIN_STATE}/enabled"

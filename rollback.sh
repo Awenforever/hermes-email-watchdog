@@ -26,6 +26,7 @@ else
 fi
 if [[ -f "${backup}/config.before" ]]; then
   install -m 0600 "${backup}/config.before" "${PLUGIN_STATE}/config.json"
+  chown --reference="${backup}/config.before" "${PLUGIN_STATE}/config.json"
 fi
 python3 - "${MANIFEST}" "${SKILL_DIR}" "${ACTIVE_DIR}" <<'PY'
 from pathlib import Path

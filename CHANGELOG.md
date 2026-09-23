@@ -15,6 +15,8 @@
 - Apply the v3 policy migration only to the exact v0.2.x release-default
   signature, preserve custom/identity fields, and restore the prior config on
   plugin rollback.
+- Preserve the existing config file owner and mode across root-run atomic
+  upgrades and rollbacks, so the unprivileged Gateway can always read it.
 
 ## 0.2.3 — 2026-09-21
 

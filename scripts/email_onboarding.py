@@ -191,6 +191,11 @@ def _canonical_sha(value: Any) -> str:
 
 
 def _atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:
+    previous = None
+    try:
+        previous = path.stat()
+    except FileNotFoundError:
+        pass
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
     tmp = Path(raw_tmp)
@@ -199,7 +204,9 @@ def _atomic_write_text(path: Path, text: str, mode: int = 0o600) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(tmp, mode)
+        if previous is not None and hasattr(os, "chown") and getattr(os, "geteuid", lambda: -1)() == 0:
+            os.chown(tmp, previous.st_uid, previous.st_gid)
+        os.chmod(tmp, (previous.st_mode & 0o777) if previous is not None else mode)
         os.replace(tmp, path)
     finally:
         if tmp.exists():

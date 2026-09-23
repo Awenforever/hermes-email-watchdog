@@ -10,6 +10,7 @@ export HERMES_EMAIL_WATCHDOG_DATA_ROOT="${DATA}/data"
 # An enclosing Hermes image may export its own production HERMES_HOME. The
 # isolated lifecycle matrix must only touch its temporary data root.
 unset HERMES_HOME
+unset EMAIL_WATCHDOG_CONFIG
 base_version="$(cat "${REPO}/VERSION")"
 
 legacy="${DATA}/data/.hermes-home/.hermes"
@@ -50,14 +51,23 @@ bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 cp -a "${REPO}" "${DATA}/repo-v2"
 printf '0.3.1\n' > "${DATA}/repo-v2/VERSION"
 python3 "${DATA}/repo-v2/scripts/generate_checksums.py" "${DATA}/repo-v2"
+cat > "${home}/config.json" <<'JSON'
+{"version":2,"sentinel":"preserve-me","semantic_engine":{"model":"deepseek-flash","fallback_model":"qwen3.6-chat","protocol":"readable_grounded_core_v1u"},"notification":{"fast_lane_enabled":true},"delivery":{"auto_download_attachments":false}}
+JSON
+if [[ "$(id -u)" == "0" ]]; then chown 65534:65534 "${home}/config.json"; fi
+config_uid_before="$(stat -c %u "${home}/config.json")"
+cp -a "${home}/config.json" "${DATA}/config.before-upgrade.json"
 echo STEP=upgrade
 bash "${DATA}/repo-v2/upgrade.sh"
 [[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.3.1" ]]
-cp "${home}/config.json" "${DATA}/config.after-upgrade.json"
+grep -q '"version": 3' "${home}/config.json"
+grep -q '"sentinel": "preserve-me"' "${home}/config.json"
+[[ "$(stat -c %u "${home}/config.json")" == "${config_uid_before}" ]]
 echo STEP=rollback
 bash "${DATA}/data/skills/hermes-email-watchdog/rollback.sh"
 [[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "${base_version}" ]]
-cmp -s "${home}/config.json" "${DATA}/config.after-upgrade.json"
+cmp -s "${home}/config.json" "${DATA}/config.before-upgrade.json"
+[[ "$(stat -c %u "${home}/config.json")" == "${config_uid_before}" ]]
 bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
 
 echo STEP=rollback-verified
