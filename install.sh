@@ -95,6 +95,11 @@ if [[ "${root_real}" != "${skill_real}" ]]; then
   rm -rf "${old}"
 fi
 
+# Archives created on Windows and some network filesystems do not preserve the
+# executable bit.  Normalize runnable entry points after every install/upgrade
+# so the same package behaves consistently on Linux, WSL, and NAS containers.
+find "${SKILL_DIR}" -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod 0755 {} +
+
 install -d -m 0755 "${ACTIVE_DIR}"
 install -m 0644 "${SKILL_DIR}/hooks/hermes-email-watchdog/handler.py" "${ACTIVE_DIR}/.handler.py.tmp.$$"
 install -m 0644 "${SKILL_DIR}/hooks/hermes-email-watchdog/HOOK.yaml" "${ACTIVE_DIR}/.HOOK.yaml.tmp.$$"

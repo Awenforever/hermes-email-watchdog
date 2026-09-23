@@ -24,6 +24,8 @@ printf 'imap-only\n' > "${legacy}/email_watchdog_himalaya/primary.toml"
 echo STEP=initial-install
 bash "${REPO}/install.sh"
 bash "${DATA}/data/skills/hermes-email-watchdog/verify.sh"
+[[ -x "${DATA}/data/skills/hermes-email-watchdog/verify.sh" ]]
+[[ -x "${DATA}/data/skills/hermes-email-watchdog/scripts/email_watch.py" ]]
 home="${DATA}/data/plugin-data/hermes-email-watchdog"
 [[ "$(cat "${home}/enabled")" == "true" ]]
 grep -q '"sentinel":"legacy"' "${home}/config.json"
