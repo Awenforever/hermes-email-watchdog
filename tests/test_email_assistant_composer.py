@@ -156,6 +156,27 @@ Copyright © Mitce, All rights reserved.""",
         self.assertIn("通知重点", text)
         self.assertNotIn("**需要处理**", text)
 
+    def test_stale_action_without_deadline_requires_status_check(self):
+        email = {
+            "account": "USTC", "subject": "URGENT - article is ready for review",
+            "from_addr": "editor@example.org", "date_sent": "2026-06-06 15:34 +0800",
+            "body": "Please download the proof and return your corrections.",
+        }
+        decision = {
+            "classification": {"category": "paper_manuscript_feedback", "label": "论文/稿件反馈"},
+            "importance": {"level": "high"},
+            "notification": {
+                "content_mode": "summary_only", "summary_style": "paragraph",
+                "summary": "编辑要求下载校对稿并返回修改。", "key_points": [],
+                "original_policy": "none",
+            },
+            "action": {"required": True, "description": "请尽快下载校对稿并回复编辑"},
+            "deadline": {"has_deadline": False}, "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("这是一封历史邮件", text)
+        self.assertNotIn("请尽快下载", text)
+
     def test_curated_original_is_one_coherent_quote_not_mail_chrome(self):
         email = {
             "subject": "Fwd: Please review the draft", "from_addr": "person@example.test",

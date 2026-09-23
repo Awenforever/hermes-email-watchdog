@@ -488,6 +488,24 @@ def _deadline_display(deadline: Mapping[str, Any], email: Mapping[str, Any]) -> 
     return display, False
 
 
+def _stale_message(email: Mapping[str, Any], days: int = 60) -> bool:
+    raw = _text(email.get("date_sent") or email.get("date") or email.get("sent_at"), 180)
+    if not raw:
+        return False
+    candidate = re.sub(r"\s+SGT$", " +0800", raw, flags=re.I)
+    try:
+        try:
+            sent = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except Exception:
+            sent = parsedate_to_datetime(candidate)
+        zone = ZoneInfo("Asia/Shanghai")
+        if sent.tzinfo is None:
+            sent = sent.replace(tzinfo=zone)
+        return (datetime.now(zone) - sent.astimezone(zone)).days >= days
+    except Exception:
+        return False
+
+
 def _section(lines: List[str], title: str, content: Sequence[str]) -> None:
     clean = [x for x in content if _text(x)]
     if clean:
@@ -588,6 +606,8 @@ def render_notification(
             if fallback:
                 action_lines.append(fallback)
     due, expired = _deadline_display(deadline, email)
+    if action_lines and not bool(deadline.get("has_deadline")) and _stale_message(email):
+        action_lines = ["这是一封历史邮件，原事项可能已经处理；如仍相关，请先核实当前状态。"]
     if bool(deadline.get("has_deadline")):
         if due and category != "invoice_receipt":
             if expired:
