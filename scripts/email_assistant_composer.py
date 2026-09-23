@@ -78,6 +78,10 @@ def _useful_point(value: Any) -> str:
     point = re.sub(r"^\s*(?:[-*•]|\d+[.)、])\s*", "", _clean(value)).strip()
     if not point or _NOISE.search(point) or _META_POINT.search(point):
         return ""
+    # Footer mechanics are not user-facing meaning, even when a model embeds
+    # them midway through an otherwise grammatical bullet.
+    if re.search(r"(?i)(?:unsubscribe|privacy policy|取消订阅|退订|隐私政策)(?:链接|link)?", point):
+        return ""
     if re.fullmatch(r"[-_=*#>\s]+", point):
         return ""
     point = " ".join(point.split())[:360]

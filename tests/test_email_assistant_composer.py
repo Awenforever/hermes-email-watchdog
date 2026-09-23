@@ -106,6 +106,35 @@ Copyright © Mitce, All rights reserved.""",
         self.assertNotIn("无附件", text)
         self.assertNotIn("转发内容", text)
 
+    def test_footer_mechanics_inside_model_point_are_not_highlights(self):
+        email = {
+            "account": "USTC",
+            "subject": "[DeepSeek Service status] Confirm your subscription",
+            "from_addr": "noreply@statuspage.io",
+            "body": "Confirm subscription\nhttps://status.deepseek.com/subscriptions/confirm/token",
+            "links": [{
+                "url": "https://status.deepseek.com/subscriptions/confirm/token",
+                "display_text": "Confirm subscription",
+            }],
+        }
+        decision = {
+            "classification": {"category": "system_automation_notice", "label": "系统自动化通知"},
+            "importance": {"level": "low"},
+            "notification": {
+                "content_mode": "summary_only", "summary_style": "bullets", "summary": "",
+                "key_points": [
+                    "DeepSeek Service 状态通知订阅确认邮件，需点击链接激活订阅。",
+                    "邮件说明订阅状态更新，并附状态页与退订链接。",
+                ],
+                "original_policy": "none",
+            },
+            "action": {"required": True}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("需点击链接激活订阅", text)
+        self.assertNotIn("退订", text)
+
     def test_curated_original_is_one_coherent_quote_not_mail_chrome(self):
         email = {
             "subject": "Fwd: Please review the draft", "from_addr": "person@example.test",
