@@ -54,7 +54,7 @@ cp -a "${REPO}" "${DATA}/repo-v2"
 printf '0.4.1\n' > "${DATA}/repo-v2/VERSION"
 python3 "${DATA}/repo-v2/scripts/generate_checksums.py" "${DATA}/repo-v2"
 cat > "${home}/config.json" <<'JSON'
-{"version":2,"sentinel":"preserve-me","semantic_engine":{"model":"deepseek-flash","fallback_model":"qwen3.6-chat","protocol":"readable_grounded_core_v1u"},"notification":{"fast_lane_enabled":true},"delivery":{"auto_download_attachments":false}}
+{"version":2,"sentinel":"preserve-me","semantic_engine":{"model":"deepseek-flash","fallback_model":"qwen3.6-chat","protocol":"readable_grounded_core_v1u"},"notification":{"fast_lane_enabled":true,"renderer":"adaptive_v1f","original_max_chars":5000},"delivery":{"auto_download_attachments":false,"create_reminders":true,"managed_cron":false}}
 JSON
 if [[ "$(id -u)" == "0" ]]; then chown 65534:65534 "${home}/config.json"; fi
 config_uid_before="$(stat -c %u "${home}/config.json")"
@@ -64,6 +64,8 @@ bash "${DATA}/repo-v2/upgrade.sh"
 [[ "$(cat "${DATA}/data/skills/hermes-email-watchdog/VERSION")" == "0.4.1" ]]
 grep -q '"version": 3' "${home}/config.json"
 grep -q '"sentinel": "preserve-me"' "${home}/config.json"
+grep -q '"renderer": "adaptive_v1g"' "${home}/config.json"
+grep -q '"managed_cron": true' "${home}/config.json"
 [[ "$(stat -c %u "${home}/config.json")" == "${config_uid_before}" ]]
 echo STEP=rollback
 bash "${DATA}/data/skills/hermes-email-watchdog/rollback.sh"

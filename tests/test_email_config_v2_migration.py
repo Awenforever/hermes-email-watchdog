@@ -97,6 +97,12 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertTrue(cfg["delivery"]["auto_forward_safe_attachments"])
         self.assertEqual(cfg["delivery"]["reminder_offsets_minutes"], [1440, 60])
 
+        migrated, changed = email_onboarding._migrate_known_v3_assistant_policy(old)
+        self.assertTrue(changed)
+        self.assertEqual(migrated["notification"]["renderer"], "adaptive_v1g")
+        self.assertTrue(migrated["delivery"]["managed_cron"])
+        self.assertNotIn("auto_forward_safe_attachments", old["delivery"])
+
     def test_release_migration_preserves_unknown_and_identity_fields(self):
         raw = {
             "version": 2,

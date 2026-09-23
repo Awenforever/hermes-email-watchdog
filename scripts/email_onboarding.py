@@ -334,6 +334,42 @@ def _migrate_known_v2_assistant_policy(
     return source, True
 
 
+def _migrate_known_v3_assistant_policy(
+    data: dict[str, Any] | None,
+) -> tuple[dict[str, Any], bool]:
+    """Upgrade only the shipped v0.3.x assistant policy signature."""
+    source = copy.deepcopy(data) if isinstance(data, dict) else {}
+    notification = source.get("notification") if isinstance(source.get("notification"), dict) else {}
+    delivery = source.get("delivery") if isinstance(source.get("delivery"), dict) else {}
+    known_v3_signature = bool(
+        str(notification.get("renderer") or "") == "adaptive_v1f"
+        and int(notification.get("original_max_chars") or 0) == 5000
+        # Some v0.3.1 installations enabled reminder extraction manually while
+        # still retaining the shipped plain renderer and disabled scheduler.
+        # Both boolean values remain the known release family; non-booleans are
+        # treated as customization and preserved.
+        and isinstance(delivery.get("create_reminders"), bool)
+        and delivery.get("managed_cron") is False
+    )
+    if not known_v3_signature:
+        return source, False
+
+    notification["renderer"] = "adaptive_v1g"
+    notification["original_max_chars"] = 900
+    delivery["create_reminders"] = True
+    delivery["managed_cron"] = True
+    delivery["auto_forward_safe_attachments"] = True
+    delivery.setdefault("reminder_offsets_minutes", [1440, 60])
+    delivery.setdefault(
+        "calendar_path",
+        email_config.DEFAULT_CONFIG["delivery"]["calendar_path"],
+    )
+    source["notification"] = notification
+    source["delivery"] = delivery
+    source["version"] = 3
+    return source, True
+
+
 def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     source = data if isinstance(data, dict) else {}
     try:
@@ -391,30 +427,7 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     # complete assistant contract but left rich rendering and reminders off.
     # Upgrade only that exact signature; genuinely customized values remain
     # owned by the user.
-    notification = allowed.get("notification") if isinstance(allowed.get("notification"), dict) else {}
-    delivery = allowed.get("delivery") if isinstance(allowed.get("delivery"), dict) else {}
-    if (
-        str(notification.get("renderer") or "") == "adaptive_v1f"
-        and int(notification.get("original_max_chars") or 0) == 5000
-        # Some v0.3.1 installations enabled reminder extraction manually while
-        # still retaining the shipped plain renderer and disabled scheduler.
-        # Both boolean values remain the known release family; non-booleans are
-        # treated as customization and preserved.
-        and isinstance(delivery.get("create_reminders"), bool)
-        and delivery.get("managed_cron") is False
-    ):
-        notification["renderer"] = "adaptive_v1g"
-        notification["original_max_chars"] = 900
-        delivery["create_reminders"] = True
-        delivery["managed_cron"] = True
-        delivery["auto_forward_safe_attachments"] = True
-        delivery.setdefault("reminder_offsets_minutes", [1440, 60])
-        delivery.setdefault(
-            "calendar_path",
-            email_config.DEFAULT_CONFIG["delivery"]["calendar_path"],
-        )
-        allowed["notification"] = notification
-        allowed["delivery"] = delivery
+    allowed, _ = _migrate_known_v3_assistant_policy(allowed)
 
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
     cfg["version"] = 3
@@ -1009,7 +1022,9 @@ def migrate_current_config() -> dict[str, Any]:
                 "reason": "config_missing",
                 "mailbox_mutation": False,
             }
-        migrated, changed = _migrate_known_v2_assistant_policy(raw)
+        migrated, changed_v2 = _migrate_known_v2_assistant_policy(raw)
+        migrated, changed_v3 = _migrate_known_v3_assistant_policy(migrated)
+        changed = changed_v2 or changed_v3
         if not changed:
             return {
                 "passed": True,
@@ -1024,8 +1039,8 @@ def migrate_current_config() -> dict[str, Any]:
         return {
             "passed": True,
             "changed": True,
-            "from_version": 2,
-            "to_version": 3,
+            "from_version": raw.get("version"),
+            "to_version": migrated.get("version"),
             "backup": {
                 "basename": backup.name,
                 "exists": backup.is_dir(),
