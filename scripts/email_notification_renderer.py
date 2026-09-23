@@ -26,8 +26,8 @@ try:
 except Exception:  # pragma: no cover - defensive import for isolated tests
     email_config = None
 
-MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1F"
-RENDERER_VERSION = "adaptive_v1f"
+MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G"
+RENDERER_VERSION = "adaptive_v1g"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 STATE_ROOT = Path(
     os.environ.get(
@@ -43,10 +43,10 @@ DEFAULT_DB_PATH = Path(
 )
 
 _DEFAULT_SETTINGS: Dict[str, Any] = {
-    "renderer": "adaptive_v1f",
+    "renderer": "adaptive_v1g",
     "mode": "shadow",
     "original_policy": "auto",
-    "original_max_chars": 5000,
+    "original_max_chars": 900,
     "show_priority": True,
     "show_category": True,
     "show_time": True,
@@ -103,13 +103,13 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
             pass
     if isinstance(override, Mapping):
         result.update(override)
-    result["renderer"] = _text(result.get("renderer"), 64) or "adaptive_v1f"
+    result["renderer"] = _text(result.get("renderer"), 64) or "adaptive_v1g"
     result["mode"] = _text(result.get("mode"), 32).lower() or "shadow"
     result["original_policy"] = _text(result.get("original_policy"), 32).lower() or "auto"
     try:
-        result["original_max_chars"] = max(200, min(20000, int(result.get("original_max_chars") or 5000)))
+        result["original_max_chars"] = max(200, min(4000, int(result.get("original_max_chars") or 900)))
     except (TypeError, ValueError):
-        result["original_max_chars"] = 5000
+        result["original_max_chars"] = 900
     for key in ("show_priority", "show_category", "show_time", "show_debug_reason", "suppress_redundant_summary"):
         result[key] = bool(result.get(key, _DEFAULT_SETTINGS[key]))
     return result
@@ -130,6 +130,8 @@ def clean_body(value: Any) -> str:
         return ""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    text = re.sub(r"(?i)\[image(?::[^\]]*)?\]", " ", text)
+    text = re.sub(r"(?is)<img\b[^>]*>", " ", text)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p\s*>", "\n", text)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
@@ -172,7 +174,19 @@ def clean_body(value: Any) -> str:
         lines.append(line)
     while lines and not lines[-1]:
         lines.pop()
-    return "\n".join(lines).strip()
+    joined: List[str] = []
+    for line in lines:
+        if (
+            joined and line and joined[-1]
+            and not re.search(r"[。！？!?；;：:]$", joined[-1])
+            and not re.match(r"^(?:#{1,6}\s|[-*•>] |\d+[.)、] )", line)
+            and not re.match(r"^(?:#{1,6}\s|[-*•>] |\d+[.)、] )", joined[-1])
+            and len(joined[-1]) < 100 and len(line) < 100
+        ):
+            joined[-1] += " " + line
+        else:
+            joined.append(line)
+    return "\n".join(joined).strip()
 
 
 def _norm(value: Any) -> str:
@@ -333,6 +347,45 @@ def _schedule_lines(delivery: Mapping[str, Any]) -> List[str]:
         line = "｜".join(part for part in (_format_time(when) or when, message) if part)
         if line and line not in out:
             out.append(line)
+    return out
+
+
+def _important_links(email: Mapping[str, Any]) -> List[Tuple[str, str]]:
+    out: List[Tuple[str, str]] = []
+    seen = set()
+    low_value = re.compile(
+        r"unsubscribe|privacy|terms|contact|report|preferences|maps|identity|"
+        r"agent\.qq\.com|legal|all rights reserved|此邮件由|退订|隐私|条款|举报",
+        re.I,
+    )
+    important = re.compile(
+        r"confirm|verification|verify|activate|activation|reset|register|registration|invite|join|"
+        r"payment|billing|invoice|download|application|apply|meeting|确认|验证|激活|重置|报名|缴费|下载",
+        re.I,
+    )
+    candidates = _list(email.get("links"))
+    ranked = []
+    for index, item in enumerate(candidates):
+        if isinstance(item, Mapping):
+            url = _text(item.get("url"), 4000)
+            label = clean_body(item.get("display_text"))
+        else:
+            url, label = _text(item, 4000), ""
+        if not url.lower().startswith(("http://", "https://")) or url in seen:
+            continue
+        haystack = f"{label} {url}"
+        if low_value.search(haystack) and not important.search(haystack):
+            continue
+        score = 0 if important.search(haystack) else 10
+        ranked.append((score, index, label or "打开链接", url))
+        seen.add(url)
+    ranked.sort()
+    if any(row[0] == 0 for row in ranked):
+        ranked = [row for row in ranked if row[0] == 0]
+    for _score, _index, label, url in ranked[:3]:
+        label = re.sub(r"[\[\]]", "", label)[:80] or "打开链接"
+        safe_url = url.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+        out.append((label, safe_url))
     return out
 
 
@@ -634,8 +687,17 @@ def render_notification(
     action = _mapping(decision.get("action"))
     if mode != "deadline_card" and bool(action.get("required")):
         action_lines: List[str] = []
-        description = _text(action.get("description"), 500)
-        next_step = _text(action.get("next_step"), 500)
+        description = " ".join(clean_body(action.get("description")).split())[:500]
+        next_step = " ".join(clean_body(action.get("next_step")).split())[:500]
+        incomplete = re.compile(r"(?i)^(?:please|review|check|update|open|click|处理|查看|确认)$")
+        if (
+            len(description) < 4
+            or incomplete.fullmatch(description)
+            or re.search(r"(?i)\b(?:payme|accou|servi|subscri|infor|detai)$", description)
+        ):
+            description = ""
+        if len(next_step) < 4 or incomplete.fullmatch(next_step):
+            next_step = ""
         summary_text = "\n".join(_summary_lines(subject, decision, suppress_redundant=False)[0])
         if description and (plain_layout or not _redundant(description, summary_text)):
             action_lines.append(description)
@@ -645,6 +707,16 @@ def render_notification(
             action_lines.append(f"下一步：{next_step}")
         elif next_step:
             duplicate_suppressions += 1
+        if not action_lines:
+            category = _text(_mapping(decision.get("classification")).get("category"), 80)
+            fallback_actions = {
+                "account_status_notice": "请检查账户状态，并按邮件中的官方指引处理。",
+                "account_security": "请核对账户安全状态，并通过官方入口处理。",
+                "invoice_receipt": "请核对金额、付款状态和相关凭据。",
+                "meeting_event": "请确认是否参加，并检查时间、地点和所需材料。",
+                "task_deadline": "请在截止时间前完成邮件要求的事项。",
+            }
+            action_lines.append(fallback_actions.get(category, "请查看邮件并完成其中要求的事项。"))
         append_block(lines, blocks, "待办", action_lines)
 
     deadline = _mapping(decision.get("deadline"))
@@ -661,6 +733,15 @@ def render_notification(
         else:
             attachment_lines = ["- 📎 有附件，文件名未解析，请在邮箱查看"]
         append_block(lines, blocks, "附件", attachment_lines)
+
+    links = _important_links(email)
+    if links:
+        append_block(
+            lines,
+            blocks,
+            "相关链接",
+            [f"- [{label}]({url})" for label, url in links],
+        )
 
     schedule_lines = _schedule_lines(delivery)
     if schedule_lines:
@@ -688,9 +769,23 @@ def render_notification(
             truncated = True
         original_heading = "原文节选"
     if original_policy in {"full", "excerpt"} and original_text:
+        # A useful assistant does not paste template chrome back to the user.
+        # If summary/action/link blocks already carry the decision, keep only a
+        # short grounded excerpt for exact wording.
+        if links or bool(action.get("required")):
+            limit = min(int(settings["original_max_chars"]), 500)
+            if len(original_text) > limit:
+                original_text = original_text[:limit].rstrip()
+                truncated = True
+        summary_present = bool(_summary_lines(subject, decision, suppress_redundant=False)[0])
+        if (links or bool(action.get("required"))) and summary_present:
+            original_text = ""
+            truncated = False
+            original_policy = "none"
         if truncated:
             original_text += "\n\n已截断，完整正文请在邮箱中查看。"
-        append_block(lines, blocks, original_heading, [original_text])
+        if original_text:
+            append_block(lines, blocks, original_heading, [original_text])
 
     text = "\n".join(lines).strip()
     return {

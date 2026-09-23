@@ -118,8 +118,8 @@ class RendererTests(unittest.TestCase):
         )
 
     def test_01_marker(self):
-        self.assertEqual(renderer.MARKER, "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1F")
-        self.assertEqual(renderer.RENDERER_VERSION, "adaptive_v1f")
+        self.assertEqual(renderer.MARKER, "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G")
+        self.assertEqual(renderer.RENDERER_VERSION, "adaptive_v1g")
 
     def test_02_fixed_header(self):
         text = self.render()["text"]
@@ -418,8 +418,9 @@ class RendererTests(unittest.TestCase):
             "schedule": [{"time": "2026-07-14T09:00:00+08:00", "message": "检查材料"}],
         }
         text = self.render(d=d, e=e, delivery=delivery)["text"]
-        for title in ("发件人", "主题", "摘要", "待办", "截止时间", "附件", "提醒", "风险提示", "原文"):
+        for title in ("发件人", "主题", "摘要", "待办", "截止时间", "附件", "提醒", "风险提示"):
             self.assertRegex(text, rf"\*\*{title}\*\*\n>")
+        self.assertNotIn("**原文**", text)
 
     def test_35_code_card_extracts_validity(self):
         d = decision(mode="code_card", summary="收到验证码邮件，请核对来源后使用。", category="验证码")
@@ -460,8 +461,9 @@ class RendererTests(unittest.TestCase):
             "schedule": [{"time": "2026-07-14T09:00:00+08:00", "message": "检查材料"}],
         }
         text = self.render(d=d, e=e, delivery=delivery)["text"]
-        for title in ("发件人", "主题", "摘要", "待办", "截止时间", "附件", "提醒", "风险提示", "原文"):
+        for title in ("发件人", "主题", "摘要", "待办", "截止时间", "附件", "提醒", "风险提示"):
             self.assertRegex(text, rf"\*\*{title}\*\*\n>")
+        self.assertNotIn("**原文**", text)
 
     def test_35_code_card_extracts_validity(self):
         d = decision(mode="code_card", summary="收到验证码邮件，请核对来源后使用。", category="验证码")

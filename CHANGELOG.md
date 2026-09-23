@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 - 2026-09-23
+
+- Read mail through non-mutating raw MIME export, preserving real HTML links,
+  attachment names, media types, and sizes without setting the Seen flag.
+- Render compact Markdown cards with clean sections, actionable links, useful
+  attachment names, and aggressive removal of image placeholders, template
+  chrome, footer noise, broken soft wraps, and redundant original-body dumps.
+- Automatically download and forward safe bounded attachments through the
+  existing per-part acknowledged Weixin outbox.
+- Persist actionable deadlines, maintain a local iCalendar view, and deliver
+  restart-safe reminders 24 hours and 1 hour before the event or deadline.
+- Repair Beijing clock times incorrectly labeled as UTC by model output and
+  reject incomplete action fragments in favor of clear grounded instructions.
+- Feed extracted links and real attachment metadata into risk assessment and
+  persistent audit tables.
+
 ## 0.3.1 - 2026-09-23
 
 - Replace closed-whitelist rejection of descriptive model fields with tolerant

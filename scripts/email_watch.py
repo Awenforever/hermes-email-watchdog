@@ -6,6 +6,7 @@ attachment downloading, sleep-time suppression, and WeChat push.
 Runs as no_agent cron job. Zero tokens when idle. Silent during sleep hours.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -14,8 +15,11 @@ import shutil
 import sys
 import importlib
 from html import unescape
+from email import policy as email_policy
+from email.parser import BytesParser
 from datetime import datetime, timezone, time as dtime
 from pathlib import Path
+import tempfile
 
 # ── New v3 modules ──
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -118,7 +122,7 @@ def get_last_output_metadata():
 CACHE_DIR = email_config.get_path("cache_dir") if HAS_V3 else os.path.expanduser("~/.hermes/email_cache")
 MAX_CACHED = int(_WATCHDOG_SETTINGS.get("max_cached", 200)) if HAS_V3 else 200
 
-def _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, has_attachments):
+def _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, has_attachments, attachments=None, links=None):
     """Save full email body to disk for later retrieval via WeChat commands."""
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -127,6 +131,8 @@ def _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, ha
             "account": acct_name, "msg_id": msg_id,
             "subject": subject, "from_addr": from_addr, "from_name": from_name,
             "body": body, "has_attachments": has_attachments,
+            "attachments": list(attachments or [])[:40],
+            "links": list(links or [])[:40],
             "cached_at": datetime.now().isoformat(),
         }
         with open(cache_file, "w") as f:
@@ -385,13 +391,109 @@ def _html_to_text(value):
     text = str(value or "")
     text = text.replace("\\n", "\n").replace("\\t", "\t")
     text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
+    text = re.sub(r"(?is)<img\b[^>]*>", " ", text)
+    def anchor(match):
+        href = unescape(match.group(1) or "").strip()
+        label = re.sub(r"(?s)<[^>]+>", " ", match.group(2) or "")
+        label = re.sub(r"\s+", " ", unescape(label)).strip()
+        if not href.lower().startswith(("http://", "https://")):
+            return label
+        rendered = f"{label}: {href}" if label and label.casefold() not in href.casefold() else href
+        return f"\n{rendered}\n"
+    text = re.sub(
+        r"(?is)<a\b[^>]*?href=[\"'](https?://[^\"']+)[\"'][^>]*>(.*?)</a>",
+        anchor,
+        text,
+    )
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p\s*>", "\n", text)
     text = re.sub(r"<[^>]+>", " ", text)
     text = unescape(text).replace("\xa0", " ")
+    text = re.sub(r"(?i)\[image(?::[^\]]*)?\]", " ", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def _extract_links_from_text(value):
+    text = str(value or "")
+    labels = {}
+    for label, url in re.findall(r"\[([^\]]{1,160})\]\((https?://[^)\s]+)\)", text, re.I):
+        labels[url] = re.sub(r"\s+", " ", label).strip()
+    for label, url in re.findall(r"(?im)^\s*([^\n:]{1,160})\s*:\s*(https?://\S+)", text):
+        labels.setdefault(url.rstrip(".,;)>]"), re.sub(r"\s+", " ", label).strip())
+    text = re.sub(r"(?<!^)(?<!\s)(https?://)", r"\n\1", text, flags=re.I)
+    out = []
+    seen = set()
+    for url in re.findall(r"https?://[^\s<>\"')\]\u4e00-\u9fff]+", text, re.I):
+        url = unescape(url).rstrip(".,;:)>]")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append({"url": url, "display_text": labels.get(url, "")})
+        if len(out) >= 40:
+            break
+    return out
+
+
+def _parse_exported_message(path):
+    message = BytesParser(policy=email_policy.default).parsebytes(Path(path).read_bytes())
+    plain_parts, html_parts, attachments = [], [], []
+    parts = message.walk() if message.is_multipart() else [message]
+    for part in parts:
+        content_type = part.get_content_type()
+        disposition = part.get_content_disposition()
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if disposition == "attachment" or filename:
+            attachments.append({
+                "filename": str(filename or "attachment")[:240],
+                "content_type": content_type,
+                "size_bytes": len(payload),
+            })
+            continue
+        if content_type not in {"text/plain", "text/html"}:
+            continue
+        try:
+            value = part.get_content()
+        except Exception:
+            value = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        if content_type == "text/html":
+            html_parts.append(str(value))
+        else:
+            plain_parts.append(str(value))
+    plain = _html_to_text("\n\n".join(plain_parts))
+    html_text = _html_to_text("\n\n".join(html_parts))
+    links = _extract_links_from_text(html_text)
+    body = plain or html_text
+    if links and not _extract_links_from_text(body):
+        body = (body + "\n\n" + "\n".join(
+            f"{item.get('display_text') or '链接'}: {item['url']}" for item in links
+        )).strip()
+    return {
+        "text": body,
+        "html_text": html_text,
+        "links": links or _extract_links_from_text(body),
+        "attachments": attachments,
+        "has_attachments": bool(attachments),
+    }
+
+
+def _export_himalaya_message(config_path, msg_id):
+    attempts = []
+    with tempfile.TemporaryDirectory(prefix="hermes-email-read-") as tmp:
+        destination = Path(tmp) / "message.eml"
+        args = ["message", "export", str(msg_id), "--full", "--destination", str(destination)]
+        for cmd in _himalaya_cmd_variants(config_path, args):
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+                attempts.append({"rc": 124 if isinstance(exc, subprocess.TimeoutExpired) else 127, "error": str(exc)})
+                continue
+            attempts.append({"rc": result.returncode, "stderr": _himalaya_error_snippet(result.stderr)})
+            if result.returncode == 0 and destination.is_file():
+                return _parse_exported_message(destination)
+    raise HimalayaCommandError(["message", "export", str(msg_id)], attempts)
 
 
 def _extract_message_body(msg):
@@ -424,7 +526,15 @@ def _extract_message_body(msg):
 
 
 def read_himalaya(config_path, msg_id):
-    data = _run_himalaya_json(config_path, ["message", "read", str(msg_id), "--output", "json"], timeout=30)
+    try:
+        return _export_himalaya_message(config_path, msg_id)
+    except Exception:
+        # Preview is essential: a watchdog must never mutate the mailbox's Seen flag.
+        data = _run_himalaya_json(
+            config_path,
+            ["message", "read", str(msg_id), "--preview", "--output", "json"],
+            timeout=30,
+        )
     if data is None:
         return None
     if isinstance(data, dict):
@@ -916,7 +1026,7 @@ def _delivery_owns_learning_record(delivery):
     if not isinstance(delivery, dict):
         return False
     return str(delivery.get("production_route") or "") in {
-        "adaptive_v1e", "adaptive_v1f", "legacy_fallback",
+        "adaptive_v1e", "adaptive_v1f", "adaptive_v1g", "legacy_fallback",
     }
 
 
@@ -973,6 +1083,7 @@ def check_account(acct, pushed_count=None):
                 or (msg.get("attachment_list") if isinstance(msg, dict) else None)
                 or []
             )
+            links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
         else:
             body = msg.get("body", "") if isinstance(msg, dict) else ""
             from_addr = env.get("from", {}).get("email", "")
@@ -982,6 +1093,7 @@ def check_account(acct, pushed_count=None):
             to_list = env.get("to") or [{}]
             to_addr = to_list[0].get("email", "") if to_list else ""
             attachments = env.get("attachments", [])
+            links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
 
         from_addr_lower = (from_addr or "").lower()
         from_domain = from_addr_lower.split("@", 1)[1] if "@" in from_addr_lower else ""
@@ -991,26 +1103,53 @@ def check_account(acct, pushed_count=None):
             "from_domain": from_domain, "from_name": from_name,
             "body": body[:12000], "to_addr": to_addr,
             "has_attachments": has_attachments, "has_attachment": has_attachments,
-            "attachments": attachments, "date_sent": env.get("date", ""),
+            "attachments": attachments, "links": links, "has_links": bool(links),
+            "date_sent": env.get("date", ""),
         }
 
-        _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, has_attachments)
+        _cache_full_email(
+            acct_name, msg_id, subject, from_addr, from_name, body,
+            has_attachments, attachments=attachments, links=links,
+        )
 
         if HAS_V3:
             own_domains = email_trust.get_own_domains_cached()
             contact_data = email_store.get_contact(from_addr_lower)
             trust_result = email_trust.compute_trust(from_addr_lower, from_domain, own_domains, contact_data)
             risk_result = email_risk.compute_risk(
-                {"subject": subject, "from_email": from_addr_lower, "body": body, "has_attachment": has_attachments}, trust_result
+                {
+                    "subject": subject,
+                    "from_email": from_addr_lower,
+                    "body": body,
+                    "has_attachment": has_attachments,
+                    "attachments": attachments,
+                    "has_links": bool(links),
+                    "links": links,
+                },
+                trust_result,
             ) if trust_result.get("label") != "blocked" else {"score": 100, "label": "critical", "flags": ["trust_blocked"]}
             email_store.upsert_message({
                 "id": msg_id, "account": acct_name, "subject": subject, "from_name": from_name,
                 "from_email": from_addr_lower, "from_domain": from_domain, "date_sent": env.get("date", ""),
                 "has_attachment": 1 if has_attachments else 0,
+                "has_links": 1 if links else 0,
                 "trust_score": trust_result["score"], "trust_label": trust_result["label"],
                 "risk_score": risk_result["score"], "risk_label": risk_result["label"], "push_status": "pending",
             })
             email_trust.learn_contact(from_addr_lower, from_name, own_domains)
+            for index, link in enumerate(links or []):
+                if not isinstance(link, dict) or not link.get("url"):
+                    continue
+                email_store.add_link({
+                    "id": hashlib.sha256(f"{msg_id}:{index}:{link['url']}".encode()).hexdigest()[:24],
+                    "message_id": msg_id,
+                    "url": str(link.get("url"))[:4000],
+                    "display_text": str(link.get("display_text") or "")[:500],
+                    "domain": re.sub(r"^https?://", "", str(link.get("url")), flags=re.I).split("/", 1)[0][:255],
+                    "link_type": "source",
+                    "risk_label": "unknown",
+                    "extract_status": "extracted",
+                })
         else:
             trust_result = {}
             risk_result = {}
@@ -1111,10 +1250,16 @@ def check_account(acct, pushed_count=None):
 
 def main():
     _reset_output_metadata()
+    due_alerts = []
+    if HAS_V3 and hasattr(email_delivery, "collect_due_reminder_notifications"):
+        try:
+            due_alerts = list(email_delivery.collect_due_reminder_notifications() or [])
+        except Exception:
+            due_alerts = []
     if is_sleep_time():
-        return ""
+        return "\n\n---\n\n".join(due_alerts)
 
-    all_alerts = []
+    all_alerts = list(due_alerts)
     accounts_seen = set()
 
     for acct in ACCOUNTS:

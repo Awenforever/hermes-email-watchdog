@@ -49,7 +49,7 @@ def main() -> int:
         decision = result["decision"]
         rendered = email_notification_renderer.render_notification(
             email, decision, {}, {"name": email.get("account") or ""},
-            settings_override={"mode": "production", "renderer": "adaptive_v1f"},
+            settings_override={"mode": "production", "renderer": "adaptive_v1g"},
         )
         category = str((decision.get("classification") or {}).get("category") or "")
         action = decision.get("action") or {}

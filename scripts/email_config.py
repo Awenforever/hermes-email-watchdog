@@ -79,7 +79,7 @@ DEFAULT_CONFIG = {
     },
     # EMAIL_WATCHDOG_ADAPTIVE_RENDERER_CONFIG_SHADOW_V1
     "notification": {
-        "renderer": "adaptive_v1f",
+        "renderer": "adaptive_v1g",
         "mode": "production",
         "production_route_enabled": True,
         "all_mail_push": False,
@@ -89,7 +89,7 @@ DEFAULT_CONFIG = {
         # parallel classifier that silently bypasses deepseek-flash.
         "fast_lane_enabled": False,
         "original_policy": "auto",
-        "original_max_chars": 5000,
+        "original_max_chars": 900,
         "show_priority": True,
         "show_category": True,
         "show_time": True,
@@ -108,14 +108,17 @@ DEFAULT_CONFIG = {
     "delivery": {
         "auto_download_attachments": True,
         "forward_attachments_to_weixin": True,
+        "auto_forward_safe_attachments": True,
         "attachment_max_bytes": 25 * 1024 * 1024,
         "attachment_safe_extensions": [
             ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp",
             ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx",
             ".ppt", ".pptx", ".zip", ".7z",
         ],
-        "create_reminders": False,
-        "managed_cron": False,
+        "create_reminders": True,
+        "managed_cron": True,
+        "reminder_offsets_minutes": [1440, 60],
+        "calendar_path": "~/Documents/EmailAttachments/email-watchdog-calendar.ics",
         "timezone": "auto",
         "target": {
             "platform": "",

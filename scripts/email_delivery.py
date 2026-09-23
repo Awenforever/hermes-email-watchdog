@@ -9,8 +9,9 @@ import subprocess
 import shutil
 from html import unescape
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -437,13 +438,19 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
 
     policy = (analysis.get("attachment_handling") or {}).get("policy") or "none"
     policy = _policy_after_domain_guard(policy, email)
+    settings = email_config.get_delivery_settings() if email_config else {}
+    if (
+        policy in ("none", "list_only")
+        and settings.get("auto_forward_safe_attachments", True)
+        and settings.get("forward_attachments_to_weixin", True)
+    ):
+        policy = "download_safe"
     if policy in ("none", "list_only"):
         listed = _list_attachments(email, attachments, policy)
         for att in listed:
             _persist_attachment(email, att)
         return listed
 
-    settings = email_config.get_delivery_settings() if email_config else {}
     if settings.get("auto_download_attachments", True) is False:
         return _list_attachments(email, attachments, "listed")
 
@@ -544,22 +551,30 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
     msg_id = email.get("id") or email.get("msg_id")
     sched_id = f"{msg_id}:main"
     action = analysis.get("action_needed") or {}
+    deadline_value = deadline.get("datetime") or deadline.get("date_text") or ""
+    if not reminders and deadline_value:
+        reminders = _default_reminders(
+            deadline_value,
+            analysis.get("formatted_summary") or email.get("subject", ""),
+            settings,
+        )
     item = {
         "id": sched_id,
         "message_id": msg_id,
         "title": analysis.get("formatted_summary") or email.get("subject", ""),
         "action_needed": action.get("description") or action.get("next_step") or "",
-        "deadline": deadline.get("datetime"),
+        "deadline": deadline_value,
         "timezone": deadline.get("timezone") or settings.get("timezone", "Asia/Shanghai"),
         "status": "active",
         "reminder_json": json.dumps(reminders, ensure_ascii=False),
     }
     email_store.upsert_schedule(item)
+    _sync_calendar_ics()
     return [{**item, "reminders": reminders}]
 
 
 def install_reminder_cron(schedule_items: list) -> list:
-    """Create/update managed reminder cron entries or return planned entries if disabled."""
+    """Describe reminders owned by the portable persistent watchdog scheduler."""
     settings = email_config.get_delivery_settings() if email_config else {}
     entries = []
     for item in schedule_items:
@@ -571,6 +586,131 @@ def install_reminder_cron(schedule_items: list) -> list:
                 "managed": bool(settings.get("managed_cron", False)),
             })
     return entries
+
+
+def _parse_datetime(value, tz_name="Asia/Shanghai"):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        try:
+            dt = dt.replace(tzinfo=ZoneInfo(tz_name if tz_name != "auto" else "Asia/Shanghai"))
+        except Exception:
+            dt = dt.replace(tzinfo=timezone(timedelta(hours=8)))
+    return dt
+
+
+def _default_reminders(deadline_value, title, settings):
+    tz_name = str(settings.get("timezone") or "Asia/Shanghai")
+    deadline = _parse_datetime(deadline_value, tz_name)
+    if deadline is None:
+        return []
+    now = datetime.now(deadline.tzinfo)
+    offsets = settings.get("reminder_offsets_minutes") or [1440, 60]
+    reminders = []
+    for raw in offsets:
+        try:
+            minutes = max(1, int(raw))
+        except Exception:
+            continue
+        when = deadline - timedelta(minutes=minutes)
+        if when <= now:
+            continue
+        kind = "提前1天" if minutes == 1440 else ("提前1小时" if minutes == 60 else f"提前{minutes}分钟")
+        reminders.append({
+            "time": when.isoformat(timespec="seconds"),
+            "kind": kind,
+            "message": f"{str(title or '邮件待办').strip()}（如已完成请忽略）",
+        })
+    return reminders
+
+
+def _ics_escape(value):
+    return str(value or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def _sync_calendar_ics():
+    if not email_store or not email_config:
+        return ""
+    settings = email_config.get_delivery_settings()
+    target = str(settings.get("calendar_path") or "").strip()
+    if not target:
+        return ""
+    path = Path(os.path.expanduser(target))
+    events = []
+    for item in email_store.get_schedules("active", 500):
+        dt = _parse_datetime(item.get("deadline"), item.get("timezone") or "Asia/Shanghai")
+        if dt is None:
+            continue
+        events.extend([
+            "BEGIN:VEVENT",
+            f"UID:{_ics_escape(item.get('id'))}@hermes-email-watchdog",
+            f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            f"DTSTART:{dt.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+            f"SUMMARY:{_ics_escape(item.get('title') or '邮件待办')}",
+            f"DESCRIPTION:{_ics_escape(item.get('action_needed') or '如已完成请忽略')}",
+            "END:VEVENT",
+        ])
+    content = "\r\n".join(["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Hermes//Email Watchdog//ZH", *events, "END:VCALENDAR", ""])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
+    return str(path)
+
+
+def collect_due_reminder_notifications(now=None):
+    """Return due reminders once; the hook's durable outbox owns final delivery."""
+    if not email_store or not email_config:
+        return []
+    settings = email_config.get_delivery_settings()
+    if not settings.get("create_reminders", True) or not settings.get("managed_cron", True):
+        return []
+    current = now or datetime.now().astimezone()
+    alerts = []
+    for item in email_store.get_schedules("active", 500):
+        deadline = _parse_datetime(item.get("deadline"), item.get("timezone") or "Asia/Shanghai")
+        if deadline is not None and current.astimezone(deadline.tzinfo) > deadline:
+            email_store.update_schedule(item["id"], {"status": "expired"})
+            continue
+        try:
+            reminders = json.loads(item.get("reminder_json") or "[]")
+        except Exception:
+            reminders = []
+        try:
+            sent = set(json.loads(item.get("reminders_sent_json") or "[]"))
+        except Exception:
+            sent = set()
+        changed = False
+        for reminder in reminders:
+            if not isinstance(reminder, dict):
+                continue
+            when = _parse_datetime(reminder.get("time"), item.get("timezone") or "Asia/Shanghai")
+            key = f"{reminder.get('time','')}|{reminder.get('kind','')}"
+            if when is None or key in sent or current.astimezone(when.tzinfo) < when:
+                continue
+            title = str(item.get("title") or "邮件待办").strip()
+            action = str(item.get("action_needed") or reminder.get("message") or "请及时处理").strip()
+            deadline_text = deadline.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") if deadline else str(item.get("deadline") or "")
+            alerts.append(
+                "### ⏰ 邮件待办提醒\n\n"
+                f"**{title}**\n\n"
+                f"- 截止：`{deadline_text} 北京时间`\n"
+                f"- 待办：{action}\n"
+                f"- 提醒：{reminder.get('kind') or '到期前'}\n\n"
+                "如已完成请忽略。"
+            )
+            sent.add(key)
+            changed = True
+        if changed:
+            email_store.update_schedule(item["id"], {"reminders_sent_json": json.dumps(sorted(sent), ensure_ascii=False)})
+    if alerts:
+        _sync_calendar_ics()
+    return alerts
 
 
 def _policy_after_domain_guard(policy: str, email: dict) -> str:
@@ -687,9 +827,13 @@ def _persist_attachment(email, att):
         "id": att_id,
         "message_id": msg_id,
         "filename": filename,
+        "content_type": att.get("content_type"),
+        "size_bytes": att.get("size_bytes"),
         "local_path": local_path,
         "download_status": att.get("download_status", "listed"),
         "source": "watchdog",
+        "risk_label": "low" if att.get("send_to_weixin") else "unknown",
+        "risk_reason": att.get("forward_reason"),
     })
 
 
@@ -1352,7 +1496,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     "schedule": [],
                     "cron_entries": [],
                     "status": "suppressed",
-                    "production_route": "adaptive_v1f",
+                    "production_route": "adaptive_v1g",
                     "route_lane": route_lane,
                     "route_reasons": route_reason,
                     "semantic": semantic_meta,
@@ -1370,7 +1514,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 {"attachments": attachments, "schedule": schedule},
                 account or {},
                 settings_override={
-                    "renderer": "adaptive_v1f", "mode": "production",
+                    "renderer": "adaptive_v1g", "mode": "production",
                     "original_policy": "auto", "show_debug_reason": False,
                 },
             )
@@ -1385,7 +1529,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 "schedule": schedule,
                 "cron_entries": cron_entries,
                 "status": "pushed",
-                "production_route": "adaptive_v1f",
+                "production_route": "adaptive_v1g",
                 "route_lane": route_lane,
                 "route_reasons": route_reason,
                 "semantic": semantic_meta,
@@ -1394,7 +1538,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
             }
             try:
                 semantic_meta["production_persist"] = email_semantic_engine.persist_production_observation(
-                    email or {}, semantic_meta, production_route="adaptive_v1f"
+                    email or {}, semantic_meta, production_route="adaptive_v1g"
                 )
             except Exception:
                 pass

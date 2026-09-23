@@ -198,6 +198,26 @@ class CoreSchemaTests(unittest.TestCase):
         self.assertFalse(errors)
         self.assertFalse(decision["deadline"]["has_deadline"])
 
+    def test_17b_beijing_clock_mislabeled_as_z_is_repaired(self):
+        value = valid_core()
+        value.update(content_mode="deadline_card")
+        value["deadline"] = {
+            "datetime": "2026-09-23T16:00:00Z",
+            "date_text": "2026年9月23日（周三）下午16:00",
+            "confidence": 1.0,
+            "evidence": "2026年9月23日（周三）下午16:00",
+        }
+        grounded = facts()
+        grounded["source_body"] = (
+            "请查看通知并核对要求。无需立即回复邮件。"
+            "培训时间：2026年9月23日（周三）下午16:00-18:00"
+        )
+        decision, errors = core.normalize_and_expand(
+            value, message_key="test:m1", facts=grounded
+        )
+        self.assertFalse(errors)
+        self.assertEqual(decision["deadline"]["datetime"], "2026-09-23T16:00:00+08:00")
+
     def test_18_absent_attachment_policy_forced_none(self):
         value = valid_core(); value["attachment_policy"] = "list_only"
         decision, errors = self.expand(value)
@@ -816,7 +836,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertTrue(result["timeout"])
 
     def test_28_prompt_version_invalidates_old_cache(self):
-        self.assertIn("tolerant_grounded_core", engine.PROMPT_VERSION)
+        self.assertIn("assistant_actions", engine.PROMPT_VERSION)
         self.assertIn("READABLE_GROUNDED_CORE", engine.MARKER)
 
 

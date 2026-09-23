@@ -32,7 +32,7 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(cfg["semantic_engine"]["provider_name"], "USTC")
         self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")
         self.assertEqual(cfg["semantic_engine"]["fallback_model"], "qwen3.6-chat")
-        self.assertEqual(cfg["notification"]["renderer"], "adaptive_v1f")
+        self.assertEqual(cfg["notification"]["renderer"], "adaptive_v1g")
         self.assertEqual(cfg["notification"]["mode"], "production")
         self.assertTrue(cfg["notification"]["production_route_enabled"])
         self.assertEqual(cfg["notification"]["original_policy"], "always")

@@ -445,6 +445,26 @@ def _extract_deadline_quote(source: str) -> str:
             return text[:240]
     return ""
 
+
+def _canonicalize_china_local_deadline(datetime_value: str, date_text: str) -> tuple[str, bool]:
+    """Repair the common model error of appending Z to a stated Beijing clock time."""
+    match = re.search(
+        r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]"
+        r"[^\d]{0,24}(\d{1,2})\s*[:：]\s*(\d{2})",
+        date_text or "",
+    )
+    if not match:
+        return datetime_value, False
+    year, month, day, hour, minute = (int(value) for value in match.groups())
+    local_iso = f"{year:04d}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:00+08:00"
+    raw = str(datetime_value or "").strip()
+    if not raw:
+        return local_iso, True
+    clock = re.match(r"^(20\d{2})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})?Z$", raw)
+    if clock and tuple(int(value) for value in clock.groups()) == (year, month, day, hour, minute):
+        return local_iso, True
+    return raw, False
+
 def looks_like_full_decision(raw: Any) -> bool:
     return isinstance(raw, Mapping) and (
         "schema_version" in raw or "classification" in raw or "notification" in raw
@@ -894,6 +914,11 @@ def normalize_and_expand_detailed(
     deadline.pop("has_deadline", None)
     deadline_datetime = _text(deadline.get("datetime"), 100)
     deadline_text = _text(deadline.get("date_text"), 200)
+    deadline_datetime, repaired_local_tz = _canonicalize_china_local_deadline(
+        deadline_datetime, deadline_text
+    )
+    if repaired_local_tz:
+        repairs.append("grounding:canonicalize_china_local_deadline_timezone")
     deadline_evidence = _text(deadline.get("evidence"), 240)
     has_deadline = bool(deadline_datetime or deadline_text)
     if has_deadline and not _quote_supported(deadline_evidence, grounding_source):

@@ -51,14 +51,14 @@
     "num_predict_hard_cap": 2048
   },
   "notification": {
-    "renderer": "adaptive_v1f",
+    "renderer": "adaptive_v1g",
     "mode": "production",
     "production_route_enabled": true,
     "all_mail_push": false,
     "legacy_fallback_enabled": true,
     "fast_lane_enabled": false,
     "original_policy": "auto",
-    "original_max_chars": 5000,
+    "original_max_chars": 900,
     "show_priority": true,
     "show_category": true,
     "show_time": true,
@@ -76,14 +76,17 @@
   "delivery": {
     "auto_download_attachments": true,
     "forward_attachments_to_weixin": true,
+    "auto_forward_safe_attachments": true,
     "attachment_max_bytes": 26214400,
     "attachment_safe_extensions": [
       ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp",
       ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx",
       ".ppt", ".pptx", ".zip", ".7z"
     ],
-    "create_reminders": false,
-    "managed_cron": false,
+    "create_reminders": true,
+    "managed_cron": true,
+    "reminder_offsets_minutes": [1440, 60],
+    "calendar_path": "~/Documents/EmailAttachments/email-watchdog-calendar.ics",
     "timezone": "auto",
     "target": {
       "platform": "",

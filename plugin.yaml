@@ -1,5 +1,5 @@
 name: hermes-email-watchdog
-version: 0.3.1
+version: 0.4.0
 manifest_version: 1
 api_version: 1
 description: Read-only email triage with grounded classification and actionable messaging alerts.
@@ -47,5 +47,13 @@ config_schema:
     description: Forward safe bounded downloaded attachments with their notification.
   notification_renderer:
     type: str
-    default: adaptive_v1f
+    default: adaptive_v1g
     description: Compact mobile notification renderer.
+  create_reminders:
+    type: bool
+    default: true
+    description: Persist actionable deadlines and create 24-hour and 1-hour reminders.
+  managed_reminder_scheduler:
+    type: bool
+    default: true
+    description: Deliver due reminders through the plugin's portable scheduler.

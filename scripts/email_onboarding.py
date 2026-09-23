@@ -387,6 +387,31 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     # unit; if any of these fields was customized, preserve the whole policy.
     allowed, _ = _migrate_known_v2_assistant_policy(allowed)
 
+    # v0.3.x shipped these exact conservative defaults.  They looked like a
+    # complete assistant contract but left rich rendering and reminders off.
+    # Upgrade only that exact signature; genuinely customized values remain
+    # owned by the user.
+    notification = allowed.get("notification") if isinstance(allowed.get("notification"), dict) else {}
+    delivery = allowed.get("delivery") if isinstance(allowed.get("delivery"), dict) else {}
+    if (
+        str(notification.get("renderer") or "") == "adaptive_v1f"
+        and int(notification.get("original_max_chars") or 0) == 5000
+        and delivery.get("create_reminders") is False
+        and delivery.get("managed_cron") is False
+    ):
+        notification["renderer"] = "adaptive_v1g"
+        notification["original_max_chars"] = 900
+        delivery["create_reminders"] = True
+        delivery["managed_cron"] = True
+        delivery["auto_forward_safe_attachments"] = True
+        delivery.setdefault("reminder_offsets_minutes", [1440, 60])
+        delivery.setdefault(
+            "calendar_path",
+            email_config.DEFAULT_CONFIG["delivery"]["calendar_path"],
+        )
+        allowed["notification"] = notification
+        allowed["delivery"] = delivery
+
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
     cfg["version"] = 3
     cfg["paths"] = {

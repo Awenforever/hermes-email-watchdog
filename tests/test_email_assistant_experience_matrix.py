@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import importlib.util
 import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from pathlib import Path
 from unittest import mock
 
@@ -17,6 +20,7 @@ sys.path.insert(0, str(SCRIPTS))
 import email_config
 import email_delivery
 import email_production_router
+import email_notification_renderer
 import email_semantic_core
 import email_semantic_engine
 import email_watch
@@ -232,6 +236,125 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertTrue(decision["notification"]["should_notify"])
         self.assertTrue(decision["action"]["required"])
         self.assertTrue(email_production_router.should_push_notification(decision))
+
+    def test_10_raw_mime_keeps_confirmation_link_and_real_attachment(self):
+        message = EmailMessage()
+        message["Subject"] = "Confirmation instructions"
+        message.set_content("Confirm your email")
+        message.add_alternative(
+            '<p>Welcome.</p><a href="https://example.test/confirm?token=abc">Confirm your email</a>'
+            '<img src="https://example.test/pixel.gif" alt="logo">',
+            subtype="html",
+        )
+        message.add_attachment(b"%PDF-test", maintype="application", subtype="pdf", filename="invoice.pdf")
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "mail.eml"
+            path.write_bytes(message.as_bytes())
+            parsed = email_watch._parse_exported_message(path)
+        self.assertEqual(parsed["attachments"][0]["filename"], "invoice.pdf")
+        self.assertEqual(parsed["links"][0]["display_text"], "Confirm your email")
+        self.assertIn("https://example.test/confirm?token=abc", parsed["links"][0]["url"])
+        self.assertNotIn("[image", parsed["text"].lower())
+
+    def test_11_rich_renderer_shows_action_link_without_image_placeholders(self):
+        decision = {
+            "classification": {"category": "account_status_notice", "label": "账户状态"},
+            "importance": {"level": "high"},
+            "notification": {
+                "should_notify": True, "content_mode": "summary_plus_original",
+                "summary_style": "paragraph", "summary": "请确认新账号邮箱。",
+                "key_points": [], "original_policy": "excerpt",
+            },
+            "action": {"required": True, "description": "确认邮箱", "next_step": "打开确认链接"},
+            "deadline": {"has_deadline": False},
+            "attachments": {"present": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        result = email_notification_renderer.render_notification(
+            {
+                "account": "USTC", "subject": "Confirmation instructions",
+                "body": "[image: Logo]\nConfirm your email\nPrivacy Policy",
+                "links": [{"display_text": "Confirm your email", "url": "https://example.test/confirm?token=abc"}],
+            },
+            decision,
+            {"attachments": [], "schedule": []},
+            {},
+            settings_override={"renderer": "adaptive_v1g", "mode": "production", "original_max_chars": 900},
+        )
+        self.assertTrue(result["text"].startswith("### 📬"))
+        self.assertIn("[Confirm your email](https://example.test/confirm?token=abc)", result["text"])
+        self.assertNotIn("[image", result["text"].lower())
+        self.assertLess(len(result["text"]), 1200)
+
+    def test_12_deadline_creates_24h_and_1h_persistent_reminders(self):
+        deadline = datetime.now(timezone.utc) + timedelta(days=3)
+        settings = {
+            "timezone": "Asia/Shanghai",
+            "reminder_offsets_minutes": [1440, 60],
+        }
+        reminders = email_delivery._default_reminders(deadline.isoformat(), "提交申请", settings)
+        self.assertEqual([item["kind"] for item in reminders], ["提前1天", "提前1小时"])
+        self.assertTrue(all("如已完成请忽略" in item["message"] for item in reminders))
+
+    def test_13_due_reminder_is_emitted_once(self):
+        now = datetime.now(timezone.utc)
+        reminder_time = (now - timedelta(minutes=1)).isoformat()
+        deadline = (now + timedelta(hours=1)).isoformat()
+        schedule = {
+            "id": "mail:main", "message_id": "mail", "title": "提交申请",
+            "action_needed": "上传申请表", "deadline": deadline, "timezone": "Asia/Shanghai",
+            "reminder_json": json.dumps([{"time": reminder_time, "kind": "提前1小时", "message": "提交申请"}]),
+            "reminders_sent_json": "[]", "status": "active",
+        }
+        updates = []
+        store = mock.Mock()
+        store.get_schedules.return_value = [schedule]
+        store.update_schedule.side_effect = lambda key, value: updates.append((key, value))
+        with mock.patch.object(email_delivery, "email_store", store), mock.patch.object(
+            email_delivery.email_config, "get_delivery_settings",
+            return_value={"create_reminders": True, "managed_cron": True, "calendar_path": ""},
+        ):
+            alerts = email_delivery.collect_due_reminder_notifications(now=now)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("如已完成请忽略", alerts[0])
+        self.assertTrue(updates)
+
+    def test_14_himalaya_fallback_is_explicit_preview(self):
+        with mock.patch.object(email_watch, "_export_himalaya_message", side_effect=RuntimeError("old client")), mock.patch.object(
+            email_watch, "_run_himalaya_json", return_value={"body": "hello"}
+        ) as runner:
+            result = email_watch.read_himalaya("mail.toml", "42")
+        self.assertEqual(result["text"], "hello")
+        self.assertIn("--preview", runner.call_args.args[1])
+
+    def test_15_list_only_model_policy_still_forwards_safe_attachment(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            pdf = root / "report.pdf"
+            pdf.write_bytes(b"%PDF-safe")
+            email = {
+                "id": "m", "msg_id": "m", "from_domain": "example.edu.cn",
+                "has_attachments": True,
+                "attachments": [{"filename": "report.pdf", "content_type": "application/pdf"}],
+            }
+            analysis = {"attachment_handling": {"policy": "list_only"}}
+            settings = {
+                "auto_download_attachments": True,
+                "forward_attachments_to_weixin": True,
+                "auto_forward_safe_attachments": True,
+                "attachment_max_bytes": 1024 * 1024,
+                "attachment_safe_extensions": [".pdf"],
+            }
+            with mock.patch.object(email_delivery.email_config, "get_delivery_settings", return_value=settings), mock.patch.object(
+                email_delivery, "_save_root", return_value=td
+            ), mock.patch.object(
+                email_delivery, "_download_himalaya", return_value=[str(pdf)]
+            ), mock.patch.object(email_delivery, "_persist_attachment"):
+                result = email_delivery.download_attachments(
+                    email, analysis, {"type": "himalaya", "config": "mail.toml"}
+                )
+        self.assertEqual(result[0]["filename"], "report.pdf")
+        self.assertTrue(result[0]["send_to_weixin"])
 
 
 class WeixinAttachmentTransportTests(unittest.IsolatedAsyncioTestCase):

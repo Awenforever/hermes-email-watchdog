@@ -324,7 +324,8 @@ def main() -> None:
         # Runtime default and distributable template match exactly.
         template = json.loads((ROOT / "references/email_watchdog_config.template.json").read_text(encoding="utf-8"))
         ok(email_config.DEFAULT_CONFIG == template, "runtime/template parity")
-        ok(email_config.DEFAULT_CONFIG["delivery"]["create_reminders"] is False, "no reminder write default")
+        ok(email_config.DEFAULT_CONFIG["delivery"]["create_reminders"] is True, "persistent reminder default")
+        ok(email_config.DEFAULT_CONFIG["delivery"]["managed_cron"] is True, "managed reminder scheduler default")
         ok(email_config.DEFAULT_CONFIG["safety"]["mailbox_read_only"] is True, "safety default")
 
         # Static TOML template has no SMTP or literal secret example.
