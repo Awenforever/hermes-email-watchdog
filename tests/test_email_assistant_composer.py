@@ -312,6 +312,36 @@ Best regards""",
         self.assertNotIn("快捷操作", text)
         self.assertNotIn("政策公告", text)
 
+    def test_apc_notice_uses_summary_and_payment_link_not_fake_date(self):
+        email = {
+            "account": "USTC", "subject": "Reminder: PAST DUE - Please Submit Your IEEE Article Processing Charge(s)",
+            "from_addr": "no-reply@email.copyright.com",
+            "body": "Please verify the charges and follow the steps to make a payment or generate an invoice.",
+            "links": [{
+                "url": "https://oa.copyright.com/apc-payment-ui/overview?id=abc&chargeset=CHARGES",
+                "display_text": "Pay charges now / Raise an invoice",
+            }],
+        }
+        decision = {
+            "classification": {"category": "invoice_receipt", "label": "发票/收据"},
+            "importance": {"level": "high"},
+            "notification": {
+                "content_mode": "summary_only", "summary_style": "bullets", "summary": "",
+                "key_points": [
+                    "IEEE通过RightsLink催缴已逾期的文章处理费。",
+                    "请核实费用并付款或生成发票。",
+                ],
+                "original_policy": "none",
+            },
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("**账单摘要**", text)
+        self.assertIn("IEEE通过RightsLink催缴", text)
+        self.assertIn("[查看并处理账单]", text)
+        self.assertNotIn("生成日期", text)
+
     def test_english_model_action_is_rewritten_for_orcid_authorization(self):
         email = {
             "account": "USTC", "subject": "[ORCID] You have new notifications",

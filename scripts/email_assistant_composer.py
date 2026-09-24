@@ -175,7 +175,7 @@ def _invoice_facts(source: str, decision: Mapping[str, Any]) -> List[Tuple[str, 
     invoice = _first((r"invoice(?:\s+(?:no\.?|number))?\s*[:#]?\s*([A-Z-]*\d[A-Z0-9-]{3,})", r"(?:发票(?:号码|号)?|号码)\s*[：:【]?\s*([A-Z-]*\d[A-Z0-9-]{3,})"), source)
     amount = _first((r"balance\s+due\s*[:：]?\s*([^\n]{1,40})", r"(?:amount|total)\s+due\s*[:：]?\s*([^\n]{1,40})", r"(?:应付(?:余额|金额)?|价税合计|开票金额|票价)\s*[:：]?\s*([¥￥$]?\s*\d+(?:\.\d{1,2})?\s*(?:元|USD|CNY)?)"), source)
     due = _first((r"due\s+date\s*[:：]?\s*([^\n]{1,40})", r"到期日\s*[:：]?\s*([^\n]{1,40})"), source)
-    generated = _first((r"generated\s+(?:on\s+)?(\d{4}[/-]\d{1,2}[/-]\d{1,2})", r"生成(?:日期)?\s*[:：]?\s*([^\n]{1,40})"), source)
+    generated = _first((r"generated\s+(?:on\s+)?(\d{4}[/-]\d{1,2}[/-]\d{1,2})", r"生成日期\s*[:：]\s*((?:20)?\d{2}[年/-]\d{1,2}[月/-]\d{1,2}日?)"), source)
     method = _first((r"payment\s+method\s+(?:is\s*)?[:：]\s*([^\n]{1,80})", r"付款方式\s*[:：]?\s*([^\n]{1,80})"), source)
     deadline = _mapping(decision.get("deadline"))
     due = due or _text(deadline.get("date_text") or deadline.get("datetime"), 80)
@@ -322,7 +322,11 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
         if category == "academic_report_digest":
             title_like = bool(label and 12 <= len(label) <= 220 and not re.search(r"(?i)打开|click|view|pdf$|www\.", label))
             score = 0 if title_like and research_link.search(haystack) else (5 if research_link.search(haystack) else 50)
-        if category == "invoice_receipt" and re.search(r"(?i)viewinvoice|pay(?:ment)?(?:/|\?|$)|billing/(?:invoice|pay)|download[^\s]*invoice", haystack):
+        if category == "invoice_receipt" and re.search(
+            r"(?i)viewinvoice|pay(?:ment)?(?:/|\?|[-_ ]?(?:ui|charges?))|billing/(?:invoice|pay)|"
+            r"download[^\s]*invoice|raise\s+an?\s+invoice|apc[-_/]?payment|发票.{0,12}(?:下载|付款|支付)",
+            haystack,
+        ):
             score, label = 0, "查看并处理账单"
         elif category == "invoice_receipt":
             score = 50
