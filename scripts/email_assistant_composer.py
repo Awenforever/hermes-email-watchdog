@@ -510,6 +510,19 @@ def _deadline_display(deadline: Mapping[str, Any], email: Mapping[str, Any]) -> 
             parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
         expired = parsed.astimezone(ZoneInfo("Asia/Shanghai")) < datetime.now(ZoneInfo("Asia/Shanghai"))
         return display, expired
+    # A relative deadline belongs to the message's send time, not to the
+    # moment at which an old message is replayed.  When an old message says
+    # "within two weeks" (or the Chinese equivalent), presenting that as a
+    # live deadline months later is actively misleading.  Exact calendar
+    # deadlines are handled above; unresolved relative deadlines on stale
+    # mail are therefore safely treated as historical.
+    if _stale_message(email) and re.search(
+        r"(?i)(?:\d+|[一二三四五六七八九十两半]+)\s*(?:天|日|周|星期|个月|月)\s*(?:内|之内)|"
+        r"within\s+(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
+        r"(?:hour|day|week|month)s?",
+        candidate,
+    ):
+        return display, True
     return display, False
 
 

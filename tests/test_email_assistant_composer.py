@@ -194,6 +194,29 @@ Copyright © Mitce, All rights reserved.""",
         self.assertIn("这是一封历史邮件", text)
         self.assertNotIn("请尽快下载", text)
 
+    def test_stale_relative_deadline_is_not_presented_as_live(self):
+        email = {
+            "account": "USTC", "subject": "Revision reminder",
+            "from_addr": "editor@example.org", "date_sent": "2026-01-25 13:53 +0800",
+            "body": "Please submit your revision within two weeks.",
+        }
+        decision = {
+            "classification": {"category": "paper_manuscript_feedback", "label": "论文/稿件反馈"},
+            "importance": {"level": "high"},
+            "notification": {
+                "content_mode": "summary_only", "summary_style": "bullets", "summary": "",
+                "key_points": ["期刊要求在两周内提交返修。"], "original_policy": "none",
+            },
+            "action": {"required": True, "description": "尽快提交返修"},
+            "deadline": {"has_deadline": True, "date_text": "两周内"},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("邮件中的截止日期已过", text)
+        self.assertIn("原截止时间：`两周内`", text)
+        self.assertNotIn("尽快提交返修", text)
+        self.assertNotIn("截止时间：`两周内`", text.replace("原截止时间：`两周内`", ""))
+
     def test_curated_original_is_one_coherent_quote_not_mail_chrome(self):
         email = {
             "subject": "Fwd: Please review the draft", "from_addr": "person@example.test",
