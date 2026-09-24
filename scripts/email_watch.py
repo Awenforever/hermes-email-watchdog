@@ -415,18 +415,29 @@ def _html_to_text(value):
     return text.strip()
 
 
+def _clean_extracted_url(value):
+    url = unescape(str(value or "")).strip()
+    if url.startswith("<") and url.endswith(">"):
+        url = url[1:-1].strip()
+    url = url.rstrip(".,;:，。；!！?？")
+    for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")):
+        while url.endswith(closer) and url.count(closer) > url.count(opener):
+            url = url[:-1].rstrip()
+    return url
+
+
 def _extract_links_from_text(value):
     text = str(value or "")
     labels = {}
-    for label, url in re.findall(r"\[([^\]]{1,160})\]\((https?://[^)\s]+)\)", text, re.I):
-        labels[url] = re.sub(r"\s+", " ", label).strip()
+    for label, url in re.findall(r"\[([^\]]{1,160})\]\((https?://[^\s]+)\)", text, re.I):
+        labels[_clean_extracted_url(url)] = re.sub(r"\s+", " ", label).strip()
     for label, url in re.findall(r"(?im)^\s*([^\n:]{1,160})\s*:\s*(https?://\S+)", text):
-        labels.setdefault(url.rstrip(".,;)>]"), re.sub(r"\s+", " ", label).strip())
+        labels.setdefault(_clean_extracted_url(url), re.sub(r"\s+", " ", label).strip())
     text = re.sub(r"(?<!^)(?<!\s)(https?://)", r"\n\1", text, flags=re.I)
     out = []
     seen = set()
-    for url in re.findall(r"https?://[^\s<>\"')\]\u4e00-\u9fff]+", text, re.I):
-        url = unescape(url).rstrip(".,;:)>]")
+    for url in re.findall(r"https?://[^\s<>\"'\u4e00-\u9fff]+", text, re.I):
+        url = _clean_extracted_url(url)
         if not url or url in seen:
             continue
         seen.add(url)

@@ -264,6 +264,13 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertIn("https://example.test/confirm?token=abc", parsed["links"][0]["url"])
         self.assertNotIn("[image", parsed["text"].lower())
 
+    def test_10b_text_link_extractor_preserves_balanced_odata_path(self):
+        url = "https://download.example.test/odata/v1/Products(20e7a65d-6997-470c-b727-9750c97012c3)/$value"
+        links = email_watch._extract_links_from_text(
+            f"Download endpoint: {url}\nSentence link ({url})."
+        )
+        self.assertEqual([item["url"] for item in links], [url])
+
     def test_11_rich_renderer_shows_action_link_without_image_placeholders(self):
         decision = {
             "classification": {"category": "account_status_notice", "label": "账户状态"},
