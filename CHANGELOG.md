@@ -2,6 +2,13 @@
 
 ## 0.6.0 - 2026-09-24
 
+- Make the model own a second, independent pre-publication editorial pass for
+  interruption policy, final Markdown, live actions, time status, useful links,
+  and attachments; deterministic code now enforces provenance and side effects.
+- Add bounded model self-correction for grounded editorial inconsistencies and
+  portable Hermes provider parsing that does not require PyYAML.
+- Replace the retired USTC `qwen3.6-chat` fallback with the live-tested
+  `qwen3.8-chat`, while preserving genuinely customized fallback models.
 - Add a read-only, isolated historical-mail acceptance harness and require new
   representative samples for every quality round without mutating mailbox,
   production learning, calendar, or seen state.

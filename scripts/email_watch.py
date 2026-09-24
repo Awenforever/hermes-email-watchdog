@@ -417,6 +417,7 @@ def _html_to_text(value):
 
 def _clean_extracted_url(value):
     url = unescape(str(value or "")).strip()
+    url = re.split(r"[）】》」』]", url, maxsplit=1)[0].rstrip()
     if url.startswith("<") and url.endswith(">"):
         url = url[1:-1].strip()
     url = url.rstrip(".,;:，。；!！?？")
@@ -1237,12 +1238,18 @@ def check_account(acct, pushed_count=None):
                     pass
             alert = delivery.get("notification_text", "")
             semantic_meta = delivery.get("semantic") if isinstance(delivery, dict) else {}
+            editorial_meta = delivery.get("editorial") if isinstance(delivery, dict) else {}
             if (
                 isinstance(semantic_meta, dict)
                 and delivery.get("route_lane") == "durable"
                 and not delivery.get("legacy_fallback_used")
             ):
-                _record_output_model(semantic_meta.get("model"))
+                final_model = (
+                    editorial_meta.get("model")
+                    if isinstance(editorial_meta, dict) and editorial_meta.get("ok")
+                    else semantic_meta.get("model")
+                )
+                _record_output_model(final_model)
         else:
             alert = rule_result.get("summary") or subject
 

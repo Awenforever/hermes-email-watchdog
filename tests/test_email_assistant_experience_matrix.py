@@ -18,6 +18,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import email_config
+import email_assistant_composer
 import email_delivery
 import email_production_router
 import email_notification_renderer
@@ -49,7 +50,7 @@ class AssistantExperienceTests(unittest.TestCase):
     def test_01_defaults_use_deepseek_with_qwen_fallback_and_no_rule_bypass(self):
         cfg = email_config.DEFAULT_CONFIG
         self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")
-        self.assertEqual(cfg["semantic_engine"]["fallback_model"], "qwen3.6-chat")
+        self.assertEqual(cfg["semantic_engine"]["fallback_model"], "qwen3.8-chat")
         self.assertFalse(cfg["notification"]["fast_lane_enabled"])
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
         self.assertTrue(cfg["delivery"]["forward_attachments_to_weixin"])
@@ -99,6 +100,20 @@ class AssistantExperienceTests(unittest.TestCase):
             )
             # The configured bound is clamped to at least 1 MiB for sane deployments.
             self.assertTrue(ok, reason)
+
+    def test_04b_extensionless_png_is_identified_before_forwarding(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "opaque-attachment-id"
+            source.write_bytes(b"\x89PNG\r\n\x1a\n" + b"test-image-payload")
+            normalized = email_delivery._normalize_extensionless_attachment(str(source))
+            self.assertTrue(normalized.endswith(".png"))
+            self.assertFalse(source.exists())
+            allowed, reason, _size = email_delivery._attachment_forward_policy(
+                normalized,
+                {"attachment_max_bytes": 1024 * 1024, "attachment_safe_extensions": [".png"]},
+            )
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "safe_bounded_attachment")
 
     def test_05_downloaded_safe_files_enter_output_metadata(self):
         with tempfile.TemporaryDirectory() as td:
@@ -280,6 +295,17 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual(len(links), 1)
         self.assertEqual(links[0]["url"], wrapper)
         self.assertEqual(links[0]["display_text"], "Paper title")
+
+    def test_10d_fullwidth_wrapper_and_following_prose_are_not_part_of_url(self):
+        raw = "申请入口：https://vista.ustc.edu.cn/）提交公派出境申请"
+        links = email_watch._extract_links_from_text(raw)
+        self.assertEqual(links[0]["url"], "https://vista.ustc.edu.cn/")
+        self.assertEqual(
+            email_assistant_composer._clean_url(
+                "https://vista.ustc.edu.cn/）提交公派出境申请"
+            ),
+            "https://vista.ustc.edu.cn",
+        )
 
     def test_11_rich_renderer_shows_action_link_without_image_placeholders(self):
         decision = {

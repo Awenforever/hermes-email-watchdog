@@ -276,6 +276,7 @@ def _weekly_report_points(body: str) -> List[str]:
 
 def _clean_url(value: str) -> str:
     value = html.unescape(value or "").strip()
+    value = re.split(r"[）】》」』]", value, maxsplit=1)[0].rstrip()
     if value.startswith("<") and value.endswith(">"):
         value = value[1:-1].strip()
     value = value.rstrip(".,，。;；!！?？")

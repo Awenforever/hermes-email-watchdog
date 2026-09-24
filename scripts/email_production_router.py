@@ -236,6 +236,8 @@ def should_push_notification(decision: Mapping[str, Any]) -> bool:
     classification = decision.get("classification") if isinstance(decision.get("classification"), Mapping) else {}
     importance = decision.get("importance") if isinstance(decision.get("importance"), Mapping) else {}
     notification = decision.get("notification") if isinstance(decision.get("notification"), Mapping) else {}
+    if notification.get("editorial_reviewed") is True:
+        return bool(notification.get("should_notify", True))
     action = decision.get("action") if isinstance(decision.get("action"), Mapping) else {}
     deadline = decision.get("deadline") if isinstance(decision.get("deadline"), Mapping) else {}
     risk = decision.get("risk") if isinstance(decision.get("risk"), Mapping) else {}
@@ -243,8 +245,9 @@ def should_push_notification(decision: Mapping[str, Any]) -> bool:
     attachment_info = decision.get("attachments") if isinstance(decision.get("attachments"), Mapping) else {}
     if category in {
         "verification_code", "account_security", "account_status_notice", "invoice_receipt",
-        "data_download_order_notice",
     }:
+        return True
+    if category == "data_download_order_notice":
         return bool(notification.get("should_notify", True))
     if bool(attachment_info.get("present")) and _text(attachment_info.get("policy"), 40) in {
         "download_safe", "download_all",

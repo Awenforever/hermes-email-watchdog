@@ -770,6 +770,18 @@ class CoreSchemaTests(unittest.TestCase):
             "consistency:academic_original_only_to_summary_plus_original", repairs
         )
 
+    def test_50_missing_model_prose_uses_grounded_subject_bridge(self):
+        value = valid_core()
+        value.update(summary_style="paragraph", summary="", key_points=[], summary_evidence=[])
+        bridge_facts = facts()
+        bridge_facts["_allow_subject_bridge_for_editor"] = True
+        decision, errors, repairs, _ = core.normalize_and_expand_detailed(
+            value, message_key="test:foreign-language-bridge", facts=bridge_facts
+        )
+        self.assertFalse(errors)
+        self.assertEqual(decision["notification"]["summary"], "收到邮件：测试通知")
+        self.assertIn("grounding:safe_subject_bridge_for_editor", repairs)
+
 
 class EngineIntegrationTests(unittest.TestCase):
     def setUp(self):
@@ -791,7 +803,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(settings["provider"], "hermes_openai")
         self.assertEqual(settings["provider_name"], "USTC")
         self.assertEqual(settings["model"], "deepseek-flash")
-        self.assertEqual(settings["fallback_model"], "qwen3.6-chat")
+        self.assertEqual(settings["fallback_model"], "qwen3.8-chat")
         self.assertEqual(settings["num_thread"], 5)
         self.assertEqual(settings["num_predict_mode"], "adaptive")
         self.assertEqual(settings["num_predict"], 1800)

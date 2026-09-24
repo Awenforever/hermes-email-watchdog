@@ -513,6 +513,7 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
                 if path:
                     saved_paths.append(path)
 
+    saved_paths = [_normalize_extensionless_attachment(path) for path in saved_paths]
     result = []
     if saved_paths:
         # Invoice providers often wrap PDF/OFD receipts in a ZIP.  Expand only
@@ -555,6 +556,39 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         for att in result:
             _persist_attachment(email, att)
     return result
+
+
+def _normalize_extensionless_attachment(path: str) -> str:
+    """Give trustworthy magic-identified files an extension before forwarding."""
+    try:
+        source = Path(path).expanduser().resolve(strict=True)
+        if source.suffix or not source.is_file() or source.is_symlink():
+            return str(source)
+        with source.open("rb") as stream:
+            magic = stream.read(16)
+        extension = ""
+        if magic.startswith(b"%PDF-"):
+            extension = ".pdf"
+        elif magic.startswith(b"\x89PNG\r\n\x1a\n"):
+            extension = ".png"
+        elif magic.startswith(b"\xff\xd8\xff"):
+            extension = ".jpg"
+        elif magic.startswith((b"GIF87a", b"GIF89a")):
+            extension = ".gif"
+        elif magic.startswith(b"RIFF") and magic[8:12] == b"WEBP":
+            extension = ".webp"
+        if not extension:
+            return str(source)
+        target = source.with_name(source.name + extension)
+        if target.exists():
+            if target.stat().st_size == source.stat().st_size:
+                source.unlink(missing_ok=True)
+                return str(target)
+            target = source.with_name(source.name + "-detected" + extension)
+        os.replace(source, target)
+        return str(target)
+    except Exception:
+        return str(path)
 
 
 def _public_https_url(value):
@@ -1705,16 +1739,19 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         import email_production_router
         import email_feature_extractor
         import email_assistant_composer
+        import email_editorial_review
         import email_notification_renderer
         import email_semantic_engine
 
         email_production_router = importlib.reload(email_production_router)
         email_feature_extractor = importlib.reload(email_feature_extractor)
         email_assistant_composer = importlib.reload(email_assistant_composer)
+        email_editorial_review = importlib.reload(email_editorial_review)
         email_notification_renderer = importlib.reload(email_notification_renderer)
         email_semantic_engine = importlib.reload(email_semantic_engine)
 
         semantic_meta = {}
+        editorial_meta = {}
         renderer_meta = {}
         route_lane = "durable"
         route_reason = []
@@ -1753,6 +1790,36 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 if not isinstance(decision, dict):
                     raise RuntimeError("semantic decision missing")
 
+                # A second model pass owns the final editorial judgment and
+                # presentation.  The deterministic composer is supplied only
+                # as a criticizable draft and remains the safe fallback if the
+                # editorial model or its compact contract fails.
+                try:
+                    editorial_enabled = bool(
+                        email_config.get_notification_settings().get("editorial_review_enabled", True)
+                    )
+                    if not editorial_enabled:
+                        raise RuntimeError("model editorial review disabled by configuration")
+                    draft_meta = email_assistant_composer.render_notification(
+                        email or {}, decision, {"attachments": [], "schedule": []}, account or {}
+                    )
+                    editorial_meta = email_editorial_review.review_notification(
+                        email or {}, decision, str(draft_meta.get("text") or "")
+                    )
+                    if editorial_meta.get("ok"):
+                        decision = email_editorial_review.apply_review(decision, editorial_meta)
+                        semantic_meta["decision"] = decision
+                        semantic_meta["editorial"] = {
+                            key: value for key, value in editorial_meta.items()
+                            if key not in {"markdown", "links"}
+                        }
+                except Exception as editorial_exc:
+                    editorial_meta = {
+                        "ok": False,
+                        "version": "model_editorial_gate_v2a",
+                        "errors": [repr(editorial_exc)[:400]],
+                    }
+
             prod_analysis = email_production_router.decision_to_legacy_analysis(decision, analysis or {})
             if prod_analysis.get("should_notify") is False:
                 _persist_delivery(email or {}, prod_analysis, "", "suppressed")
@@ -1767,6 +1834,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     "route_reasons": route_reason,
                     "semantic": semantic_meta,
                     "renderer": {},
+                    "editorial": editorial_meta,
                     "legacy_fallback_used": False,
                 }
                 _ew_prod_record_learning(email, rule_result, prod_analysis, result, account)
@@ -1791,11 +1859,18 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 delivery_warnings.append("schedule:" + repr(phase_exc)[:300])
                 schedule, cron_entries = [], []
             try:
-                renderer_meta = email_assistant_composer.render_notification(
-                    email or {}, decision,
-                    {"attachments": attachments, "schedule": schedule},
-                    account or {},
-                )
+                if editorial_meta.get("ok"):
+                    renderer_meta = email_editorial_review.finalize_markdown(
+                        editorial_meta,
+                        {"attachments": attachments, "schedule": schedule},
+                        decision,
+                    )
+                else:
+                    renderer_meta = email_assistant_composer.render_notification(
+                        email or {}, decision,
+                        {"attachments": attachments, "schedule": schedule},
+                        account or {},
+                    )
             except Exception as phase_exc:
                 delivery_warnings.append("composer:" + repr(phase_exc)[:300])
                 # The old adaptive renderer remains a semantic-only emergency
@@ -1852,6 +1927,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 "route_reasons": route_reason,
                 "semantic": semantic_meta,
                 "renderer": renderer_meta,
+                "editorial": editorial_meta,
                 "delivery_warnings": delivery_warnings,
                 "legacy_fallback_used": False,
             }
@@ -1879,6 +1955,8 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 "production_route": "legacy_fallback",
                 "route_lane": route_lane,
                 "route_reasons": route_reason,
+                "semantic": semantic_meta,
+                "editorial": editorial_meta,
                 "legacy_fallback_used": True,
                 "production_route_error": repr(exc)[:800],
             })

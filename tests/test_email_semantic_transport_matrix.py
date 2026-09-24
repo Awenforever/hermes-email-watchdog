@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -25,6 +26,56 @@ class _FakeResponse:
 
 
 class SemanticTransportRecoveryMatrix(unittest.TestCase):
+    def test_generated_hermes_provider_config_parses_without_pyyaml(self):
+        providers = engine._minimal_custom_providers_yaml("""
+model:
+  default: deepseek-flash
+custom_providers:
+  - name: USTC
+    base_url: https://example.test/v1
+    api_key: "secret-placeholder"
+    model: deepseek-v4-pro
+    models:
+      deepseek-flash:
+        display_name: Flash
+  - name: USTC
+    base_url: https://example.test/v1
+    api_key: secret-two
+    model: qwen3.6-chat
+gateway:
+  enabled: true
+""")
+        self.assertEqual(len(providers), 2)
+        self.assertEqual(providers[0]["name"], "USTC")
+        self.assertEqual(providers[0]["api_key"], "secret-placeholder")
+        self.assertEqual(providers[0]["model"], "deepseek-v4-pro")
+        self.assertNotIn("display_name", providers[0])
+        self.assertEqual(providers[1]["model"], "qwen3.6-chat")
+
+    def test_new_model_reuses_credentials_from_same_named_provider(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.yaml"
+            path.write_text("""
+custom_providers:
+  - name: USTC
+    base_url: https://example.test/v1
+    api_key: provider-key
+    model: older-model
+""", encoding="utf-8")
+            previous = os.environ.get("HERMES_CONFIG")
+            os.environ["HERMES_CONFIG"] = str(path)
+            try:
+                endpoint, key = engine._resolve_openai_credentials({
+                    "provider_name": "USTC", "model": "newly-added-model",
+                })
+            finally:
+                if previous is None:
+                    os.environ.pop("HERMES_CONFIG", None)
+                else:
+                    os.environ["HERMES_CONFIG"] = previous
+        self.assertEqual(endpoint, "https://example.test/v1")
+        self.assertEqual(key, "provider-key")
+
     def test_configured_model_fallback_is_bounded_and_attributed(self):
         calls = []
         original = engine._call_model_once

@@ -24,7 +24,7 @@ _WARNED = False
 _CACHE = None
 
 DEFAULT_CONFIG = {
-    "version": 5,
+    "version": 6,
     "default_account": "",
     "accounts": [],
     "paths": {
@@ -61,7 +61,7 @@ DEFAULT_CONFIG = {
         "endpoint": "",
         "api_key_env": "",
         "model": "deepseek-flash",
-        "fallback_model": "qwen3.6-chat",
+        "fallback_model": "qwen3.8-chat",
         "timeout_seconds": 120,
         "temperature": 0.0,
         "max_body_chars": 16000,
@@ -84,6 +84,8 @@ DEFAULT_CONFIG = {
         "production_route_enabled": True,
         "all_mail_push": False,
         "legacy_fallback_enabled": True,
+        "editorial_review_enabled": True,
+        "editorial_review_version": "model_editorial_gate_v2a",
         # Every production semantic decision is made by the configured model.
         # Deterministic extraction remains a grounding/safety layer, not a
         # parallel classifier that silently bypasses deepseek-flash.

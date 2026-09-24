@@ -30,11 +30,11 @@ class ConfigMigrationTests(unittest.TestCase):
             },
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["version"], 5)
+        self.assertEqual(cfg["version"], 6)
         self.assertEqual(cfg["semantic_engine"]["provider"], "hermes_openai")
         self.assertEqual(cfg["semantic_engine"]["provider_name"], "USTC")
         self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")
-        self.assertEqual(cfg["semantic_engine"]["fallback_model"], "qwen3.6-chat")
+        self.assertEqual(cfg["semantic_engine"]["fallback_model"], "qwen3.8-chat")
         self.assertEqual(cfg["notification"]["renderer"], "intelligent_v2")
         self.assertEqual(cfg["notification"]["mode"], "production")
         self.assertTrue(cfg["notification"]["production_route_enabled"])
@@ -57,7 +57,7 @@ class ConfigMigrationTests(unittest.TestCase):
         original = copy.deepcopy(old)
         cfg = email_onboarding._sanitize_existing_config(old)
         self.assertEqual(old, original)
-        self.assertEqual(cfg["version"], 5)
+        self.assertEqual(cfg["version"], 6)
         self.assertEqual(cfg["semantic_engine"]["provider"], "custom")
         self.assertEqual(cfg["semantic_engine"]["endpoint"], "https://example.invalid/v1")
         self.assertEqual(cfg["semantic_engine"]["model"], "private-model")
@@ -74,7 +74,7 @@ class ConfigMigrationTests(unittest.TestCase):
             "delivery": {"auto_download_attachments": False},
         }
         cfg = email_onboarding._sanitize_existing_config(old)
-        self.assertEqual(cfg["version"], 5)
+        self.assertEqual(cfg["version"], 6)
         self.assertEqual(cfg["semantic_engine"]["protocol"], "readable_grounded_core_v1x")
         self.assertFalse(cfg["notification"]["fast_lane_enabled"])
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
@@ -132,7 +132,7 @@ class ConfigMigrationTests(unittest.TestCase):
             "paths": {"attachment_dir": "/opt/data/.hermes-home/EmailAttachments"},
         }
         cfg = email_onboarding._sanitize_existing_config(shipped)
-        self.assertEqual(cfg["version"], 5)
+        self.assertEqual(cfg["version"], 6)
         self.assertIn("plugin-data/hermes-email-watchdog/attachments", cfg["paths"]["attachment_dir"])
 
         custom = {
@@ -198,6 +198,25 @@ class ConfigMigrationTests(unittest.TestCase):
         migrated, changed = email_onboarding._migrate_known_v2_assistant_policy(raw)
         self.assertFalse(changed)
         self.assertEqual(migrated, raw)
+
+    def test_v6_replaces_only_retired_shipped_ustc_fallback(self):
+        shipped = {
+            "version": 5,
+            "semantic_engine": {
+                "provider": "hermes_openai", "provider_name": "USTC",
+                "model": "deepseek-flash", "fallback_model": "qwen3.6-chat",
+            },
+        }
+        migrated, changed = email_onboarding._migrate_known_v6_model_fallback(shipped)
+        self.assertTrue(changed)
+        self.assertEqual(migrated["version"], 6)
+        self.assertEqual(migrated["semantic_engine"]["fallback_model"], "qwen3.8-chat")
+
+        custom = copy.deepcopy(shipped)
+        custom["semantic_engine"]["fallback_model"] = "private-fallback"
+        migrated, changed = email_onboarding._migrate_known_v6_model_fallback(custom)
+        self.assertFalse(changed)
+        self.assertEqual(migrated, custom)
 
 
 if __name__ == "__main__":

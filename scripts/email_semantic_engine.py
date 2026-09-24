@@ -121,8 +121,6 @@ def _trace_signals(facts: Mapping[str, Any]) -> Dict[str, bool]:
     keys = (
         "spam_subject_phrase", "publication_issue_phrase",
         "publication_issue_subject_phrase", "newsletter_marketing_phrase",
-        "low_value_feedback_survey_phrase",
-        "relative_expiry_phrase",
         "system_test_phrase", "no_action_phrase", "no_deadline_phrase",
         "no_receipt_phrase", "direct_request_phrase", "deadline_phrase",
         "account_security_phrase", "manuscript_feedback_phrase", "receipt_phrase",
@@ -363,18 +361,6 @@ def _semantic_hints(email: Mapping[str, Any], subject: str, body: str, features:
                 r"退订|取消订阅|促销(?:活动|信息|更新)?|营销邮件|优惠(?:活动|信息|更新)?|折扣(?:活动|信息|更新)?"
             )
             or has(publication_issue_pattern)
-        ),
-        "low_value_feedback_survey_phrase": has(
-            r"how would you rate (?:the )?(?:support|service|experience)|"
-            r"rate (?:the )?(?:support|service) you received|"
-            r"/satisfaction/(?:new|survey)|"
-            r"your feedback helps us improve|"
-            r"(?:support|service|customer) satisfaction survey"
-        ),
-        "relative_expiry_phrase": has(
-            r"(?:链接|下载|文件|订单|资料).{0,24}(?:有效期|有效|到期|过期).{0,12}"
-            r"(?:\d+|[一二三四五六七八九十两半]+)\s*(?:小时|天|日|周|星期|个月|月)|"
-            r"(?:valid|expires?|available).{0,24}(?:for|in)\s+\d+\s*(?:hours?|days?|weeks?|months?)"
         ),
         "verification_code_phrase": has(
             r"验证码|校验码|动态口令|一次性密码|登录码|安全码|认证码|短信码|"
@@ -818,6 +804,64 @@ def _hermes_config_path() -> Path:
     return HERMES_HOME / "config.yaml"
 
 
+def _yaml_scalar(value: str) -> str:
+    """Read the scalar subset used by Hermes provider entries without PyYAML."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = ast.literal_eval(raw)
+        if isinstance(parsed, (str, int, float, bool)):
+            return str(parsed)
+    except Exception:
+        pass
+    # Unquoted provider URLs and tokens do not contain YAML comments in the
+    # generated Hermes config. Preserve their exact value rather than trying
+    # to implement a general YAML parser here.
+    return raw
+
+
+def _minimal_custom_providers_yaml(text: str) -> list[dict[str, str]]:
+    """Extract top-level custom provider records from Hermes' generated YAML.
+
+    This is an intentionally narrow portability fallback for environments
+    where the optional PyYAML package is absent. It understands only the flat
+    scalar fields needed for authentication and ignores nested model catalogs.
+    """
+    records: list[dict[str, str]] = []
+    in_section = False
+    section_indent = 0
+    item_indent: int | None = None
+    current: dict[str, str] | None = None
+    for line in str(text or "").splitlines():
+        if not in_section:
+            match = re.match(r"^(\s*)custom_providers\s*:\s*(?:#.*)?$", line)
+            if match:
+                in_section = True
+                section_indent = len(match.group(1))
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= section_indent:
+            break
+        item = re.match(r"^(\s*)-\s+([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
+        if item:
+            if current:
+                records.append(current)
+            current = {item.group(2): _yaml_scalar(item.group(3))}
+            item_indent = len(item.group(1))
+            continue
+        field = re.match(r"^(\s*)([A-Za-z_][\w-]*)\s*:\s*(.*)$", line)
+        if current is not None and field and item_indent is not None:
+            field_indent = len(field.group(1))
+            if field_indent == item_indent + 2:
+                current[field.group(2)] = _yaml_scalar(field.group(3))
+    if current:
+        records.append(current)
+    return records
+
+
 def _resolve_openai_credentials(settings: Mapping[str, Any]) -> tuple[str, str]:
     endpoint = str(settings.get("endpoint") or "").strip().rstrip("/")
     key = str(settings.get("api_key") or "").strip()
@@ -829,17 +873,23 @@ def _resolve_openai_credentials(settings: Mapping[str, Any]) -> tuple[str, str]:
 
     path = _hermes_config_path()
     try:
-        import yaml
-
-        config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        config_text = path.read_text(encoding="utf-8")
     except Exception as exc:
         raise SemanticEngineError(f"cannot read Hermes provider config: {_safe_error(exc)}") from exc
-    providers = config.get("custom_providers") or []
+    try:
+        import yaml
+        config = yaml.safe_load(config_text) or {}
+        providers = config.get("custom_providers") or []
+    except ModuleNotFoundError:
+        providers = _minimal_custom_providers_yaml(config_text)
+    except Exception as exc:
+        raise SemanticEngineError(f"cannot parse Hermes provider config: {_safe_error(exc)}") from exc
     if isinstance(providers, Mapping):
         providers = list(providers.values())
     wanted_name = str(settings.get("provider_name") or "").strip().casefold()
     wanted_model = str(settings.get("model") or "").strip()
     candidates = []
+    provider_name_candidates = []
     for item in providers if isinstance(providers, list) else []:
         if not isinstance(item, Mapping):
             continue
@@ -848,8 +898,16 @@ def _resolve_openai_credentials(settings: Mapping[str, Any]) -> tuple[str, str]:
         models = item.get("models") if isinstance(item.get("models"), Mapping) else {}
         name_match = not wanted_name or item_name == wanted_name
         model_match = not wanted_model or item_model == wanted_model or wanted_model in models
+        if name_match:
+            provider_name_candidates.append(item)
         if name_match and model_match:
             candidates.append(item)
+    # A custom provider is an endpoint/credential boundary, not a static
+    # allowlist of every model the remote service may add later. Prefer an
+    # exact catalog entry, then reuse credentials from the same named provider
+    # and let the server authoritatively accept or reject the requested model.
+    if not candidates and wanted_name and provider_name_candidates:
+        candidates = provider_name_candidates
     if not candidates:
         raise SemanticEngineError(
             f"Hermes custom provider not found for name={wanted_name or '*'} model={wanted_model or '*'}"
@@ -1407,13 +1465,14 @@ def analyze_email(
         with _CALL_LOCK:
             llm_called = True
             response = caller(prompt, effective_settings)
-        def normalize_response(candidate: Mapping[str, Any]):
+        def normalize_response(candidate: Mapping[str, Any], normalization_facts=None):
+            candidate_facts = normalization_facts or facts
             if hasattr(email_semantic_core, "normalize_and_expand_detailed"):
                 return email_semantic_core.normalize_and_expand_detailed(
-                    candidate.get("parsed"), message_key=message_key, facts=facts
+                    candidate.get("parsed"), message_key=message_key, facts=candidate_facts
                 )
             normalized, candidate_errors = email_semantic_core.normalize_and_expand(
-                candidate.get("parsed"), message_key=message_key, facts=facts
+                candidate.get("parsed"), message_key=message_key, facts=candidate_facts
             )
             keys = sorted(
                 str(key) for key in (candidate.get("parsed") or {}).keys()
@@ -1459,9 +1518,33 @@ def analyze_email(
                 })
                 response["metrics"] = fallback_metrics
             else:
-                errors = primary_validation_errors + [
-                    "fallback: " + value for value in (fallback_errors or ["schema normalization failed"])
-                ]
+                bridge_facts = dict(facts)
+                bridge_facts["_allow_subject_bridge_for_editor"] = True
+                bridge_decision, bridge_errors, bridge_repairs, bridge_keys = normalize_response(
+                    fallback_response, bridge_facts
+                )
+                if not bridge_errors and bridge_decision is not None:
+                    response = fallback_response
+                    decision = bridge_decision
+                    errors = []
+                    normalization_repairs = bridge_repairs
+                    model_core_keys = bridge_keys
+                    model_fallback_used = True
+                    fallback_metrics = dict(fallback_response.get("metrics") or {})
+                    fallback_metrics.update({
+                        "model_fallback_used": True,
+                        "semantic_subject_bridge_used": True,
+                        "primary_model": response_model,
+                        "fallback_model": fallback_model,
+                        "fallback_trigger": "schema_validation_then_grounded_bridge",
+                        "primary_validation_errors": primary_validation_errors[:8],
+                        "fallback_validation_errors": list(fallback_errors)[:8],
+                    })
+                    response["metrics"] = fallback_metrics
+                else:
+                    errors = primary_validation_errors + [
+                        "fallback: " + value for value in (fallback_errors or ["schema normalization failed"])
+                    ]
 
         raw_fields = _raw_semantic_fields(response.get("parsed"))
         raw_category = raw_fields["raw_category"]

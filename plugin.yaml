@@ -35,7 +35,7 @@ config_schema:
     description: Model used for grounded classification and formatting.
   semantic_fallback_model:
     type: str
-    default: qwen3.6-chat
+    default: qwen3.8-chat
     description: Fallback used when the primary model fails or cannot produce a grounded schema.
   auto_download_attachments:
     type: bool

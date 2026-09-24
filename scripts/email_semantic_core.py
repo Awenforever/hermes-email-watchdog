@@ -785,19 +785,6 @@ def normalize_and_expand_detailed(
     ):
         category = "newsletter_marketing"
         repairs.append("consistency:clear_newsletter_marketing_category")
-    if (
-        hints.get("low_value_feedback_survey_phrase")
-        and category in {
-            "newsletter_marketing", "personal_or_general",
-            "unknown_needs_llm", "system_automation_notice",
-        }
-        and not hints.get("deadline_phrase")
-        and not hints.get("account_security_phrase")
-        and not hints.get("receipt_phrase")
-        and not hints.get("manuscript_feedback_phrase")
-    ):
-        category = "newsletter_marketing"
-        repairs.append("consistency:low_value_feedback_survey_category")
 
     # A server-added spam/junk marker is evidence, not an absolute verdict.
     # Only the conjunction of a spam marker and clear subscription/publication
@@ -977,22 +964,6 @@ def normalize_and_expand_detailed(
         repairs.append("grounding:canonicalize_china_local_deadline_timezone")
     deadline_evidence = _text(deadline.get("evidence"), 240)
     has_deadline = bool(deadline_datetime or deadline_text)
-    if (
-        not has_deadline
-        and category == "data_download_order_notice"
-        and hints.get("relative_expiry_phrase")
-    ):
-        relative = re.search(
-            r"(?i)(?:有效期(?:为)?|(?:valid|available)\s+for|expires?\s+in)\s*"
-            r"((?:\d+|[一二三四五六七八九十两半]+)\s*"
-            r"(?:小时|天|日|周|星期|个月|月|hours?|days?|weeks?|months?))",
-            grounding_source,
-        )
-        if relative:
-            deadline_text = _text(relative.group(1), 200)
-            deadline_evidence = _text(relative.group(0), 240)
-            has_deadline = True
-            repairs.append("consistency:infer_relative_download_expiry")
     if has_deadline and not _quote_supported(deadline_evidence, grounding_source):
         inferred_deadline_evidence = _extract_deadline_quote(grounding_source)
         if inferred_deadline_evidence:
@@ -1106,7 +1077,18 @@ def normalize_and_expand_detailed(
             repairs.append("grounding:academic_safe_summary_from_subject")
 
     if content_mode != "original_only" and not summary and not key_points:
-        hard_errors.append("semantic core requires summary or key_points")
+        # Preserve the durable two-model route when an otherwise usable model
+        # response omits only its prose field (often on unfamiliar languages).
+        # This exact subject bridge is grounded, and the independent editorial
+        # pass still reads the full source and owns the user-facing summary.
+        source_subject = _text(facts.get("source_subject"), 300)
+        if source_subject and facts.get("_allow_subject_bridge_for_editor"):
+            summary_style = "paragraph"
+            summary = f"收到邮件：{source_subject}"
+            summary_evidence = [source_subject]
+            repairs.append("grounding:safe_subject_bridge_for_editor")
+        else:
+            hard_errors.append("semantic core requires summary or key_points")
     if content_mode != "original_only":
         required_evidence = max(1, len(key_points)) if summary_style == "bullets" else 1
         if len(summary_evidence) < required_evidence:

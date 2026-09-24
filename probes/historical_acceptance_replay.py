@@ -62,14 +62,6 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
     status = str(delivery.get("status") or "")
     if status == "suppressed":
         return []
-    source = f"{email.get('subject', '')}\n{email.get('body', '')}"
-    if re.search(
-        r"(?i)how would you rate (?:the )?(?:support|service|experience)|"
-        r"/satisfaction/(?:new|survey)|your feedback helps us improve|"
-        r"(?:support|service|customer) satisfaction survey",
-        source,
-    ):
-        errors.append("low_value_feedback_survey_not_suppressed")
     if "**发件人** `" not in text:
         errors.append("sender_not_inline_code")
     if "**主题** `" not in text:
@@ -117,7 +109,13 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
     if email.get("has_attachments") and source_attachments:
         delivered = list(delivery.get("attachments") or [])
         norm = lambda value: re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(value or "").casefold())
-        names = {norm(item.get("filename")) for item in delivered if isinstance(item, dict)}
+        names = set()
+        for delivered_item in delivered:
+            if not isinstance(delivered_item, dict):
+                continue
+            delivered_name = str(delivered_item.get("filename") or "")
+            names.add(norm(delivered_name))
+            names.add(norm(Path(delivered_name).stem))
         for item in source_attachments:
             name = str(item.get("filename") or item.get("name") or "") if isinstance(item, dict) else str(item)
             if name and norm(name) not in names:
@@ -212,33 +210,40 @@ def main() -> int:
         acceptance_id = f"{args.run_id}-{index:02d}"
         tagged = text + f"\n\n---\n`Email Watchdog 验收 {acceptance_id}`" if text else ""
         decision = ((delivery.get("semantic") or {}).get("decision") or {})
+        editorial = delivery.get("editorial") if isinstance(delivery.get("editorial"), dict) else {}
         status = str(delivery.get("status") or "")
         category = str((decision.get("classification") or {}).get("category") or "")
         errors = _lint(text, email, delivery)
         if delivery.get("legacy_fallback_used") or delivery.get("production_route") != "intelligent_v2":
             errors.append("semantic_production_route_failed")
+        if delivery.get("route_lane") == "durable" and not editorial.get("ok"):
+            errors.append("editorial_model_route_failed")
         if not text and status != "suppressed":
             errors.append("empty_notification")
-        acceptable_spam_suppression = bool(
-            re.search(r"(?i)^\s*\[(?:spam|junk)\]", email.get("subject") or "")
-            and category in {"academic_opportunity_call", "newsletter_marketing"}
+        protected_suppression = bool(
+            category in {"verification_code", "account_security", "account_status_notice", "invoice_receipt"}
+            or str((decision.get("risk") or {}).get("level") or "").lower() in {"high", "critical"}
+            or (decision.get("action") or {}).get("required")
+            or (decision.get("attachments") or {}).get("present")
         )
-        low_value_event_suppression = bool(
-            category == "meeting_event"
-            and str((decision.get("importance") or {}).get("level") or "").lower() == "low"
-            and not (decision.get("action") or {}).get("required")
-            and not (decision.get("deadline") or {}).get("has_deadline")
-        )
-        if (status == "suppressed" and category not in {"newsletter_marketing"}
-                and not acceptable_spam_suppression and not low_value_event_suppression):
+        if status == "suppressed" and protected_suppression:
             errors.append(f"unexpected_suppression:{category or 'unknown'}")
-        if category == "newsletter_marketing" and status != "suppressed":
-            errors.append("marketing_not_suppressed")
         errors = sorted(set(errors))
         item = {
             "acceptance_id": acceptance_id,
             "message_id": str(message_id), "subject": email["subject"],
             "semantic_model": (delivery.get("semantic") or {}).get("model"),
+            "semantic_error_code": (delivery.get("semantic") or {}).get("error_code"),
+            "semantic_fallback_reason": (delivery.get("semantic") or {}).get("fallback_reason"),
+            "semantic_raw_errors": (delivery.get("semantic") or {}).get("raw_errors") or [],
+            "editorial_model": editorial.get("model"),
+            "editorial_version": editorial.get("version"),
+            "editorial_notes": editorial.get("review_notes") or [],
+            "editorial_errors": editorial.get("errors") or [],
+            "editorial_live_action": editorial.get("live_action") or {},
+            "editorial_temporal": editorial.get("temporal"),
+            "editorial_metrics": editorial.get("metrics") or {},
+            "editorial_ok": bool(editorial.get("ok")),
             "production_route": delivery.get("production_route"),
             "route_lane": delivery.get("route_lane"),
             "status": status, "category": category, "decision": decision,
@@ -249,7 +254,7 @@ def main() -> int:
         }
         _write_json(state / "results" / f"{acceptance_id}.json", item)
         results.append(item)
-        print(json.dumps({k: item[k] for k in ("acceptance_id", "message_id", "subject", "semantic_model", "errors")}, ensure_ascii=False), flush=True)
+        print(json.dumps({k: item[k] for k in ("acceptance_id", "message_id", "subject", "semantic_model", "editorial_model", "errors")}, ensure_ascii=False), flush=True)
     manifest = {"run_id": args.run_id, "state_root": str(state), "results": results}
     _write_json(state / "manifest.json", manifest)
     print(json.dumps({"manifest": str(state / "manifest.json"), "count": len(results), "errors": sum(bool(x.get("errors")) for x in results)}, ensure_ascii=False))

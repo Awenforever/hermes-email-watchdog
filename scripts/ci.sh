@@ -26,6 +26,7 @@ export HOME="${TMP_STATE}/home"
 mkdir -p "${HOME}"
 tests=(
   test_email_assistant_composer.py
+  test_email_editorial_review.py
   test_email_assistant_experience_matrix.py
   test_email_renderer_matrix.py
   test_email_production_router_matrix.py

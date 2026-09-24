@@ -159,7 +159,7 @@ def email_watchdog_command(args: argparse.Namespace) -> int:
                     "scheduler_state": str(runtime.get("state") or "not_started"),
                     "semantic_provider": str(semantic.get("provider_name") or semantic.get("provider") or "USTC"),
                     "semantic_model": str(semantic.get("model") or "deepseek-flash"),
-                    "semantic_fallback_model": str(semantic.get("fallback_model") or "qwen3.6-chat"),
+                    "semantic_fallback_model": str(semantic.get("fallback_model") or "qwen3.8-chat"),
                     "notification_renderer": str(notification.get("renderer") or "intelligent_v2"),
                     "notification_policy": "actionable",
                     "mailbox_mode": "read-only",
