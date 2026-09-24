@@ -172,6 +172,25 @@ def _first(patterns: Sequence[str], source: str, limit: int = 120) -> str:
     return ""
 
 
+def _verification_code(source: str) -> str:
+    context_pattern = re.compile(
+        r"(?i)验证码|校验码|确认码|动态口令|一次性密码|登录码|安全码|认证码|"
+        r"verification code|confirmation code|authorization code|security code|auth code|"
+        r"passcode|one[- ]time password|\botp\b|\buse\b.{0,20}\bto\s+(?:sign|log)\s*in\b"
+    )
+    ranked: List[Tuple[int, int, str]] = []
+    for match in re.finditer(r"(?<!\d)(\d{4,8})(?!\d)", source or ""):
+        value = match.group(1)
+        if len(value) == 4 and 2000 <= int(value) <= 2100:
+            continue
+        window = source[max(0, match.start() - 100):min(len(source), match.end() + 100)]
+        if not context_pattern.search(window):
+            continue
+        ranked.append((0 if len(value) == 6 else 1, match.start(), value))
+    ranked.sort()
+    return ranked[0][2] if ranked else ""
+
+
 def _invoice_facts(source: str, decision: Mapping[str, Any]) -> List[Tuple[str, str]]:
     facts: List[Tuple[str, str]] = []
     invoice = _first((r"invoice(?:\s+(?:no\.?|number))?\s*[:#]?\s*([A-Z-]*\d[A-Z0-9-]{3,})", r"(?:发票(?:号码|号)?|号码)\s*[：:【]?\s*([A-Z-]*\d[A-Z0-9-]{3,})"), source)
@@ -558,7 +577,7 @@ def render_notification(
             if points:
                 blocks.append("账单摘要")
     elif category == "verification_code":
-        code = _first((r"(?<!\d)(\d{4,8})(?!\d)",), f"{subject}\n{body}")
+        code = _verification_code(f"{subject}\n{body}")
         _section(lines, "验证码", [f"## {_code(code)}" if code else "请在原邮件中查看验证码。"])
         blocks.append("验证码")
     else:

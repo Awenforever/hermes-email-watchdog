@@ -106,6 +106,23 @@ Copyright © Mitce, All rights reserved.""",
         self.assertNotIn("无附件", text)
         self.assertNotIn("转发内容", text)
 
+    def test_verification_card_ignores_year_and_shows_contextual_code(self):
+        email = {
+            "account": "USTC", "subject": "Confirm your Mozilla account to sync",
+            "from_addr": "accounts@firefox.com",
+            "body": "Copyright 2026 Mozilla. Your confirmation code is 943433 and expires in 5 minutes.",
+        }
+        decision = {
+            "classification": {"category": "verification_code", "label": "验证码"},
+            "importance": {"level": "high"},
+            "notification": {"content_mode": "code_card", "summary": "", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("## `943433`", text)
+        self.assertNotIn("## `2026`", text)
+
     def test_footer_mechanics_inside_model_point_are_not_highlights(self):
         email = {
             "account": "USTC",
