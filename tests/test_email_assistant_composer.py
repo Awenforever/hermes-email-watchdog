@@ -217,6 +217,51 @@ Copyright © Mitce, All rights reserved.""",
         self.assertNotIn("尽快提交返修", text)
         self.assertNotIn("截止时间：`两周内`", text.replace("原截止时间：`两周内`", ""))
 
+    def test_stale_validity_period_is_not_presented_as_live(self):
+        email = {
+            "account": "USTC", "subject": "订单处理完成",
+            "from_addr": "orders@example.org", "date_sent": "2026-01-11 09:05 +0800",
+            "body": "订单已处理完成，下载链接有效期为15天。",
+        }
+        decision = {
+            "classification": {"category": "data_download_order_notice", "label": "数据/下载通知"},
+            "importance": {"level": "normal"},
+            "notification": {"summary": "订单已处理完成。", "key_points": [], "original_policy": "none"},
+            "action": {"required": False},
+            "deadline": {"has_deadline": True, "date_text": "15天"},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("邮件中的截止日期已过", text)
+        self.assertIn("原截止时间：`15天`", text)
+
+    def test_scholar_wrapper_uses_article_title_and_drops_share_chrome(self):
+        title = "KT-LLM: an evidence-grounded framework"
+        target = "https://www.nature.com/articles/s41746-025-02323-5"
+        email = {
+            "account": "USTC", "subject": "Kaiming He - 新的结果",
+            "from_addr": "scholaralerts-noreply@google.com",
+            "body": (
+                f"{title}: https://scholar.google.com/scholar_url?url={target}&hl=zh-CN&sa=X\n"
+                "which often leads to inconsistent reporting and poor policy compliance …\n"
+                "https://scholar.google.com/citations?hl=zh-CN&update_op=email_library_add&info=abc\n"
+                f"https://scholar.google.com/scholar_share?hl=zh-CN&oi=scholaralrt&ss=tw&url={target}&rt=KT-LLM"
+            ),
+            "links": [],
+        }
+        decision = {
+            "classification": {"category": "academic_report_digest", "label": "学术报告摘要"},
+            "importance": {"level": "low"},
+            "notification": {"summary": "新增一篇论文。", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn(f"[{title}]({target})", text)
+        self.assertNotIn("scholar_share", text)
+        self.assertNotIn("email_library_add", text)
+        self.assertNotIn("which often leads", text)
+
     def test_curated_original_is_one_coherent_quote_not_mail_chrome(self):
         email = {
             "subject": "Fwd: Please review the draft", "from_addr": "person@example.test",

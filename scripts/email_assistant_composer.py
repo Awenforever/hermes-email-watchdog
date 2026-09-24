@@ -284,16 +284,18 @@ def _clean_url(value: str) -> str:
     for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")):
         while value.endswith(closer) and value.count(closer) > value.count(opener):
             value = value[:-1].rstrip()
-    # Some mail-to-text converters append Scholar tracking parameters to a
-    # direct article URL with '&' even when the original URL has no query.
-    value = re.split(r"&(?:hl|sa|d|ei|scisig|oi|html|pos|folt|rt)=", value, maxsplit=1, flags=re.I)[0]
     try:
         parsed = urlparse(value)
         query = parse_qsl(parsed.query, keep_blank_values=True)
-        if parsed.netloc.casefold() == "scholar.google.com" and parsed.path.rstrip("/") == "/scholar_url":
+        if parsed.netloc.casefold() == "scholar.google.com" and parsed.path.rstrip("/") in {"/scholar_url", "/scholar_share"}:
             target = next((v for k, v in query if k.casefold() == "url"), "")
             if target.startswith(("https://", "http://")):
                 return _clean_url(target)
+        # Some mail-to-text converters append Scholar tracking parameters to a
+        # direct article URL with '&' even when the original URL has no query.
+        value = re.split(r"&(?:hl|sa|d|ei|scisig|oi|html|pos|folt|rt)=", value, maxsplit=1, flags=re.I)[0]
+        parsed = urlparse(value)
+        query = parse_qsl(parsed.query, keep_blank_values=True)
         kept = [(k, v) for k, v in query
                 if k.lower() not in {"utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term", "scisig", "oi", "ei", "sa", "hl"}]
         path = parsed.path
@@ -332,6 +334,11 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
         r"(?i)arxiv\.org|doi\.org|github\.com|openreview\.net|semanticscholar\.org|"
         r"(?:paper|论文|代码|code|dataset|数据集|report|报告|pdf)"
     )
+    academic_host = re.compile(
+        r"(?i)(?:^|\.)(?:nature\.com|science\.org|sciencedirect\.com|springer\.com|"
+        r"wiley\.com|ieee\.org|acm\.org|tandfonline\.com|oup\.com|cambridge\.org|"
+        r"frontiersin\.org|mdpi\.com|plos\.org)$"
+    )
     ranked: List[Tuple[int, str, str]] = []
     seen = set()
     candidates: List[Any] = list(_items(email.get("links")))
@@ -345,12 +352,19 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
         url = _clean_url(url)
         if not url.lower().startswith(("https://", "http://")) or url in seen:
             continue
+        parsed_url = urlparse(url)
+        if parsed_url.netloc.casefold() == "scholar.google.com" and (
+            parsed_url.path.rstrip("/") in {"/scholar_share", "/scholar_alerts"}
+            or (parsed_url.path.rstrip("/") == "/citations" and "update_op=email_library_add" in parsed_url.query)
+        ):
+            continue
         seen.add(url)
         haystack = f"{label} {url}"
         score = 50
         if category in {"academic_report_digest", "academic_alert_digest"}:
             title_like = bool(label and 12 <= len(label) <= 220 and not re.search(r"(?i)打开|click|view|pdf$|www\.", label))
-            score = 0 if title_like and research_link.search(haystack) else (5 if research_link.search(haystack) else 50)
+            scholarly_target = bool(academic_host.search(urlparse(url).netloc.casefold()))
+            score = 0 if title_like and (research_link.search(haystack) or scholarly_target) else (5 if research_link.search(haystack) else 50)
         if category == "invoice_receipt" and re.search(
             r"(?i)viewinvoice|pay(?:ment)?(?:/|\?|[-_ ]?(?:ui|charges?))|billing/(?:invoice|pay)|"
             r"download[^\s]*invoice|raise\s+an?\s+invoice|apc[-_/]?payment|发票.{0,12}(?:下载|付款|支付)",
@@ -527,12 +541,17 @@ def _deadline_display(deadline: Mapping[str, Any], email: Mapping[str, Any]) -> 
     # live deadline months later is actively misleading.  Exact calendar
     # deadlines are handled above; unresolved relative deadlines on stale
     # mail are therefore safely treated as historical.
-    if _stale_message(email) and re.search(
-        r"(?i)(?:\d+|[一二三四五六七八九十两半]+)\s*(?:天|日|周|星期|个月|月)\s*(?:内|之内)|"
+    relative_deadline = bool(re.search(
+        r"(?i)(?:\d+|[一二三四五六七八九十两半]+)\s*(?:小时|天|日|周|星期|个月|月)\s*(?:内|之内)|"
         r"within\s+(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+"
         r"(?:hour|day|week|month)s?",
         candidate,
-    ):
+    )) or bool(re.fullmatch(
+        r"(?i)\s*(?:有效期(?:为)?\s*)?(?:\d+|[一二三四五六七八九十两半]+)\s*"
+        r"(?:小时|天|日|周|星期|个月|月|hours?|days?|weeks?|months?)\s*",
+        candidate,
+    ))
+    if _stale_message(email) and relative_deadline:
         return display, True
     return display, False
 

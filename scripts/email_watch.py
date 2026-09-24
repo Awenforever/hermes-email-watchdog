@@ -433,7 +433,10 @@ def _extract_links_from_text(value):
         labels[_clean_extracted_url(url)] = re.sub(r"\s+", " ", label).strip()
     for label, url in re.findall(r"(?im)^\s*([^\n:]{1,160})\s*:\s*(https?://\S+)", text):
         labels.setdefault(_clean_extracted_url(url), re.sub(r"\s+", " ", label).strip())
-    text = re.sub(r"(?<!^)(?<!\s)(https?://)", r"\n\1", text, flags=re.I)
+    # A URL can legitimately be embedded as the value of another URL's
+    # ``url=`` query parameter (Google Scholar uses this heavily). Do not split
+    # that nested target into a second, contextless link.
+    text = re.sub(r"(?<!^)(?<!\s)(?<!=)(https?://)", r"\n\1", text, flags=re.I)
     out = []
     seen = set()
     for url in re.findall(r"https?://[^\s<>\"'\u4e00-\u9fff]+", text, re.I):

@@ -102,6 +102,8 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
         errors.append("generic_weekly_summary")
     if text.count("t2.service.giffgaff.com") > 1:
         errors.append("duplicate_tracking_links")
+    if re.search(r"(?i)scholar\.google\.com/(?:scholar_share|citations\?[^\s)]*update_op=email_library_add)", text):
+        errors.append("scholar_chrome_link")
     for label, target in re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", text):
         if len(target) > 500 and (label.casefold().startswith("打开 ") or re.search(r"(?i)scisig=|utm_|scholar_share", target)):
             errors.append("oversized_tracking_link")

@@ -271,6 +271,16 @@ class AssistantExperienceTests(unittest.TestCase):
         )
         self.assertEqual([item["url"] for item in links], [url])
 
+    def test_10c_nested_scholar_target_is_not_split_from_wrapper(self):
+        wrapper = (
+            "https://scholar.google.com/scholar_url?url="
+            "https://www.nature.com/articles/example&hl=zh-CN&sa=X"
+        )
+        links = email_watch._extract_links_from_text(f"Paper title: {wrapper}")
+        self.assertEqual(len(links), 1)
+        self.assertEqual(links[0]["url"], wrapper)
+        self.assertEqual(links[0]["display_text"], "Paper title")
+
     def test_11_rich_renderer_shows_action_link_without_image_placeholders(self):
         decision = {
             "classification": {"category": "account_status_notice", "label": "账户状态"},
