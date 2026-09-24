@@ -565,6 +565,10 @@ class GroundingMatrix(unittest.TestCase):
         text = "Use 436712 to sign in. This authorization code expires in 5 minutes."
         self.assertEqual(feature_extractor.extract_code_candidates(text), ["436712"])
 
+    def test_feature_extractor_accepts_confirmation_code_wording(self):
+        text = "Your confirmation code is 943433 and expires in 5 minutes."
+        self.assertEqual(feature_extractor.extract_code_candidates(text), ["943433"])
+
     def test_conservative_fallback_trusted_simple_code_is_code_card(self):
         email = {
             "subject": "登录验证码",

@@ -91,7 +91,7 @@ def tokenize(text: str, max_tokens: int = 120) -> List[str]:
 _CODE_CONTEXT_RE = re.compile(
     r"(?i)(验证码|校验码|动态口令|一次性密码|登录码|安全码|认证码|短信码|"
     r"\botp\b|one[- ]time password|verification code|security code|"
-    r"authentication code|authorization code|auth code|passcode|\byour\s+code\b|\b2fa\b|"
+    r"authentication code|authorization code|confirmation code|auth code|passcode|确认码|\byour\s+code\b|\b2fa\b|"
     r"\buse\s+(?:this\s+)?(?:code\s+)?\d{4,8}\s+to\s+(?:sign|log)\s*in\b)"
 )
 
