@@ -294,6 +294,25 @@ Best regards""",
         self.assertIn("[A Useful Paper on Vision](https://example.org/paper.pdf)", text)
         self.assertNotIn("scisig", text)
 
+    def test_academic_alert_category_uses_same_scholar_link_quality(self):
+        email = {
+            "account": "USTC", "subject": "Kaiming He - 新的结果",
+            "from_addr": "scholaralerts-noreply@google.com",
+            "body": "A Useful Paper on Vision\n( https://example.org/paper.pdf&hl=zh-CN&sa=X&scisig=secret )",
+            "links": [{"url": "https://example.org/paper.pdf&hl=zh-CN&sa=X&scisig=secret", "display_text": ""}],
+        }
+        decision = {
+            "classification": {"category": "academic_alert_digest", "label": "学术快讯"},
+            "importance": {"level": "low"},
+            "notification": {"summary": "新增一条检索结果。", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("### 🔎 学术快讯", text)
+        self.assertIn("[A Useful Paper on Vision](https://example.org/paper.pdf)", text)
+        self.assertNotIn("scisig", text)
+
     def test_invoice_policy_link_is_not_presented_as_payment_action(self):
         email = {
             "account": "USTC", "subject": "网上购票系统-电子发票通知", "from_addr": "12306@rails.com.cn",

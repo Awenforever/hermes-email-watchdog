@@ -157,6 +157,8 @@ def _heading(category: str, body: str, subject: str) -> Tuple[str, str]:
         return "🎓", "学校通知"
     if category == "academic_report_digest":
         return "📚", "研究简报"
+    if category == "academic_alert_digest":
+        return "🔎", "学术快讯"
     if category == "newsletter_marketing":
         return "📰", "订阅更新"
     return "📬", "新邮件"
@@ -306,7 +308,7 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
     ranked: List[Tuple[int, str, str]] = []
     seen = set()
     candidates: List[Any] = list(_items(email.get("links")))
-    if category == "academic_report_digest":
+    if category in {"academic_report_digest", "academic_alert_digest"}:
         candidates = [{"display_text": label, "url": url} for label, url in _body_link_pairs(email)] + candidates
     for item in candidates:
         if isinstance(item, Mapping):
@@ -319,7 +321,7 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
         seen.add(url)
         haystack = f"{label} {url}"
         score = 50
-        if category == "academic_report_digest":
+        if category in {"academic_report_digest", "academic_alert_digest"}:
             title_like = bool(label and 12 <= len(label) <= 220 and not re.search(r"(?i)打开|click|view|pdf$|www\.", label))
             score = 0 if title_like and research_link.search(haystack) else (5 if research_link.search(haystack) else 50)
         if category == "invoice_receipt" and re.search(
@@ -348,7 +350,7 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
         elif low_value.search(haystack):
             score = 50
         host = urlparse(url).netloc
-        if category == "academic_report_digest" and label:
+        if category in {"academic_report_digest", "academic_alert_digest"} and label:
             label = re.sub(r"\s+", " ", label).strip(" -*•")
         ranked.append((score, label or (f"打开 {host}" if host else "打开链接"), url))
     ranked.sort(key=lambda row: row[0])
@@ -571,6 +573,7 @@ def render_notification(
                 "account_security": "安全提醒", "account_status_notice": "需要确认",
                 "meeting_event": "活动信息", "task_deadline": "任务说明",
                 "school_notice": "通知重点", "academic_report_digest": "内容摘要",
+                "academic_alert_digest": "检索结果",
                 "newsletter_marketing": "内容摘要",
             }.get(category, "邮件摘要")
             if category == "account_status_notice":
@@ -629,7 +632,7 @@ def render_notification(
 
     links = _links(email, category)
     if links:
-        link_title = "论文与资料" if category == "academic_report_digest" else "快捷操作"
+        link_title = "论文与资料" if category in {"academic_report_digest", "academic_alert_digest"} else "快捷操作"
         _section(lines, link_title, [f"- [{label}]({url})" for label, url in links])
         blocks.append(link_title)
 

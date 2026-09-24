@@ -249,7 +249,7 @@ def should_push_notification(decision: Mapping[str, Any]) -> bool:
         "download_safe", "download_all",
     }:
         return True
-    if category == "academic_report_digest":
+    if category in {"academic_report_digest", "academic_alert_digest"}:
         return bool(notification.get("should_notify", True))
     # Personal correspondence is not advertising.  If the semantic model has
     # explicitly chosen to notify, preserve that human communication even when

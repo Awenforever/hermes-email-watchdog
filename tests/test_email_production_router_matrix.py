@@ -67,6 +67,9 @@ class ProductionRouterTests(unittest.TestCase):
     def test_13_weekly_report_pushes(self):
         d={"classification":{"category":"academic_report_digest"},"importance":{"level":"normal"},"notification":{"should_notify":True},"action":{},"deadline":{},"risk":{}}
         self.assertTrue(router.should_push_notification(d))
+    def test_13b_academic_alert_pushes(self):
+        d={"classification":{"category":"academic_alert_digest"},"importance":{"level":"low"},"notification":{"should_notify":True},"action":{},"deadline":{},"risk":{}}
+        self.assertTrue(router.should_push_notification(d))
     def test_14_all_mail_policy_remains_explicit_opt_in(self):
         d={"classification":{"category":"newsletter_marketing"},"importance":{"level":"low"},"notification":{"should_notify":False},"action":{},"deadline":{},"risk":{}}
         with mock.patch.object(router, "settings", return_value={"all_mail_push":True}):
