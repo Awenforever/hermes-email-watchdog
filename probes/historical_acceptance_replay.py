@@ -213,7 +213,14 @@ def main() -> int:
             re.search(r"(?i)^\s*\[(?:spam|junk)\]", email.get("subject") or "")
             and category in {"academic_opportunity_call", "newsletter_marketing"}
         )
-        if status == "suppressed" and category not in {"newsletter_marketing"} and not acceptable_spam_suppression:
+        low_value_event_suppression = bool(
+            category == "meeting_event"
+            and str((decision.get("importance") or {}).get("level") or "").lower() == "low"
+            and not (decision.get("action") or {}).get("required")
+            and not (decision.get("deadline") or {}).get("has_deadline")
+        )
+        if (status == "suppressed" and category not in {"newsletter_marketing"}
+                and not acceptable_spam_suppression and not low_value_event_suppression):
             errors.append(f"unexpected_suppression:{category or 'unknown'}")
         if category == "newsletter_marketing" and status != "suppressed":
             errors.append("marketing_not_suppressed")
