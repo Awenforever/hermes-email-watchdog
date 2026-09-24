@@ -16,7 +16,7 @@ except Exception:
     email_semantic_schema = None
 
 MARKER = "EMAIL_WATCHDOG_READABLE_GROUNDED_SEMANTIC_CORE_V1O"
-PROTOCOL_VERSION = "readable_grounded_core_v1w"
+PROTOCOL_VERSION = "readable_grounded_core_v1x"
 
 CORE_KEYS = {
     "category", "confidence", "importance", "importance_reason",
@@ -977,6 +977,22 @@ def normalize_and_expand_detailed(
         repairs.append("grounding:canonicalize_china_local_deadline_timezone")
     deadline_evidence = _text(deadline.get("evidence"), 240)
     has_deadline = bool(deadline_datetime or deadline_text)
+    if (
+        not has_deadline
+        and category == "data_download_order_notice"
+        and hints.get("relative_expiry_phrase")
+    ):
+        relative = re.search(
+            r"(?i)(?:有效期(?:为)?|(?:valid|available)\s+for|expires?\s+in)\s*"
+            r"((?:\d+|[一二三四五六七八九十两半]+)\s*"
+            r"(?:小时|天|日|周|星期|个月|月|hours?|days?|weeks?|months?))",
+            grounding_source,
+        )
+        if relative:
+            deadline_text = _text(relative.group(1), 200)
+            deadline_evidence = _text(relative.group(0), 240)
+            has_deadline = True
+            repairs.append("consistency:infer_relative_download_expiry")
     if has_deadline and not _quote_supported(deadline_evidence, grounding_source):
         inferred_deadline_evidence = _extract_deadline_quote(grounding_source)
         if inferred_deadline_evidence:

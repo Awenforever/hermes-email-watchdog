@@ -811,6 +811,42 @@ def _resolve_deadline_value(value, message_date=""):
         return ""
     if _parse_datetime(raw) is not None:
         return raw
+    relative = re.fullmatch(
+        r"(?i)\s*(?:有效期(?:为)?\s*)?"
+        r"(\d+|[一二三四五六七八九十两半]+)\s*"
+        r"(小时|天|日|周|星期|个月|月|hours?|days?|weeks?|months?)\s*(?:内|之内)?\s*",
+        raw,
+    )
+    if relative:
+        number_text = relative.group(1)
+        chinese_numbers = {
+            "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10, "半": 0.5,
+        }
+        try:
+            amount = float(number_text)
+        except ValueError:
+            amount = chinese_numbers.get(number_text, 0)
+        try:
+            sent = datetime.fromisoformat(str(message_date).strip().replace("Z", "+00:00"))
+        except Exception:
+            try:
+                sent = parsedate_to_datetime(str(message_date))
+            except Exception:
+                sent = None
+        if amount > 0 and sent is not None:
+            if sent.tzinfo is None:
+                sent = sent.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+            unit = relative.group(2).casefold()
+            if unit in {"小时", "hour", "hours"}:
+                delta = timedelta(hours=amount)
+            elif unit in {"周", "星期", "week", "weeks"}:
+                delta = timedelta(weeks=amount)
+            elif unit in {"个月", "月", "month", "months"}:
+                delta = timedelta(days=30 * amount)
+            else:
+                delta = timedelta(days=amount)
+            return (sent + delta).isoformat(timespec="minutes")
     match = re.search(r"(?:(20\d{2})\s*[年/-]\s*)?(\d{1,2})\s*[月/-]\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*[:：点时]\s*(\d{2})?)?", raw)
     if not match:
         return raw
@@ -1700,7 +1736,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     "raw_category": "", "validated_category": str((decision.get("classification") or {}).get("category") or ""),
                     "normalization_repairs": [], "trace_signals": {},
                     "fast_lane": True, "fast_lane_kind": lane.get("kind") or "",
-                    "core_protocol": "readable_grounded_core_v1w",
+                    "core_protocol": "readable_grounded_core_v1x",
                 }
             else:
                 semantic_meta = email_semantic_engine.analyze_email(

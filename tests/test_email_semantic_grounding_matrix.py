@@ -241,6 +241,25 @@ class GroundingMatrix(unittest.TestCase):
         self.assertFalse(dec['action']['required'])
         self.assertIn('consistency:low_value_feedback_survey_category', repairs)
 
+    def test_download_validity_window_is_recovered_when_model_omits_deadline(self):
+        body = '全文订购订单已处理完成，请点击下载链接，链接有效期为15天。'
+        raw = base_core()
+        raw.update({
+            'category': 'data_download_order_notice', 'importance': 'normal',
+            'summary_style': 'paragraph', 'summary': '全文订购订单已处理完成。',
+            'key_points': [], 'summary_evidence': ['全文订购订单已处理完成'],
+            'action': None, 'deadline': None,
+        })
+        f = facts('全文订购订单处理完成', body)
+        f['semantic_hints'] = {'relative_expiry_phrase': True}
+        dec, errors, repairs, _ = core.normalize_and_expand_detailed(
+            raw, message_key='ground:download-expiry', facts=f
+        )
+        self.assertFalse(errors)
+        self.assertTrue(dec['deadline']['has_deadline'])
+        self.assertEqual(dec['deadline']['date_text'], '15天')
+        self.assertIn('consistency:infer_relative_download_expiry', repairs)
+
     def test_grounded_school_send_type_is_canonicalized(self):
         body = '请于2026年7月15日17:00前提交中期检查材料，并完成导师签字后上传研究生管理系统。'
         raw = base_core()

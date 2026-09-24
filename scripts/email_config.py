@@ -67,7 +67,7 @@ DEFAULT_CONFIG = {
         "max_body_chars": 16000,
         "max_parallel": 1,
         "cache_by_message_hash": True,
-        "protocol": "readable_grounded_core_v1w",
+        "protocol": "readable_grounded_core_v1x",
         "num_thread": 5,
         # EMAIL_WATCHDOG_ADAPTIVE_OUTPUT_BUDGET_CONFIG_V1
         "num_predict_mode": "adaptive",

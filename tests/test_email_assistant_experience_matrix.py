@@ -321,6 +321,10 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual([item["kind"] for item in reminders], ["提前1天", "提前1小时"])
         self.assertTrue(all("如已完成请忽略" in item["message"] for item in reminders))
 
+    def test_12b_relative_download_expiry_resolves_from_message_time(self):
+        value = email_delivery._resolve_deadline_value("15天", "2026-01-11 09:05+08:00")
+        self.assertEqual(value, "2026-01-26T09:05+08:00")
+
     def test_13_due_reminder_is_emitted_once(self):
         now = datetime.now(timezone.utc)
         reminder_time = (now - timedelta(minutes=1)).isoformat()

@@ -84,6 +84,9 @@ class ProductionRouterTests(unittest.TestCase):
         for category in ("school_notice", "research_feedback_thread", "paper_manuscript_feedback"):
             d={"classification":{"category":category},"importance":{"level":"normal"},"notification":{"should_notify":True},"action":{},"deadline":{},"attachments":{},"risk":{}}
             self.assertTrue(router.should_push_notification(d), category)
+    def test_18_ready_download_respects_semantic_notify(self):
+        d={"classification":{"category":"data_download_order_notice"},"importance":{"level":"normal"},"notification":{"should_notify":True},"action":{},"deadline":{},"attachments":{},"risk":{}}
+        self.assertTrue(router.should_push_notification(d))
 
 if __name__ == '__main__':
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(ProductionRouterTests)

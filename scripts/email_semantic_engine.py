@@ -122,6 +122,7 @@ def _trace_signals(facts: Mapping[str, Any]) -> Dict[str, bool]:
         "spam_subject_phrase", "publication_issue_phrase",
         "publication_issue_subject_phrase", "newsletter_marketing_phrase",
         "low_value_feedback_survey_phrase",
+        "relative_expiry_phrase",
         "system_test_phrase", "no_action_phrase", "no_deadline_phrase",
         "no_receipt_phrase", "direct_request_phrase", "deadline_phrase",
         "account_security_phrase", "manuscript_feedback_phrase", "receipt_phrase",
@@ -144,7 +145,7 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
         "max_body_chars": 12000,
         "max_parallel": 1,
         "cache_by_message_hash": True,
-        "protocol": "readable_grounded_core_v1w",
+        "protocol": "readable_grounded_core_v1x",
         "num_thread": 5,
         "num_predict_mode": "adaptive",
         "num_predict": 1800,
@@ -173,7 +174,7 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     defaults["max_body_chars"] = max(1000, min(50000, int(defaults.get("max_body_chars") or 12000)))
     defaults["max_parallel"] = max(1, min(4, int(defaults.get("max_parallel") or 1)))
     defaults["cache_by_message_hash"] = bool(defaults.get("cache_by_message_hash", True))
-    defaults["protocol"] = str(defaults.get("protocol") or "readable_grounded_core_v1w").strip().lower()
+    defaults["protocol"] = str(defaults.get("protocol") or "readable_grounded_core_v1x").strip().lower()
     defaults["num_thread"] = max(1, min(32, int(defaults.get("num_thread") or 5)))
     defaults["num_predict_mode"] = str(defaults.get("num_predict_mode") or "adaptive").strip().lower()
     if defaults["num_predict_mode"] not in {"adaptive", "fixed"}:
@@ -369,6 +370,11 @@ def _semantic_hints(email: Mapping[str, Any], subject: str, body: str, features:
             r"/satisfaction/(?:new|survey)|"
             r"your feedback helps us improve|"
             r"(?:support|service|customer) satisfaction survey"
+        ),
+        "relative_expiry_phrase": has(
+            r"(?:链接|下载|文件|订单|资料).{0,24}(?:有效期|有效|到期|过期).{0,12}"
+            r"(?:\d+|[一二三四五六七八九十两半]+)\s*(?:小时|天|日|周|星期|个月|月)|"
+            r"(?:valid|expires?|available).{0,24}(?:for|in)\s+\d+\s*(?:hours?|days?|weeks?|months?)"
         ),
         "verification_code_phrase": has(
             r"验证码|校验码|动态口令|一次性密码|登录码|安全码|认证码|短信码|"
@@ -1546,7 +1552,7 @@ def analyze_email(
         "normalization_repairs": normalization_repairs[:40],
         "model_core_keys": model_core_keys[:40],
         "prompt_hash": _sha(prompt),
-        "core_protocol": str(settings.get("protocol") or "readable_grounded_core_v1w"),
+        "core_protocol": str(settings.get("protocol") or "readable_grounded_core_v1x"),
         "num_thread": int(settings.get("num_thread") or 5),
         "num_predict": int(output_budget.get("num_predict") or 0),
         "num_predict_hard_cap": int(output_budget.get("hard_cap") or 0),

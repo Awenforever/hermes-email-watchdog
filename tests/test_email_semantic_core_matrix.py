@@ -100,7 +100,7 @@ class CoreSchemaTests(unittest.TestCase):
 
     def test_01_marker(self):
         self.assertEqual(core.MARKER, "EMAIL_WATCHDOG_READABLE_GROUNDED_SEMANTIC_CORE_V1O")
-        self.assertEqual(core.PROTOCOL_VERSION, "readable_grounded_core_v1w")
+        self.assertEqual(core.PROTOCOL_VERSION, "readable_grounded_core_v1x")
 
     def test_02_valid_bullets(self):
         decision, errors = self.expand(valid_core())
@@ -796,7 +796,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(settings["num_predict_mode"], "adaptive")
         self.assertEqual(settings["num_predict"], 1800)
         self.assertEqual(settings["num_predict_standard"], 1200)
-        self.assertEqual(settings["protocol"], "readable_grounded_core_v1w")
+        self.assertEqual(settings["protocol"], "readable_grounded_core_v1x")
         self.assertEqual(settings["num_predict_mode"], "adaptive")
         self.assertEqual(settings["num_predict_simple"], 700)
         self.assertEqual(settings["num_predict_standard"], 1200)
