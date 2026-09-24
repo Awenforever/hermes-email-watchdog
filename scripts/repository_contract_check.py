@@ -71,7 +71,7 @@ checks={
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
  "renderer_v1g":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G" in renderer and "adaptive_v1g" in renderer,
  "intent_composer_v3":"EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V3" in composer and "intelligent_v3.0" in composer,
- "protocol_v1v":"readable_grounded_core_v1v" in config_text,
+ "protocol_v1w":"readable_grounded_core_v1w" in config_text,
  "safe_thread_tracker":"email_thread_tracker" in watch and "email_reply" not in watch,
  "weixin_not_present":not any(p.name=="weixin.py" for p in root.rglob("weixin.py")),
  "onboarding_json_commands":all(x in onboarding for x in (

@@ -275,7 +275,15 @@ def _weekly_report_points(body: str) -> List[str]:
 
 
 def _clean_url(value: str) -> str:
-    value = html.unescape(value or "").strip().strip("<>()[]{}.,，。")
+    value = html.unescape(value or "").strip()
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    value = value.rstrip(".,，。;；!！?？")
+    # Remove only unmatched mail/HTML wrapper delimiters. Balanced parentheses
+    # are valid URL path data (notably OData Products(<uuid>) endpoints).
+    for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")):
+        while value.endswith(closer) and value.count(closer) > value.count(opener):
+            value = value[:-1].rstrip()
     # Some mail-to-text converters append Scholar tracking parameters to a
     # direct article URL with '&' even when the original URL has no query.
     value = re.split(r"&(?:hl|sa|d|ei|scisig|oi|html|pos|folt|rt)=", value, maxsplit=1, flags=re.I)[0]
@@ -301,7 +309,7 @@ def _body_link_pairs(email: Mapping[str, Any]) -> List[Tuple[str, str]]:
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     out: List[Tuple[str, str]] = []
     for index, line in enumerate(lines):
-        match = re.search(r"https?://[^\s)>]+", line)
+        match = re.search(r"https?://[^\s<>]+", line)
         if not match:
             continue
         label = re.sub(r"[:：\s(*>]+$", "", line[:match.start()]).strip()
@@ -376,7 +384,10 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
     useful = [row for row in ranked if row[0] < 50]
     if useful and useful[0][0] == 0:
         useful = [row for row in useful if row[0] == 0]
-    return [(re.sub(r"[\[\]]", "", label)[:120], url.replace(" ", "%20")) for _, label, url in useful[:4]]
+    return [(
+        re.sub(r"[\[\]]", "", label)[:120],
+        url.replace(" ", "%20").replace("(", "%28").replace(")", "%29"),
+    ) for _, label, url in useful[:4]]
 
 
 def _attachment_lines(email: Mapping[str, Any], delivery: Mapping[str, Any], category: str = "") -> List[str]:

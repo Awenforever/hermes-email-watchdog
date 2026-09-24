@@ -314,7 +314,7 @@ def _migrate_known_v2_assistant_policy(
     if not known_v2_signature:
         return source, False
 
-    semantic["protocol"] = "readable_grounded_core_v1v"
+    semantic["protocol"] = "readable_grounded_core_v1w"
     semantic["num_predict_simple"] = 700
     semantic["num_predict_standard"] = 1200
     semantic["num_predict_complex"] = 1800

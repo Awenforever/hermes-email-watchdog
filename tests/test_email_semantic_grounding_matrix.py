@@ -10,6 +10,7 @@ if SCRIPTS not in sys.path:
     sys.path.insert(0, SCRIPTS)
 
 import email_semantic_core as core
+import email_semantic_engine as engine
 import email_feature_extractor as feature_extractor
 import email_semantic_schema as schema
 
@@ -205,6 +206,40 @@ class GroundingMatrix(unittest.TestCase):
         self.assertEqual(dec['classification']['category'], 'newsletter_marketing')
         self.assertEqual(dec['importance']['level'], 'low')
         self.assertIn('consistency:clear_newsletter_marketing_category', repairs)
+
+    def test_support_satisfaction_survey_is_suppressed_even_with_quoted_request(self):
+        body = (
+            "How would you rate the support you received? Your feedback helps us improve.\n"
+            "https://help.example.test/requests/7701/satisfaction/new/token\n\n"
+            "Earlier request: Please verify the integrity of this product on the server."
+        )
+        hint_values = engine._semantic_hints(
+            {"from_name": "Support", "from_domain": "example.test"},
+            "Re: checksum mismatch", body, {"sender_domain": "example.test"},
+        )
+        self.assertTrue(hint_values['low_value_feedback_survey_phrase'])
+        self.assertTrue(hint_values['direct_request_phrase'])
+        raw = base_core()
+        raw.update({
+            'category': 'personal_or_general', 'importance': 'low',
+            'summary_style': 'paragraph',
+            'summary': '支持团队邀请评价本次服务。', 'key_points': [],
+            'summary_evidence': ['How would you rate the support you received?'],
+            'action': {
+                'type': 'review_and_complete', 'description': 'Please verify the integrity',
+                'next_step': '', 'evidence': 'Please verify the integrity',
+            },
+        })
+        f = facts('Re: checksum mismatch', body)
+        f['semantic_hints'] = hint_values
+        dec, errors, repairs, _ = core.normalize_and_expand_detailed(
+            raw, message_key='ground:support-survey', facts=f
+        )
+        self.assertFalse(errors)
+        self.assertEqual(dec['classification']['category'], 'newsletter_marketing')
+        self.assertFalse(dec['notification']['should_notify'])
+        self.assertFalse(dec['action']['required'])
+        self.assertIn('consistency:low_value_feedback_survey_category', repairs)
 
     def test_grounded_school_send_type_is_canonicalized(self):
         body = '请于2026年7月15日17:00前提交中期检查材料，并完成导师签字后上传研究生管理系统。'

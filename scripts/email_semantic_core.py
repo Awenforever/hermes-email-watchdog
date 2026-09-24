@@ -16,7 +16,7 @@ except Exception:
     email_semantic_schema = None
 
 MARKER = "EMAIL_WATCHDOG_READABLE_GROUNDED_SEMANTIC_CORE_V1O"
-PROTOCOL_VERSION = "readable_grounded_core_v1v"
+PROTOCOL_VERSION = "readable_grounded_core_v1w"
 
 CORE_KEYS = {
     "category", "confidence", "importance", "importance_reason",
@@ -785,6 +785,19 @@ def normalize_and_expand_detailed(
     ):
         category = "newsletter_marketing"
         repairs.append("consistency:clear_newsletter_marketing_category")
+    if (
+        hints.get("low_value_feedback_survey_phrase")
+        and category in {
+            "newsletter_marketing", "personal_or_general",
+            "unknown_needs_llm", "system_automation_notice",
+        }
+        and not hints.get("deadline_phrase")
+        and not hints.get("account_security_phrase")
+        and not hints.get("receipt_phrase")
+        and not hints.get("manuscript_feedback_phrase")
+    ):
+        category = "newsletter_marketing"
+        repairs.append("consistency:low_value_feedback_survey_category")
 
     # A server-added spam/junk marker is evidence, not an absolute verdict.
     # Only the conjunction of a spam marker and clear subscription/publication

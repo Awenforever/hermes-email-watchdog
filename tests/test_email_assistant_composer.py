@@ -353,6 +353,26 @@ Best regards""",
         self.assertIn("[A Useful Paper on Vision](https://example.org/paper.pdf)", text)
         self.assertNotIn("scisig", text)
 
+    def test_balanced_parentheses_in_odata_link_are_preserved(self):
+        email = {
+            "account": "USTC", "subject": "Product checksum corrected",
+            "from_addr": "support@example.test", "body": "The checksum is now correct.",
+            "links": [{
+                "url": "https://download.example.test/odata/v1/Products(20e7a65d-6997-470c-b727-9750c97012c3)/$value",
+                "display_text": "Download corrected product",
+            }],
+        }
+        decision = {
+            "classification": {"category": "system_automation_notice", "label": "系统通知"},
+            "importance": {"level": "low"},
+            "notification": {"summary": "服务方已修正产品校验和。", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("Products%2820e7a65d-6997-470c-b727-9750c97012c3%29/$value", text)
+        self.assertNotIn("Products(20e7a65d-6997-470c-b727-9750c97012c3)/$value", text)
+
     def test_invoice_policy_link_is_not_presented_as_payment_action(self):
         email = {
             "account": "USTC", "subject": "网上购票系统-电子发票通知", "from_addr": "12306@rails.com.cn",

@@ -1700,7 +1700,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     "raw_category": "", "validated_category": str((decision.get("classification") or {}).get("category") or ""),
                     "normalization_repairs": [], "trace_signals": {},
                     "fast_lane": True, "fast_lane_kind": lane.get("kind") or "",
-                    "core_protocol": "readable_grounded_core_v1v",
+                    "core_protocol": "readable_grounded_core_v1w",
                 }
             else:
                 semantic_meta = email_semantic_engine.analyze_email(

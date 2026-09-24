@@ -62,6 +62,14 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
     status = str(delivery.get("status") or "")
     if status == "suppressed":
         return []
+    source = f"{email.get('subject', '')}\n{email.get('body', '')}"
+    if re.search(
+        r"(?i)how would you rate (?:the )?(?:support|service|experience)|"
+        r"/satisfaction/(?:new|survey)|your feedback helps us improve|"
+        r"(?:support|service|customer) satisfaction survey",
+        source,
+    ):
+        errors.append("low_value_feedback_survey_not_suppressed")
     if "**发件人** `" not in text:
         errors.append("sender_not_inline_code")
     if "**主题** `" not in text:
