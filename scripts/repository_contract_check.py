@@ -77,7 +77,9 @@ checks={
  "onboarding_json_commands":all(x in onboarding for x in (
      "status","plan","apply","validate","enable","disable","capture-context","export-redacted"
  )),
- "natural_protocol":"Natural conversation onboarding" in skill and "Never ask" in skill,
+ "natural_protocol":all(x in skill for x in (
+     "安装与配置对话", "hermes email-watchdog setup", "绝不询问", "onboarding-plan", "onboarding-apply"
+ )),
  "runtime_template_parity":namespace["DEFAULT_CONFIG"]==template,
  "immutable_safety":template.get("safety")=={
      "mailbox_read_only":True,"outbound_email_enabled":False,"mailbox_mutation_enabled":False

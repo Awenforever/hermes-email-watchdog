@@ -1,4 +1,4 @@
-"""Email Watchdog v0.2 plugin registration."""
+"""Email Watchdog plugin registration."""
 
 from __future__ import annotations
 

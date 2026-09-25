@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 - 2026-09-25
+
+- Add a first-class guided setup entry so Hermes can inspect unresolved mailbox
+  onboarding state before asking the user any questions.
+- Make conversational onboarding the primary installation path: reuse detected
+  accounts, ask only for missing preferences, keep secrets out of chat, and use
+  the same atomic plan/apply engine as unattended deployments.
+- Replace the implementation-oriented README with a product guide centered on
+  intelligent triage, actionable Markdown, useful links and attachments,
+  deadline reminders, privacy boundaries, and portable recovery.
+
 ## 0.6.1 - 2026-09-25
 
 - Make the card title, mailbox identity, sender, subject, server-received time,

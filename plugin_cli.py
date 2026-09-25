@@ -33,6 +33,7 @@ def _hook() -> Path:
 def register_cli(parser: argparse.ArgumentParser) -> None:
     actions = parser.add_subparsers(dest="email_watchdog_action")
     actions.add_parser("status", help="Show runtime and account readiness")
+    actions.add_parser("setup", help="Inspect guided mailbox onboarding and show the next unresolved step")
     actions.add_parser("install-runtime", help="Install or refresh the profile-scoped gateway hook")
     actions.add_parser("enable", help="Enable read-only polling")
     actions.add_parser("disable", help="Disable polling")
@@ -124,6 +125,8 @@ def _enabled() -> bool:
 
 def email_watchdog_command(args: argparse.Namespace) -> int:
     action = getattr(args, "email_watchdog_action", None)
+    if action == "setup":
+        return _run_onboarding("status")
     if action == "install-runtime":
         return _install_runtime()
     if action == "enable":

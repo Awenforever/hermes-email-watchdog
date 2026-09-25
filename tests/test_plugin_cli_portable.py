@@ -7,6 +7,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 from argparse import Namespace
 from pathlib import Path
 
@@ -75,6 +76,12 @@ class PluginCliPortableTests(unittest.TestCase):
             rc = self.module.email_watchdog_command(Namespace(email_watchdog_action="enable"))
         self.assertNotEqual(rc, 0)
         self.assertFalse((self.home / "plugin-data" / "hermes-email-watchdog" / "enabled").exists())
+
+    def test_setup_uses_the_same_redacted_onboarding_status_engine(self):
+        with mock.patch.object(self.module, "_run_onboarding", return_value=0) as run:
+            rc = self.module.email_watchdog_command(Namespace(email_watchdog_action="setup"))
+        self.assertEqual(rc, 0)
+        run.assert_called_once_with("status")
 
 
 if __name__ == "__main__":
