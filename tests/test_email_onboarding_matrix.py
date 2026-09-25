@@ -149,6 +149,7 @@ def main() -> None:
         ok(result["configured"] is False, "missing config should be unconfigured")
         ok(result["enabled"] is False, "missing config should be disabled")
         ok(result["values_redacted"] is True and result["mailbox_access"] is False, "status safety")
+        ok(result["himalaya"]["installed"] and result["himalaya"]["usable"], "Himalaya dependency status")
 
         # A clear agent:start setup intent captures target metadata only.
         case = root / "case-hook"

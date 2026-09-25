@@ -994,6 +994,23 @@ def _himalaya_binary() -> str:
     return "himalaya"
 
 
+def _himalaya_status() -> dict[str, Any]:
+    binary = _himalaya_binary()
+    resolved = binary if Path(binary).is_file() else (shutil.which(binary) or "")
+    result: dict[str, Any] = {"installed": bool(resolved)}
+    if not resolved:
+        return result
+    try:
+        completed = subprocess.run([resolved, "--version"], capture_output=True, text=True, timeout=10)
+        result["usable"] = completed.returncode == 0
+        version_text = re.sub(r"\s+", " ", completed.stdout or completed.stderr or "").strip()
+        if version_text:
+            result["version"] = version_text[:160]
+    except Exception:
+        result["usable"] = False
+    return result
+
+
 def _redact_command(command: list[str]) -> list[str]:
     result: list[str] = []
     for index, value in enumerate(command):
@@ -1296,6 +1313,7 @@ def status() -> dict[str, Any]:
     target = _normalize_target((current.get("delivery") or {}).get("target"))
     pending = _pending_target()
     configured = bool(valid_accounts) and target.get("platform") == "weixin" and bool(target.get("chat_id"))
+    himalaya = _himalaya_status()
     return {
         "configured": configured,
         "enabled": _read_enabled(),
@@ -1315,7 +1333,9 @@ def status() -> dict[str, Any]:
         "pending_target": _target_summary(pending),
         "detected_himalaya_config_count": len(detected_configs),
         "detected_himalaya_account_count": len(detected),
+        "himalaya": himalaya,
         "unresolved": [
+            *([] if himalaya.get("installed") and himalaya.get("usable", True) else ["himalaya"]),
             *([] if valid_accounts else ["account"]),
             *([] if target.get("chat_id") else ["delivery_target"]),
         ],

@@ -10,6 +10,9 @@
 - Replace the implementation-oriented README with a product guide centered on
   intelligent triage, actionable Markdown, useful links and attachments,
   deadline reminders, privacy boundaries, and portable recovery.
+- Surface Himalaya availability in guided setup so a fresh Windows, WSL,
+  Linux, or NAS installation can resolve the runtime dependency before asking
+  for mailbox details.
 
 ## 0.6.1 - 2026-09-25
 

@@ -75,6 +75,9 @@ Hermes 会主动完成：
 通常让 Hermes 操作即可；以下命令用于检查和排障：
 
 ```bash
+# 从 GitHub 安装并启用插件
+hermes plugins install Awenforever/hermes-email-watchdog --enable
+
 # 查看引导状态及尚缺的信息
 hermes email-watchdog setup
 
@@ -90,6 +93,8 @@ hermes email-watchdog status
 hermes email-watchdog enable
 hermes email-watchdog disable
 ```
+
+Email Watchdog 需要读取环境变量型凭据、调用 Himalaya、访问模型接口并投递微信，因此 Hermes 的社区插件安全扫描可能要求你确认这些能力。请先查看扫描结果；确认仓库来源与权限符合预期后再批准。不要关闭全局安全扫描。首次启用后按 Hermes 提示重启 gateway，再继续 `setup`，已完成步骤不会重复。
 
 自动化部署仍可使用同一套 plan/apply 内核；详见 [安装与自动化说明](INSTALLATION.md)。自然对话与自动化路径生成相同的标准配置，并共享原子回滚和只读验证。
 
