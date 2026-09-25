@@ -1864,6 +1864,8 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                         editorial_meta,
                         {"attachments": attachments, "schedule": schedule},
                         decision,
+                        email or {},
+                        account or {},
                     )
                 else:
                     renderer_meta = email_assistant_composer.render_notification(
@@ -1908,6 +1910,10 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                         ),
                         "blocks": ["发件人", "主题", "邮件摘要"],
                     }
+            renderer_meta = dict(renderer_meta or {})
+            renderer_meta["text"] = email_assistant_composer.ensure_card_chrome(
+                renderer_meta.get("text") or "", email or {}, decision, account or {}
+            )
             text = str(renderer_meta.get("text") or "").strip()
             if not renderer_meta.get("ok") or not text:
                 raise RuntimeError("semantic renderers returned empty or invalid text")

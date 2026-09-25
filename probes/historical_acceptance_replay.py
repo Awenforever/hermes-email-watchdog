@@ -66,6 +66,14 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
         errors.append("sender_not_inline_code")
     if "**主题** `" not in text:
         errors.append("subject_not_inline_code")
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    account = str(email.get("account") or "Email")
+    if not re.match(r"^###\s+\S+\s+.+｜" + re.escape(account) + r"$", first_line):
+        errors.append("typed_mailbox_title_missing")
+    if email.get("date_received") and "**收到** `" not in text:
+        errors.append("server_received_time_missing")
+    if email.get("date_sent") and "**发出** `" not in text:
+        errors.append("sender_time_missing")
     if re.search(r"(?mi)^\s*[-*]\s*(?:please\s+\w{0,8}|请|.*\b(?:a|an|the|to|of|for|with|or|and|provide|co))\s*$", text):
         errors.append("truncated_action")
     if re.search(r"@[A-Z0-9._%+-]+\.[A-Z]?(?:\s|$)", text, re.I):
@@ -100,6 +108,8 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
         if len(target) > 500 and (label.casefold().startswith("打开 ") or re.search(r"(?i)scisig=|utm_|scholar_share", target)):
             errors.append("oversized_tracking_link")
     for line in text.splitlines():
+        if "\u200b" in line or "\ufeff" in line:
+            errors.append("invisible_character_in_output")
         if "](" in line and line.count("](") != line.count(")"):
             errors.append("broken_markdown_link")
             break
@@ -180,6 +190,10 @@ def main() -> int:
         attachments = env.get("attachments") or message.get("attachments") or message.get("attachment_list") or []
         links = message.get("links") or email_watch._extract_links_from_text(body)
         from_addr = str(sender.get("addr") or "")
+        date_received = next((str(env.get(key) or "").strip() for key in (
+            "date_received", "received_at", "internal_date", "internalDate"
+        ) if env.get(key)), "") or str(message.get("date_received") or "")
+        date_sent = str(message.get("date_sent") or env.get("date") or "")
         email = {
             "id": str(message_id), "msg_id": str(message_id),
             "account": account.get("label") or account.get("name") or account.get("id") or "Email",
@@ -187,7 +201,8 @@ def main() -> int:
             "from_addr": from_addr, "from_email": from_addr.casefold(),
             "from_domain": from_addr.rsplit("@", 1)[-1].casefold() if "@" in from_addr else "",
             "from_name": str(sender.get("name") or ""), "to_addr": str(recipient.get("addr") or ""),
-            "body": body[:12000], "date_sent": str(env.get("date") or ""),
+            "body": body[:12000], "date_sent": date_sent,
+            "date_received": date_received,
             "has_attachments": bool(env.get("has_attachment") or env.get("has_attachments") or attachments),
             "has_attachment": bool(env.get("has_attachment") or env.get("has_attachments") or attachments),
             "attachments": attachments, "links": links, "has_links": bool(links),
@@ -199,7 +214,7 @@ def main() -> int:
             "id": str(message_id), "account": email["account"],
             "subject": email["subject"], "from_name": email["from_name"],
             "from_email": email["from_email"], "from_domain": email["from_domain"],
-            "date_sent": email["date_sent"],
+            "date_sent": email["date_sent"], "date_received": email["date_received"],
             "has_attachment": 1 if email["has_attachments"] else 0,
             "has_links": 1 if links else 0, "push_status": "acceptance_replay",
         })

@@ -47,6 +47,7 @@ def init_db():
         to_emails TEXT,
         cc_emails TEXT,
         date_sent TEXT,
+        date_received TEXT,
         date_seen TEXT,
         body_hash TEXT,
         cache_path TEXT,
@@ -200,6 +201,7 @@ def init_db():
 def _migrate_columns(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
     wanted = {
+        "date_received": "TEXT",
         "deadline": "TEXT",
         "deadline_timezone": "TEXT",
         "format_decision": "TEXT",

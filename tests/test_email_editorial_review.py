@@ -96,7 +96,7 @@ class EditorialReviewTests(unittest.TestCase):
         self.assertIn("**时效**", rendered["text"])
         self.assertIn("状态：**已过期**", rendered["text"])
 
-    def test_changed_sender_is_rejected(self):
+    def test_changed_sender_is_replaced_by_runtime_identity(self):
         email = {"subject": "Hello", "from_addr": "real@example.test", "body": "Hello", "links": []}
         def transport(prompt, settings):
             return {"parsed": {
@@ -109,8 +109,9 @@ class EditorialReviewTests(unittest.TestCase):
             email, decision(), "candidate", transport=transport,
             settings_override=self.settings(),
         )
-        self.assertFalse(result["ok"])
-        self.assertTrue(any("sender is missing or changed" in item for item in result["errors"]))
+        self.assertTrue(result["ok"])
+        self.assertIn("**发件人** `real@example.test`", result["markdown"])
+        self.assertNotIn("fake@example.test", result["markdown"])
 
     def test_expired_temporal_fact_requires_expired_link_inventory(self):
         email = {
@@ -174,8 +175,8 @@ class EditorialReviewTests(unittest.TestCase):
         calls = []
         def transport(prompt, settings):
             calls.append(prompt)
-            shown_sender = "archive@example.test" if len(calls) == 2 else "wrong@example.test"
-            markdown = f"**发件人** `{shown_sender}`\n\n**主题** `资料已就绪`\n\n该下载窗口已过期。"
+            extra = "" if len(calls) == 2 else "\n\n[未经验证的链接](link:0)"
+            markdown = f"**发件人** `archive@example.test`\n\n**主题** `资料已就绪`\n\n该下载窗口已过期。{extra}"
             return {"parsed": {
                 "publish": True, "markdown": markdown, "selected_links": [],
                 "attachment_intent": "ignore",
@@ -328,6 +329,33 @@ class EditorialReviewTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(normalized["selected_links"], [])
 
+    def test_state_changing_mail_chrome_is_not_displayable(self):
+        email = {
+            "subject": "Research alert", "from_addr": "alerts@example.test",
+            "body": "A useful paper is available.",
+            "links": [{
+                "url": "https://example.test/items?id=42&update_op=email_library_add",
+                "display_text": "Save to library",
+            }],
+        }
+        links = editorial._source_links(email)
+        self.assertFalse(links[0]["display_safe"])
+        self.assertEqual(links[0]["display_policy"], "mail_chrome_action")
+        raw = {
+            "publish": True,
+            "markdown": "**发件人** `alerts@example.test`\n\n**主题** `Research alert`\n\n发现一篇论文。",
+            "selected_links": [{
+                "index": 0, "label": "加入资料库", "purpose": "action",
+                "still_useful_reason": "保存论文",
+            }],
+            "attachment_intent": "ignore",
+            "live_action": {"required": False, "description": "", "evidence": ""},
+            "temporal": None,
+        }
+        normalized, errors = editorial._normalize_result(raw, email, decision(), links)
+        self.assertEqual(errors, [])
+        self.assertEqual(normalized["selected_links"], [])
+
     def test_grounded_important_attachment_cannot_be_silently_downgraded(self):
         email = {
             "subject": "Invoice", "from_addr": "billing@example.test", "body": "Invoice attached.",
@@ -349,7 +377,7 @@ class EditorialReviewTests(unittest.TestCase):
         self.assertIsNone(normalized)
         self.assertIn("grounded important attachment cannot be downgraded from send", errors)
 
-    def test_model_cannot_emit_runtime_owned_attachment_section(self):
+    def test_runtime_owned_attachment_section_is_stripped_and_rebuilt_later(self):
         email = {"subject": "Report", "from_addr": "author@example.test", "body": "Report attached."}
         raw = {
             "publish": True,
@@ -359,8 +387,10 @@ class EditorialReviewTests(unittest.TestCase):
             "temporal": None,
         }
         normalized, errors = editorial._normalize_result(raw, email, decision(), [])
-        self.assertIsNone(normalized)
-        self.assertTrue(any("runtime-owned section" in item for item in errors))
+        self.assertIsNotNone(normalized)
+        self.assertEqual(errors, [])
+        self.assertNotIn("report.pdf", normalized["markdown"])
+        self.assertTrue(any("附件" in item for item in normalized["review_notes"]))
 
     def test_critic_cannot_weaken_runtime_history_floor(self):
         baseline = {

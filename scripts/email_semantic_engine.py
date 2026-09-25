@@ -43,6 +43,8 @@ STATE_ROOT = Path(
         str(HERMES_HOME / "plugin-data" / "hermes-email-watchdog"),
     )
 ).expanduser()
+_REMOTE_REQUEST_LOCK = threading.Lock()
+_LAST_REMOTE_REQUEST_AT = 0.0
 DEFAULT_DB_PATH = Path(
     os.environ.get(
         "EMAIL_LEARNING_DB",
@@ -151,6 +153,7 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
         "num_predict_standard": 1000,
         "num_predict_complex": 1600,
         "num_predict_hard_cap": 1800,
+        "request_min_interval_seconds": 3.2,
     }
     if email_config is not None and hasattr(email_config, "get_semantic_engine_settings"):
         try:
@@ -190,6 +193,9 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     defaults["num_predict_hard_cap"] = max(
         384,
         min(8192, int(defaults.get("num_predict_hard_cap") or defaults["num_predict"])),
+    )
+    defaults["request_min_interval_seconds"] = max(
+        0.0, min(30.0, float(defaults.get("request_min_interval_seconds") or 0.0))
     )
     return defaults
 
@@ -929,6 +935,13 @@ def _openai_compatible_request(
     num_predict: int,
     response_format: Any = None,
 ) -> Dict[str, Any]:
+    global _LAST_REMOTE_REQUEST_AT
+    minimum_interval = max(0.0, float(settings.get("request_min_interval_seconds") or 0.0))
+    with _REMOTE_REQUEST_LOCK:
+        delay = minimum_interval - (time.monotonic() - _LAST_REMOTE_REQUEST_AT)
+        if delay > 0:
+            time.sleep(delay)
+        _LAST_REMOTE_REQUEST_AT = time.monotonic()
     endpoint, api_key = _resolve_openai_credentials(settings)
     url = endpoint if endpoint.endswith("/chat/completions") else endpoint + "/chat/completions"
     body: Dict[str, Any] = {

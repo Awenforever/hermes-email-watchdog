@@ -263,6 +263,8 @@ class AssistantExperienceTests(unittest.TestCase):
     def test_10_raw_mime_keeps_confirmation_link_and_real_attachment(self):
         message = EmailMessage()
         message["Subject"] = "Confirmation instructions"
+        message["Date"] = "Wed, 23 Sep 2026 20:11:00 +0800"
+        message["Received"] = "from mx.example.test by mail.ustc.edu.cn; Wed, 23 Sep 2026 20:12:34 +0800"
         message.set_content("Confirm your email")
         message.add_alternative(
             '<p>Welcome.</p><a href="https://example.test/confirm?token=abc">Confirm your email</a>'
@@ -278,6 +280,8 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual(parsed["links"][0]["display_text"], "Confirm your email")
         self.assertIn("https://example.test/confirm?token=abc", parsed["links"][0]["url"])
         self.assertNotIn("[image", parsed["text"].lower())
+        self.assertEqual(parsed["date_sent"], "Wed, 23 Sep 2026 20:11:00 +0800")
+        self.assertEqual(parsed["date_received"], "2026-09-23T20:12:34+08:00")
 
     def test_10b_text_link_extractor_preserves_balanced_odata_path(self):
         url = "https://download.example.test/odata/v1/Products(20e7a65d-6997-470c-b727-9750c97012c3)/$value"

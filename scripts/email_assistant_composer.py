@@ -18,7 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 
-COMPOSER_VERSION = "intelligent_v3.0"
+COMPOSER_VERSION = "intelligent_v3.1"
 MARKER = "EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V3"
 
 
@@ -121,7 +121,7 @@ def _format_time(value: Any) -> str:
 
 
 def _sender(email: Mapping[str, Any]) -> str:
-    name = _text(email.get("from_name"), 120).strip('"')
+    name = re.sub(r"\s+", " ", _text(email.get("from_name"), 120).strip().strip('"').strip())
     address = _text(email.get("from_addr") or email.get("from_email") or email.get("sender"), 200)
     if name and address and name.casefold() not in address.casefold():
         return f"{name} <{address}>"
@@ -162,6 +162,65 @@ def _heading(category: str, body: str, subject: str) -> Tuple[str, str]:
     if category == "newsletter_marketing":
         return "📰", "订阅更新"
     return "📬", "新邮件"
+
+
+def _card_chrome(
+    email: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    account: Mapping[str, Any] | None = None,
+) -> List[str]:
+    """Return runtime-owned identity and time lines for every notification.
+
+    Models may organize the meaningful body, but they must not be able to drop
+    or relabel mailbox identity and timestamp provenance.
+    """
+    account = account or {}
+    category, label = _category(decision)
+    body = _clean(email.get("body") or email.get("body_plain") or email.get("text"))
+    subject = _text(email.get("subject"), 280) or "无主题"
+    icon, title = _heading(category, body, subject)
+    account_label = _text(
+        email.get("account") or account.get("label") or account.get("name")
+        or account.get("id") or account.get("email"), 80
+    ) or "Email"
+    importance = _text(_mapping(decision.get("importance")).get("level"), 30).lower()
+    priority = {"critical": "紧急", "high": "重要", "normal": "普通", "low": "低优先级"}.get(importance, "普通")
+    received = _format_time(
+        email.get("date_received") or email.get("received_at") or email.get("internal_date")
+    )
+    sent = _format_time(email.get("date_sent") or email.get("date") or email.get("sent_at"))
+    times = []
+    if received:
+        times.append(f"**收到** {_code(received)}")
+    if sent:
+        times.append(f"**发出** {_code(sent)}")
+    lines = [f"### {icon} {title}｜{account_label}", "", f"`{priority}` · `{label}`"]
+    if times:
+        lines.extend(["", " · ".join(times)])
+    return lines
+
+
+def ensure_card_chrome(
+    text: Any,
+    email: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    account: Mapping[str, Any] | None = None,
+) -> str:
+    """Prepend canonical chrome and replace an older renderer-owned header."""
+    source = _text(text, 10000).strip()
+    lines = source.splitlines()
+    first = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first is not None and re.match(r"^\s*#{1,3}\s+.+｜.+$", lines[first]):
+        sender_index = next(
+            (index for index in range(first + 1, min(len(lines), first + 10))
+             if re.match(r"^\s*\*\*发件人\*\*", lines[index])),
+            None,
+        )
+        if sender_index is not None:
+            lines = lines[sender_index:]
+            source = "\n".join(lines).strip()
+    chrome = "\n".join(_card_chrome(email, decision, account)).strip()
+    return f"{chrome}\n\n{source}".strip() if source else chrome
 
 
 def _first(patterns: Sequence[str], source: str, limit: int = 120) -> str:
@@ -275,7 +334,7 @@ def _weekly_report_points(body: str) -> List[str]:
 
 
 def _clean_url(value: str) -> str:
-    value = html.unescape(value or "").strip()
+    value = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", html.unescape(value or "")).strip()
     value = re.split(r"[）】》」』]", value, maxsplit=1)[0].rstrip()
     if value.startswith("<") and value.endswith(">"):
         value = value[1:-1].strip()
@@ -595,11 +654,8 @@ def render_notification(
     account_label = _text(email.get("account") or account.get("name") or account.get("id") or account.get("email"), 80) or "Email"
     importance = _text(_mapping(decision.get("importance")).get("level"), 30).lower()
     priority = {"critical": "紧急", "high": "重要", "normal": "普通", "low": "低优先级"}.get(importance, "普通")
-    sent = _format_time(
-        email.get("date_sent") or email.get("date") or email.get("sent_at") or email.get("cached_at")
-    )
-    meta = " · ".join(_code(x) for x in (priority, label, sent) if x)
-    lines = [f"### {icon} {title}｜{account_label}", "", meta, "", f"**发件人** {_code(_sender(email))}", "", f"**主题** {_code(subject)}"]
+    lines = _card_chrome(email, decision, account)
+    lines.extend(["", f"**发件人** {_code(_sender(email))}", "", f"**主题** {_code(subject)}"])
     blocks = ["发件人", "主题"]
 
     if category == "invoice_receipt":

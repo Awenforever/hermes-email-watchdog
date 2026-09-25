@@ -17,6 +17,7 @@ import importlib
 from html import unescape
 from email import policy as email_policy
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone, time as dtime
 from pathlib import Path
 import tempfile
@@ -122,7 +123,8 @@ def get_last_output_metadata():
 CACHE_DIR = email_config.get_path("cache_dir") if HAS_V3 else os.path.expanduser("~/.hermes/email_cache")
 MAX_CACHED = int(_WATCHDOG_SETTINGS.get("max_cached", 200)) if HAS_V3 else 200
 
-def _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, has_attachments, attachments=None, links=None):
+def _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, has_attachments,
+                      attachments=None, links=None, date_sent="", date_received="", date_seen=""):
     """Save full email body to disk for later retrieval via WeChat commands."""
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -133,6 +135,9 @@ def _cache_full_email(acct_name, msg_id, subject, from_addr, from_name, body, ha
             "body": body, "has_attachments": has_attachments,
             "attachments": list(attachments or [])[:40],
             "links": list(links or [])[:40],
+            "date_sent": date_sent,
+            "date_received": date_received,
+            "date_seen": date_seen,
             "cached_at": datetime.now().isoformat(),
         }
         with open(cache_file, "w") as f:
@@ -416,7 +421,7 @@ def _html_to_text(value):
 
 
 def _clean_extracted_url(value):
-    url = unescape(str(value or "")).strip()
+    url = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", unescape(str(value or ""))).strip()
     url = re.split(r"[）】》」』]", url, maxsplit=1)[0].rstrip()
     if url.startswith("<") and url.endswith(">"):
         url = url[1:-1].strip()
@@ -485,12 +490,27 @@ def _parse_exported_message(path):
         body = (body + "\n\n" + "\n".join(
             f"{item.get('display_text') or '链接'}: {item['url']}" for item in links
         )).strip()
+    received_at = ""
+    # Received fields are prepended by each hop. The first parseable field is
+    # the destination-side arrival time, unlike sender time or replay time.
+    for header in message.get_all("Received", []):
+        header_text = str(header)
+        candidate = header_text.rsplit(";", 1)[-1].strip() if ";" in header_text else ""
+        if not candidate:
+            continue
+        try:
+            received_at = parsedate_to_datetime(candidate).isoformat()
+            break
+        except Exception:
+            continue
     return {
         "text": body,
         "html_text": html_text,
         "links": links or _extract_links_from_text(body),
         "attachments": attachments,
         "has_attachments": bool(attachments),
+        "date_sent": str(message.get("Date") or "").strip(),
+        "date_received": received_at,
     }
 
 
@@ -1110,6 +1130,15 @@ def check_account(acct, pushed_count=None):
             attachments = env.get("attachments", [])
             links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
 
+        scan_time = datetime.now(timezone.utc).isoformat()
+        message_sent = msg.get("date_sent", "") if isinstance(msg, dict) else ""
+        message_received = msg.get("date_received", "") if isinstance(msg, dict) else ""
+        envelope_received = next((str(env.get(key) or "").strip() for key in (
+            "date_received", "received_at", "internal_date", "internalDate"
+        ) if env.get(key)), "")
+        date_sent = message_sent or env.get("date", "")
+        date_received = envelope_received or message_received
+
         from_addr_lower = (from_addr or "").lower()
         from_domain = from_addr_lower.split("@", 1)[1] if "@" in from_addr_lower else ""
         email_data = {
@@ -1119,12 +1148,15 @@ def check_account(acct, pushed_count=None):
             "body": body[:12000], "to_addr": to_addr,
             "has_attachments": has_attachments, "has_attachment": has_attachments,
             "attachments": attachments, "links": links, "has_links": bool(links),
-            "date_sent": env.get("date", ""),
+            "date_sent": date_sent,
+            "date_received": date_received,
+            "date_seen": scan_time,
         }
 
         _cache_full_email(
             acct_name, msg_id, subject, from_addr, from_name, body,
             has_attachments, attachments=attachments, links=links,
+            date_sent=date_sent, date_received=date_received, date_seen=scan_time,
         )
 
         if HAS_V3:
@@ -1145,7 +1177,8 @@ def check_account(acct, pushed_count=None):
             ) if trust_result.get("label") != "blocked" else {"score": 100, "label": "critical", "flags": ["trust_blocked"]}
             email_store.upsert_message({
                 "id": msg_id, "account": acct_name, "subject": subject, "from_name": from_name,
-                "from_email": from_addr_lower, "from_domain": from_domain, "date_sent": env.get("date", ""),
+                "from_email": from_addr_lower, "from_domain": from_domain,
+                "date_sent": date_sent, "date_received": date_received, "date_seen": scan_time,
                 "has_attachment": 1 if has_attachments else 0,
                 "has_links": 1 if links else 0,
                 "trust_score": trust_result["score"], "trust_label": trust_result["label"],
@@ -1297,14 +1330,9 @@ def main():
     if not all_alerts:
         return ""
 
-    if len(all_alerts) == 1:
-        return all_alerts[0]
-
-    now = datetime.now().strftime("%m/%d %H:%M")
-    total = len(all_alerts)
-    accounts = "+".join(sorted(accounts_seen)) if accounts_seen else "Email"
-    header = f"### 📬 新邮件 {total} 封｜{accounts}｜{now}"
-    return header + "\n\n---\n\n" + "\n\n---\n\n".join(all_alerts)
+    # Each message retains its own category, mailbox and timestamps. Batching
+    # is a transport detail and must not replace them with the replay time.
+    return "\n\n---\n\n".join(all_alerts)
 
 
 if __name__ == "__main__":

@@ -485,6 +485,46 @@ Best regards""",
         self.assertIn("确认是否授权 Crossref", text)
         self.assertIn("授权 Crossref 更新 ORCID", text)
 
+    def test_runtime_chrome_preserves_mailbox_and_distinguishes_received_from_sent(self):
+        email = {
+            "account": "USTC", "subject": "账户状态更新", "from_addr": "notice@example.test",
+            "body": "Your account status changed.",
+            "date_sent": "Wed, 23 Sep 2026 20:11:00 +0800",
+            "date_received": "Wed, 23 Sep 2026 20:12:34 +0800",
+        }
+        decision = {
+            "classification": {"category": "account_status_notice", "label": "账户状态"},
+            "importance": {"level": "high"},
+            "notification": {"summary": "账户状态已更新。", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.ensure_card_chrome(
+            "**发件人** `notice@example.test`\n\n**主题** `账户状态更新`",
+            email, decision,
+        )
+        self.assertTrue(text.startswith("### 📌 账户状态更新｜USTC"))
+        self.assertIn("**收到** `2026-09-23 20:12`", text)
+        self.assertIn("**发出** `2026-09-23 20:11`", text)
+        self.assertNotIn("cached", text.lower())
+
+    def test_runtime_chrome_replaces_old_generic_header_without_duplication(self):
+        email = {"account": "USTC", "subject": "账单", "body": "invoice", "date_received": "2026-09-25T01:40:00+08:00"}
+        decision = {
+            "classification": {"category": "invoice_receipt", "label": "发票/收据"},
+            "importance": {"level": "normal"},
+        }
+        old = "### 📬 新邮件｜USTC\n\n`普通` · `邮件`\n\n**发件人** `billing@example.test`\n\n**主题** `账单`"
+        text = composer.ensure_card_chrome(old, email, decision)
+        self.assertEqual(text.count("｜USTC"), 1)
+        self.assertTrue(text.startswith("### 💳 账单与凭据｜USTC"))
+
+    def test_invisible_format_characters_are_removed_from_action_links(self):
+        self.assertEqual(
+            composer._clean_url("https://example.test/form.doc\u200b"),
+            "https://example.test/form.doc",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

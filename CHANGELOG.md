@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.1 - 2026-09-25
+
+- Make the card title, mailbox identity, sender, subject, server-received time,
+  and sender time runtime-owned metadata that no model or fallback renderer can
+  omit, paraphrase, or confuse with replay time.
+- Parse the destination-side RFC `Received` timestamp from exported messages,
+  persist it separately from sender and first-seen times, and retain all three
+  fields in the read-only cache and SQLite history.
+- Preserve each message's own typed card when several messages share one
+  transport batch instead of replacing them with a generic current-time header.
+- Remove invisible URL-format characters before rendering links and rebuild
+  attachment, reminder, time-status, and action-link sections only from effects
+  that the runtime verified.
+- Pace remote semantic/editorial requests below the provider's per-key request
+  ceiling, and accept equivalent RFC/ISO representations of the same grounded
+  historical timestamp without weakening provenance checks.
+- Keep provider-independent state-changing mail chrome (save/add/share,
+  subscription, and preference operations) outside the model's publishable
+  link set while preserving useful document and destination links.
+
 ## 0.6.0 - 2026-09-24
 
 - Make the model own a second, independent pre-publication editorial pass for

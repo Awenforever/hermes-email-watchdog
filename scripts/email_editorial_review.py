@@ -14,14 +14,15 @@ import copy
 import json
 import re
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Dict, Mapping
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from zoneinfo import ZoneInfo
 
 import email_assistant_composer
 import email_semantic_engine
 
-EDITOR_VERSION = "model_editorial_gate_v2m"
+EDITOR_VERSION = "model_editorial_gate_v2n"
 _NOISE = re.compile(
     r"(?i)forwarded message|original message|\[image(?::[^\]]*)?\]|"
     r"unsubscribe|manage preferences|举报退订"
@@ -77,6 +78,72 @@ def _redact_account_passwords(markdown: str) -> tuple[str, bool]:
     return redacted, bool(count)
 
 
+def _canonicalize_message_identity(markdown: str, email: Mapping[str, Any]) -> str:
+    """Make sender and subject runtime-owned without rewriting semantic prose."""
+    lines = markdown.splitlines()
+    kept: list[str] = []
+    skip_value = False
+    for line in lines:
+        if skip_value:
+            if line.strip():
+                skip_value = False
+                continue
+            continue
+        match = re.match(r"^\s*\*\*(发件人|主题)\*\*\s*(.*)$", line)
+        if match:
+            if not match.group(2).strip():
+                skip_value = True
+            continue
+        kept.append(line)
+    body = "\n".join(kept).strip()
+    sender = _sender(email).replace("`", "′")
+    subject = _text(email.get("subject"), 300).replace("`", "′") or "无主题"
+    identity = f"**发件人** `{sender}`\n\n**主题** `{subject}`"
+    return f"{identity}\n\n{body}".strip() if body else identity
+
+
+def _strip_runtime_owned_sections(markdown: str) -> tuple[str, list[str]]:
+    """Drop unverified effect sections; the runtime appends successful effects."""
+    owned = re.compile(r"^\s*(?:#{1,6}\s*)?\*{0,2}(快捷操作|时效|附件|提醒)\*{0,2}\s*$")
+    heading = re.compile(r"^\s*(?:#{1,6}\s+|\*\*[^*]+\*\*\s*$)")
+    kept: list[str] = []
+    removed: list[str] = []
+    skipping = False
+    for line in markdown.splitlines():
+        match = owned.match(line)
+        if match:
+            removed.append(match.group(1))
+            skipping = True
+            continue
+        if skipping and heading.match(line) and not owned.match(line):
+            skipping = False
+        if not skipping:
+            kept.append(line)
+    return "\n".join(kept).strip(), removed
+
+
+def _same_message_time(value: str, source_value: str) -> bool:
+    """Accept ISO/RFC renderings of the same sender timestamp."""
+    if " ".join(value.split()).casefold() == " ".join(source_value.split()).casefold():
+        return True
+    try:
+        def parse(raw: str):
+            try:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except Exception:
+                return parsedate_to_datetime(raw)
+        left, right = parse(value), parse(source_value)
+        if left.tzinfo is None and right.tzinfo is not None:
+            left = left.replace(tzinfo=right.tzinfo)
+        if right.tzinfo is None and left.tzinfo is not None:
+            right = right.replace(tzinfo=left.tzinfo)
+        if len(value.strip()) == 10:
+            return left.date() == right.date()
+        return abs((left - right).total_seconds()) < 60
+    except Exception:
+        return False
+
+
 def _sender(email: Mapping[str, Any]) -> str:
     return email_assistant_composer._sender(email)
 
@@ -103,12 +170,31 @@ def _source_links(email: Mapping[str, Any]) -> list[dict[str, Any]]:
             or re.search(r"(?i)(?:^|\.)(?:click|track|tracking|url\d+)\.", parsed.netloc)
             or re.search(r"(?i)/(?:ls/)?click(?:/|\?|$)", parsed.path)
         )
+        # A notification may expose navigational destinations, but it must not
+        # turn incidental mail UI into a recommended user action.  Treat
+        # state-changing GET links (save/add/share/subscribe/preferences, etc.)
+        # as mail chrome regardless of provider or message category.  The
+        # model still decides which eligible destination is useful; this is
+        # the runtime trust boundary for what it is allowed to publish.
+        decoded_target = unquote(url).casefold()
+        chrome_action = bool(
+            re.search(
+                r"(?i)(?:unsubscribe|manage[_ -]?preferences?|social[_ -]?share|"
+                r"share[_ -]?(?:email|link|post)|forward[_ -]?to|email[_ -]?library[_ -]?add|"
+                r"(?:^|[?&])(action|op|operation)=[^&]*(?:add|save|share|subscribe|follow))",
+                decoded_target,
+            )
+        )
         output.append({
             "index": len(output),
             "label": " ".join(label.split())[:180],
             "url": url[:3000],
             "domain": parsed.netloc.casefold()[:200],
-            "display_safe": not tracking_wrapper,
+            "display_safe": not (tracking_wrapper or chrome_action),
+            "display_policy": (
+                "tracking_wrapper" if tracking_wrapper else
+                "mail_chrome_action" if chrome_action else "eligible_destination"
+            ),
         })
         if len(output) >= 24:
             break
@@ -168,13 +254,16 @@ def _prompt(
         "reason to suppress; judge the actual information and the user's relationship to it.\n"
         "2. If publishing, write polished concise Chinese mobile Markdown. Adapt sections to the "
         "message instead of following a rigid template. Use headings, bullets, blockquotes, bold, "
-        "and inline code only when they improve scanning. Sender and subject must appear exactly as "
-        "`**发件人** `...`` and `**主题** `...``. Do not include transport chrome, forwarded-message "
+        "and inline code only when they improve scanning. Sender and subject are authoritative runtime "
+        "metadata and will be normalized after your pass; do not paraphrase them. Do not include "
+        "transport chrome, forwarded-message "
         "separators, greetings, signatures, [image], disclaimers, debug text, raw local paths, or a "
         "section merely saying something is absent. Do not put any Markdown link, URL, link:index, "
         "or other link placeholder in markdown; select source "
         "link indexes separately. Do not create attachment or reminder sections; the runtime appends "
-        "only effects that actually succeeded.\n"
+        "only effects that actually succeeded. Do not create a card title or received/sent timestamp "
+        "line; the runtime owns and prepends mailbox identity and timestamp provenance after your "
+        "editorial pass.\n"
         "3. Judge time relative to current_time and sent_at. Never present an old relative deadline "
         "or expired availability window as live. If a concrete deadline/expiry exists, copy its exact "
         "source wording into temporal.evidence, resolve relative wording to an absolute ISO-8601 value, "
@@ -255,6 +344,8 @@ def _normalize_result(
         publish = True
     markdown = _text(raw.get("markdown"), 5000)
     markdown, password_redacted = _redact_account_passwords(markdown)
+    markdown, stripped_runtime_sections = _strip_runtime_owned_sections(markdown)
+    markdown = _canonicalize_message_identity(markdown, email) if publish else markdown
     relative_time_removed = False
     age_days = _message_age_days(email)
     if age_days is not None and age_days > 7 and _RELATIVE_TIME.search(markdown):
@@ -275,12 +366,6 @@ def _normalize_result(
             errors.append("markdown contains a raw URL")
         if re.search(r"\[[^\]]+\]\([^)]+\)", markdown):
             errors.append("markdown contains an unverified link or placeholder")
-        runtime_sections = re.findall(
-            r"(?m)^\s*(?:#{1,6}\s*)?\*{0,2}(快捷操作|时效|附件|提醒)\*{0,2}\s*$",
-            markdown,
-        )
-        if runtime_sections:
-            errors.append("markdown contains runtime-owned section: " + ",".join(runtime_sections))
         if _NOISE.search(markdown):
             errors.append("markdown contains mail chrome")
     selections = []
@@ -358,7 +443,10 @@ def _normalize_result(
             status == "historical" and value
             and not evidence
             and " ".join(value.split()).casefold()
-            == " ".join(_text(email.get("date_sent") or email.get("date") or email.get("sent_at"), 160).split()).casefold()
+            and _same_message_time(
+                value,
+                _text(email.get("date_sent") or email.get("date") or email.get("sent_at"), 160),
+            )
         ):
             expired_indices: list[int] = []
             accepted_expiry_evidence: dict[str, str] = {}
@@ -408,6 +496,8 @@ def _normalize_result(
         notes.append("已省略无法可靠换算的历史相对时间表述")
     if password_redacted:
         notes.append("已隐藏邮件正文中的账户密码")
+    if stripped_runtime_sections:
+        notes.append("运行时已接管并重建可验证的" + "、".join(sorted(set(stripped_runtime_sections))) + "区块")
     if (
         (temporal_out is None or temporal_out.get("status") == "unknown")
         and age_days is not None and age_days > 7
@@ -713,6 +803,8 @@ def finalize_markdown(
     review: Mapping[str, Any],
     delivery: Mapping[str, Any],
     decision: Mapping[str, Any],
+    email: Mapping[str, Any] | None = None,
+    account: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if not review.get("publish"):
         return {
@@ -760,6 +852,8 @@ def finalize_markdown(
             schedule_lines.append(f"- 已记录提醒：`{due.replace('`', '′')}`（如已完成请忽略）")
     if schedule_lines:
         text += "\n\n**提醒**\n" + "\n".join(schedule_lines)
+    if email is not None:
+        text = email_assistant_composer.ensure_card_chrome(text, email, decision, account)
     return {
         "ok": bool(text),
         "renderer_version": EDITOR_VERSION,

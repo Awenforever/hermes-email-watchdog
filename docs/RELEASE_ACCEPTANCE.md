@@ -1,5 +1,34 @@
 # Release acceptance
 
+## 0.6.1 card identity and receipt-time acceptance
+
+The `0.6.1` production candidate passed the following isolated acceptance on
+2026-09-25 before deployment:
+
+- Linux repository contract, checksum, compile, unit, policy, transport,
+  concurrency, and provenance matrices: `CI_MATRIX_OK count=20`.
+- Ten consecutive rounds using forty unique, previously unused historical
+  mailbox messages: 40 processed, 0 errors, 37 published and 3 intentionally
+  suppressed.
+- The set covered account security and confirmation, verification codes,
+  service suspension, overdue invoices and downloaded attachments, academic
+  alerts and weekly reports, school notices, events, personal correspondence,
+  calls for papers, and marketing suppression.
+- Every published card had a typed mailbox title, canonical sender and subject,
+  and at least one grounded message timestamp.  When the destination server's
+  RFC `Received` timestamp was available it was shown separately from the
+  sender's `Date`; scan or replay time was never presented as receipt time.
+- A second cross-round audit found 40 unique message IDs, no presentation
+  errors, no generic batch heading, forwarding/image chrome, invisible URL
+  characters, raw local paths, or unverified state-changing mail UI links.
+- Eleven messages exercised attachment handling.  The acceptance harness used
+  read-only mailbox export and isolated database, cache, calendar, learning,
+  attachment, and seen-state paths; it never enqueued or sent Weixin messages.
+
+Evidence is retained on the production host under
+`/opt/data/migration-staging/email-watchdog-v061-chrome/final2-r01` through
+`final2-r10`.  These staging paths are diagnostic evidence, not runtime state.
+
 Hermes Email Watchdog `0.1.0` is accepted as the first stable public release.
 
 The accepted lineage has completed:

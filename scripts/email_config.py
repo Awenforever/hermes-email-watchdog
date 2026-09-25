@@ -76,6 +76,9 @@ DEFAULT_CONFIG = {
         "num_predict_standard": 1200,
         "num_predict_complex": 1800,
         "num_predict_hard_cap": 2048,
+        # USTC currently permits 20 requests/minute per key. Keep headroom for
+        # semantic analysis, editorial review and correction/critic calls.
+        "request_min_interval_seconds": 3.2,
     },
     # EMAIL_WATCHDOG_ADAPTIVE_RENDERER_CONFIG_SHADOW_V1
     "notification": {

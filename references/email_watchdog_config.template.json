@@ -48,7 +48,8 @@
     "num_predict_simple": 700,
     "num_predict_standard": 1200,
     "num_predict_complex": 1800,
-    "num_predict_hard_cap": 2048
+    "num_predict_hard_cap": 2048,
+    "request_min_interval_seconds": 3.2
   },
   "notification": {
     "renderer": "intelligent_v2",
