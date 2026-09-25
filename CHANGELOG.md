@@ -13,6 +13,8 @@
 - Surface Himalaya availability in guided setup so a fresh Windows, WSL,
   Linux, or NAS installation can resolve the runtime dependency before asking
   for mailbox details.
+- Treat the active Weixin conversation as an already resolved setup target in
+  status output while keeping it redacted and unpersisted until apply.
 
 ## 0.6.1 - 2026-09-25
 

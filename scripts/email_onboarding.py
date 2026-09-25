@@ -1312,6 +1312,15 @@ def status() -> dict[str, Any]:
             pass
     target = _normalize_target((current.get("delivery") or {}).get("target"))
     pending = _pending_target()
+    session = _session_target()
+    if target.get("chat_id"):
+        effective_target, target_source = target, "configured"
+    elif session.get("chat_id"):
+        effective_target, target_source = session, "current_session"
+    elif pending.get("chat_id"):
+        effective_target, target_source = pending, "pending_context"
+    else:
+        effective_target, target_source = {}, "missing"
     configured = bool(valid_accounts) and target.get("platform") == "weixin" and bool(target.get("chat_id"))
     himalaya = _himalaya_status()
     return {
@@ -1330,6 +1339,8 @@ def status() -> dict[str, Any]:
             for a in valid_accounts
         ],
         "delivery_target": _target_summary(target),
+        "setup_target": _target_summary(effective_target),
+        "setup_target_source": target_source,
         "pending_target": _target_summary(pending),
         "detected_himalaya_config_count": len(detected_configs),
         "detected_himalaya_account_count": len(detected),
@@ -1337,7 +1348,7 @@ def status() -> dict[str, Any]:
         "unresolved": [
             *([] if himalaya.get("installed") and himalaya.get("usable", True) else ["himalaya"]),
             *([] if valid_accounts else ["account"]),
-            *([] if target.get("chat_id") else ["delivery_target"]),
+            *([] if effective_target.get("chat_id") else ["delivery_target"]),
         ],
         "mailbox_access": False,
         "values_redacted": True,

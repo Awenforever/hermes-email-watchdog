@@ -151,6 +151,15 @@ def main() -> None:
         ok(result["values_redacted"] is True and result["mailbox_access"] is False, "status safety")
         ok(result["himalaya"]["installed"] and result["himalaya"]["usable"], "Himalaya dependency status")
 
+        # The current conversation is a valid setup target without persisting it early.
+        case = root / "case-session-target-status"
+        env = env_for(case, fake)
+        env.update({"HERMES_SESSION_PLATFORM": "weixin", "HERMES_SESSION_CHAT_ID": "live-chat"})
+        result, _ = run_setup(env, "status", "--json")
+        ok("delivery_target" not in result["unresolved"], "current session resolves setup target")
+        ok(result["setup_target_source"] == "current_session", "current session target source")
+        ok("live-chat" not in json.dumps(result), "setup target remains redacted")
+
         # A clear agent:start setup intent captures target metadata only.
         case = root / "case-hook"
         env = env_for(case, fake)
