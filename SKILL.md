@@ -1,13 +1,13 @@
 ---
 name: hermes-email-watchdog
-description: 安装、个性化配置并运行只读多账号邮件助理；智能判断邮件价值并通过微信发送可行动提醒、链接、附件和期限通知。
-version: 0.7.0
+description: 安装、个性化配置并运行只读多账号邮件助理；智能判断邮件价值并通过 Hermes 已有消息渠道发送可行动提醒、链接、附件和期限通知。
+version: 0.8.0
 tags: [email, watchdog, notification, read-only, hermes, onboarding]
 ---
 
 # Hermes Email Watchdog
 
-Email Watchdog 是独立的只读邮箱助理。它读取邮件并把值得打扰用户的内容交给已配置的微信会话；它不发送邮件，也不依赖 Weekly Briefing。
+Email Watchdog 是独立的只读邮箱助理。它读取邮件并把值得打扰用户的内容交给已配置的 Hermes 消息会话；它不发送邮件，也不依赖 Weekly Briefing。
 
 ## 安装与配置对话
 
@@ -20,7 +20,7 @@ Email Watchdog 是独立的只读邮箱助理。它读取邮件并把值得打�
 5. 只逐项询问缺失的用户级信息：
    - 要监控哪些邮箱；
    - 仅行动项还是更广泛通知；
-   - 附件自动下载/微信转发偏好和大小上限；
+   - 附件自动下载/消息渠道转发偏好和大小上限；
    - 时区与提醒提前量；
    - 模型偏好（无偏好时保留默认）。
 6. 新账户必须使用外部凭据命令，例如 `pass`、`secret-tool`、`security`、`op`、`bw`、`gopass` 或受保护的环境变量。绝不询问、接收或复述邮箱密码、应用专用密码、令牌和密钥；禁止用带明文的 `echo`/`printf`。
@@ -43,9 +43,9 @@ Email Watchdog 是独立的只读邮箱助理。它读取邮件并把值得打�
 - 邮箱访问只读；验证只能使用 `envelope list --page-size 1`。
 - 不暴露邮件回复、发送、归档、删除、移动、标记或已读操作。
 - 缺失或无效配置时调度器保持禁用。
-- 安装不修改 Hermes 核心微信适配器。
+- 安装不修改 Hermes 核心消息适配器。
 - 默认卸载保留配置与引导状态；purge 必须显式确认并只删除插件自有数据。
-- 微信传输与 `hermes-wechat-enhance` 是独立组件。
+- 渠道传输由 Hermes 适配器负责；`hermes-wechat-enhance` 仅在目标为微信时独立生效。
 
 ## 数据归属
 

@@ -4,9 +4,7 @@
 import json
 import os
 import re
-import ssl
 import sys
-import urllib.request
 from datetime import datetime, timezone
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,40 +43,28 @@ def analyze_email(email: dict, rule_result: dict) -> dict:
 
 
 def call_hermes_aux(prompt: str, settings: dict) -> dict:
-    """Call any OpenAI-compatible endpoint. Config-driven, no hardcoded provider."""
+    """Call through Hermes' provider/model router."""
     return call_llm(prompt, settings)
 
 
 def call_llm(prompt: str, settings: dict) -> dict:
-    """Call any OpenAI-compatible endpoint. Config-driven, no hardcoded provider."""
-    endpoint = settings.get("endpoint")
-    model = settings.get("model", "")
-    api_key_env = settings.get("api_key_env", "")
-    api_key = os.environ.get(api_key_env, "")
-    if not endpoint:
-        raise RuntimeError("llm.endpoint is required")
-
-    data = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": settings.get("temperature", 0.1),
-        "max_tokens": settings.get("max_tokens", 2000),
-    }).encode()
-
-    req = urllib.request.Request(endpoint, data=data, headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-    })
-
-    ctx = ssl.create_default_context()
-    with urllib.request.urlopen(req, timeout=settings.get("timeout_seconds", 90), context=ctx) as resp:
-        result = json.loads(resp.read())
-        content = result["choices"][0]["message"]["content"].strip()
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        return json.loads(content)
+    """Use Hermes-owned credentials, primary model and fallback policy."""
+    from agent.auxiliary_client import call_llm as hermes_call_llm, extract_content_or_reasoning
+    response = hermes_call_llm(
+        task="email_watchdog",
+        model=str(settings.get("model") or "").strip() or None,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=settings.get("temperature", 0.1),
+        max_tokens=settings.get("max_tokens", 2000),
+        timeout=settings.get("timeout_seconds", 90),
+        extra_body={"response_format": {"type": "json_object"}},
+    )
+    content = extract_content_or_reasoning(response).strip()
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    return json.loads(content)
 
 
 def build_prompt(email: dict, rule_result: dict, now: str, user_context: dict) -> str:

@@ -246,7 +246,8 @@ def _interval_seconds() -> int:
     return max(30, min(value, 3600))
 
 
-def _chat_id() -> str:
+def _delivery_target() -> dict[str, str]:
+    """Resolve an explicit or onboarding-captured Hermes channel target."""
     try:
         data = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
         delivery = data.get("delivery") if isinstance(data, dict) else {}
@@ -254,14 +255,40 @@ def _chat_id() -> str:
         if isinstance(target, dict):
             platform = str(target.get("platform") or "").strip().lower()
             chat_id = str(target.get("chat_id") or "").strip()
-            if platform == "weixin" and chat_id:
-                return chat_id
+            if platform and chat_id:
+                return {
+                    "platform": platform,
+                    "chat_id": chat_id,
+                    "thread_id": str(target.get("thread_id") or "").strip(),
+                    "chat_type": str(target.get("chat_type") or "").strip(),
+                }
     except Exception:
         pass
-    return (
+    try:
+        state = json.loads(ONBOARDING_FILE.read_text(encoding="utf-8"))
+        target = state.get("pending_target") if isinstance(state, dict) else {}
+        if isinstance(target, dict) and target.get("platform") and target.get("chat_id"):
+            return {key: str(target.get(key) or "").strip() for key in (
+                "platform", "chat_id", "thread_id", "chat_type"
+            )}
+    except Exception:
+        pass
+    platform = os.getenv("HERMES_SESSION_PLATFORM", "").strip().lower()
+    chat_id = os.getenv("HERMES_SESSION_CHAT_ID", "").strip()
+    if platform and chat_id:
+        return {"platform": platform, "chat_id": chat_id, "thread_id": "", "chat_type": ""}
+    # Compatibility only for existing installations; new setup persists a
+    # platform-neutral target captured from the Hermes conversation.
+    legacy_chat = (
         os.getenv("HERMES_EMAIL_WATCHDOG_WEIXIN_CHAT_ID", "").strip()
         or os.getenv("HERMES_PROACTIVE_WEIXIN_CHAT_ID", "").strip()
     )
+    return {"platform": "weixin", "chat_id": legacy_chat, "thread_id": "", "chat_type": ""} if legacy_chat else {}
+
+
+def _chat_id() -> str:
+    """Backward-compatible helper retained for older integrations/tests."""
+    return str(_delivery_target().get("chat_id") or "")
 
 
 def _write_status(data: dict):
@@ -816,13 +843,19 @@ def _runner_ref():
         return None
 
 
-async def _send_weixin(
+async def _send_channel(
     text: str, delivery_id: str | None = None, attribution: dict | None = None
 ):
     text = _sanitize_notification(text)
-    chat_id = _chat_id()
+    target = _delivery_target()
+    platform = str(target.get("platform") or "").strip().lower()
+    chat_id = str(target.get("chat_id") or "").strip()
     if not chat_id:
-        raise RuntimeError("configured Weixin delivery target is empty")
+        legacy_chat = str(_chat_id() or "").strip()
+        if legacy_chat:
+            platform, chat_id = "weixin", legacy_chat
+    if not platform or not chat_id:
+        raise RuntimeError("configured Hermes delivery target is empty")
 
     runner = _runner_ref()
     if runner is None:
@@ -848,7 +881,7 @@ async def _send_weixin(
     adapters = getattr(runner, "adapters", {}) or {}
     for key, adapter in adapters.items():
         key_value = getattr(key, "value", key)
-        if key_value == "weixin":
+        if str(key_value).strip().lower() == platform:
             transport_metadata = {
                 "is_system": not model_generated,
                 "model_name": model_name,
@@ -869,7 +902,7 @@ async def _send_weixin(
                 )
                 if not getattr(result, "success", False):
                     error = getattr(result, "error", "") or "adapter.send returned success=false"
-                    raise RuntimeError(f"Weixin delivery not acknowledged: {str(error)[:800]}")
+                    raise RuntimeError(f"{platform} delivery not acknowledged: {str(error)[:800]}")
                 _outbox_mark_part_done(delivery_id, "text", result)
             forwarded = 0
             for index, attachment in enumerate(_safe_forward_attachments(attribution), start=1):
@@ -886,14 +919,14 @@ async def _send_weixin(
                 if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
                     sender = getattr(adapter, "send_image_file", None)
                     if not callable(sender):
-                        raise RuntimeError("weixin adapter does not support image forwarding")
+                        raise RuntimeError(f"{platform} adapter does not support image forwarding")
                     file_result = await sender(
                         chat_id, path, caption=None, metadata=part_metadata
                     )
                 else:
                     sender = getattr(adapter, "send_document", None)
                     if not callable(sender):
-                        raise RuntimeError("weixin adapter does not support document forwarding")
+                        raise RuntimeError(f"{platform} adapter does not support document forwarding")
                     file_result = await sender(
                         chat_id, path, caption=None,
                         file_name=attachment.get("filename") or Path(path).name,
@@ -901,7 +934,7 @@ async def _send_weixin(
                     )
                 if not getattr(file_result, "success", False):
                     error = getattr(file_result, "error", "") or "attachment send returned success=false"
-                    raise RuntimeError(f"Weixin attachment delivery not acknowledged: {str(error)[:800]}")
+                    raise RuntimeError(f"{platform} attachment delivery not acknowledged: {str(error)[:800]}")
                 _outbox_mark_part_done(delivery_id, part_id, file_result)
                 forwarded += 1
                 result = file_result
@@ -912,7 +945,14 @@ async def _send_weixin(
             )
             return result
 
-    raise RuntimeError("weixin adapter unavailable")
+    raise RuntimeError(f"{platform} adapter unavailable")
+
+
+async def _send_weixin(
+    text: str, delivery_id: str | None = None, attribution: dict | None = None
+):
+    """Compatibility alias; delivery is now platform-neutral."""
+    return await _send_channel(text, delivery_id, attribution)
 
 
 def _safe_forward_attachments(metadata: dict | None) -> list[dict]:

@@ -446,7 +446,7 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         if (
             category == "invoice_receipt"
             and settings.get("auto_download_attachments", True)
-            and settings.get("forward_attachments_to_weixin", True)
+            and settings.get("forward_attachments", settings.get("forward_attachments_to_weixin", True))
         ):
             return _download_linked_invoice_pdfs(email, settings)
         return []
@@ -479,7 +479,7 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         policy in ("none", "list_only")
         and not analysis.get("production_semantic_route")
         and settings.get("auto_forward_safe_attachments", True)
-        and settings.get("forward_attachments_to_weixin", True)
+        and settings.get("forward_attachments", settings.get("forward_attachments_to_weixin", True))
     ):
         policy = "download_safe"
     if policy in ("none", "list_only"):

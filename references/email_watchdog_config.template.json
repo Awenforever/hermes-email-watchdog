@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "default_account": "",
   "accounts": [],
   "paths": {
@@ -30,12 +30,12 @@
   "semantic_engine": {
     "enabled": true,
     "mode": "shadow",
-    "provider": "hermes_openai",
-    "provider_name": "USTC",
+    "provider": "hermes",
+    "provider_name": "",
     "endpoint": "",
     "api_key_env": "",
-    "model": "deepseek-flash",
-    "fallback_model": "qwen3.8-chat",
+    "model": "",
+    "fallback_model": "",
     "timeout_seconds": 120,
     "temperature": 0.0,
     "max_body_chars": 16000,
@@ -49,7 +49,7 @@
     "num_predict_standard": 1200,
     "num_predict_complex": 1800,
     "num_predict_hard_cap": 2048,
-    "request_min_interval_seconds": 3.2
+    "request_min_interval_seconds": 0.0
   },
   "notification": {
     "renderer": "intelligent_v2",
@@ -78,7 +78,7 @@
   },
   "delivery": {
     "auto_download_attachments": true,
-    "forward_attachments_to_weixin": true,
+    "forward_attachments": true,
     "auto_forward_safe_attachments": true,
     "attachment_max_bytes": 26214400,
     "attachment_safe_extensions": [

@@ -53,7 +53,7 @@ class PluginCliPortableTests(unittest.TestCase):
         (state / "enabled").write_text("true\n", encoding="utf-8")
         self.assertEqual((state / "enabled").read_text(encoding="utf-8"), "true\n")
         status = self.command("status")
-        self.assertEqual(status["semantic_provider"], "USTC")
+        self.assertEqual(status["semantic_provider"], "hermes")
         self.assertEqual(status["semantic_model"], "qwen3.6-chat")
         self.assertEqual(status["notification_renderer"], "adaptive_v1f")
         self.assertNotIn("api_key", json.dumps(status).lower())

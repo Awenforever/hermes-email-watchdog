@@ -135,11 +135,11 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     defaults = {
         "enabled": True,
         "mode": "shadow",
-        "provider": "ollama",
+        "provider": "hermes",
         "provider_name": "",
         "api_key_env": "",
-        "endpoint": "http://127.0.0.1:11434",
-        "model": "qwen2.5:3b",
+        "endpoint": "",
+        "model": "",
         "timeout_seconds": 300,
         "temperature": 0.1,
         "max_body_chars": 12000,
@@ -153,7 +153,7 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
         "num_predict_standard": 1000,
         "num_predict_complex": 1600,
         "num_predict_hard_cap": 1800,
-        "request_min_interval_seconds": 3.2,
+        "request_min_interval_seconds": 0.0,
     }
     if email_config is not None and hasattr(email_config, "get_semantic_engine_settings"):
         try:
@@ -164,12 +164,12 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
         defaults.update(dict(override))
     defaults["enabled"] = bool(defaults.get("enabled", True))
     defaults["mode"] = str(defaults.get("mode") or "shadow").strip().lower()
-    defaults["provider"] = str(defaults.get("provider") or "ollama").strip().lower()
+    defaults["provider"] = str(defaults.get("provider") or "hermes").strip().lower()
     defaults["provider_name"] = str(defaults.get("provider_name") or "").strip()
     defaults["api_key_env"] = str(defaults.get("api_key_env") or "").strip()
     endpoint_default = "http://127.0.0.1:11434" if defaults["provider"] == "ollama" else ""
     defaults["endpoint"] = str(defaults.get("endpoint") or endpoint_default).rstrip("/")
-    defaults["model"] = str(defaults.get("model") or "qwen2.5:3b")
+    defaults["model"] = str(defaults.get("model") or "").strip()
     defaults["timeout_seconds"] = max(1, min(1800, int(defaults.get("timeout_seconds") or 300)))
     defaults["temperature"] = max(0.0, min(1.0, float(defaults.get("temperature", 0.1))))
     defaults["max_body_chars"] = max(1000, min(50000, int(defaults.get("max_body_chars") or 12000)))
@@ -803,7 +803,6 @@ def _hermes_config_path() -> Path:
     for candidate in (
         HERMES_HOME / "config.yaml",
         HERMES_HOME / ".hermes" / "config.yaml",
-        Path("/opt/data/config.yaml"),
     ):
         if candidate.is_file():
             return candidate
@@ -945,7 +944,7 @@ def _openai_compatible_request(
     endpoint, api_key = _resolve_openai_credentials(settings)
     url = endpoint if endpoint.endswith("/chat/completions") else endpoint + "/chat/completions"
     body: Dict[str, Any] = {
-        "model": str(settings.get("model") or "qwen3.6-chat"),
+        "model": str(settings.get("model") or ""),
         "messages": [{"role": "user", "content": prompt}],
         "temperature": float(temperature),
         "max_tokens": int(num_predict),
@@ -994,12 +993,72 @@ def _openai_compatible_request(
 
 
 def _provider_request(prompt: str, settings: Mapping[str, Any], **kwargs: Any) -> Dict[str, Any]:
-    provider = str(settings.get("provider") or "ollama").strip().lower()
+    provider = str(settings.get("provider") or "hermes").strip().lower()
+    if provider in {"hermes", "hermes_openai"}:
+        return _hermes_request(prompt, settings, **kwargs)
     if provider == "ollama":
         return _ollama_request(prompt, settings, **kwargs)
-    if provider in {"openai", "openai_compatible", "hermes_openai", "custom"}:
+    if provider in {"openai", "openai_compatible", "custom"}:
         return _openai_compatible_request(prompt, settings, **kwargs)
     raise SemanticEngineError(f"unsupported semantic provider: {provider}")
+
+
+def _hermes_request(
+    prompt: str,
+    settings: Mapping[str, Any],
+    *,
+    timeout_seconds: int,
+    temperature: float,
+    num_predict: int,
+    response_format: Any = None,
+) -> Dict[str, Any]:
+    """Use Hermes' own provider/model router; never copy credentials here."""
+    try:
+        from agent.auxiliary_client import call_llm, extract_content_or_reasoning
+    except Exception as exc:
+        raise SemanticEngineError("Hermes auxiliary model router is unavailable") from exc
+
+    route_info: Dict[str, str] = {}
+    model = str(settings.get("model") or "").strip() or None
+    started = time.monotonic()
+    try:
+        response = call_llm(
+            task="email_watchdog",
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=float(temperature),
+            max_tokens=int(num_predict),
+            timeout=max(1, int(timeout_seconds)),
+            extra_body={"response_format": {"type": "json_object"}},
+            route_info=route_info,
+        )
+        content = extract_content_or_reasoning(response)
+    except TimeoutError as exc:
+        raise SemanticEngineTimeout("Hermes model request timed out") from exc
+    except Exception as exc:
+        raise SemanticEngineError(f"Hermes model request failed: {_safe_error(exc)}") from exc
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    actual_model = str(
+        route_info.get("resolved_model")
+        or route_info.get("model")
+        or model
+        or "hermes-primary"
+    )
+    return {
+        "content": content,
+        "latency_ms": elapsed_ms,
+        "model": actual_model,
+        "metrics": {
+            "total_duration_ms": elapsed_ms,
+            "prompt_eval_count": 0,
+            "eval_count": 0,
+            "done_reason": "stop",
+            "response_chars": len(content),
+            "eval_tokens_per_second": 0.0,
+            "resolved_model": actual_model,
+            "resolved_provider": str(route_info.get("resolved_provider") or ""),
+        },
+    }
 
 
 def _json_repair_prompt(primary_content: str) -> str:
@@ -1063,7 +1122,7 @@ def _call_model_once(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]
         return {
             "parsed": parsed,
             "latency_ms": int((time.monotonic() - total_started) * 1000),
-            "model": str(settings.get("model") or "qwen2.5:3b"),
+            "model": str(primary.get("model") or settings.get("model") or "hermes-primary"),
             "metrics": metrics,
         }
     except SemanticEngineError as primary_error:
@@ -1130,7 +1189,7 @@ def _call_model_once(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]
         return {
             "parsed": parsed,
             "latency_ms": int((time.monotonic() - total_started) * 1000),
-            "model": str(settings.get("model") or "qwen2.5:3b"),
+            "model": str(repair.get("model") or settings.get("model") or "hermes-primary"),
             "metrics": metrics,
         }
 
@@ -1142,7 +1201,7 @@ def call_ollama(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
     policy. It is attempted only when ``fallback_model`` is present and differs
     from the primary, preserving legacy behavior for existing configurations.
     """
-    primary_model = str(settings.get("model") or "qwen2.5:3b").strip()
+    primary_model = str(settings.get("model") or "").strip()
     fallback_model = str(settings.get("fallback_model") or "").strip()
     try:
         return _call_model_once(prompt, settings)

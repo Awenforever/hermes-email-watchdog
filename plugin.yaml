@@ -1,5 +1,5 @@
 name: hermes-email-watchdog
-version: 0.7.0
+version: 0.8.0
 manifest_version: 1
 api_version: 1
 description: Read-only email triage with grounded classification and actionable messaging alerts.
@@ -27,21 +27,21 @@ config_schema:
     description: Notify when a Weekly Report email arrives.
   semantic_provider:
     type: str
-    default: USTC
-    description: Hermes OpenAI-compatible provider used for semantic analysis.
+    default: hermes
+    description: Use Hermes' provider router and credential store.
   semantic_model:
     type: str
-    default: deepseek-flash
-    description: Model used for grounded classification and formatting.
+    default: ""
+    description: Optional Hermes model alias; empty inherits the active primary model.
   semantic_fallback_model:
     type: str
-    default: qwen3.8-chat
-    description: Fallback used when the primary model fails or cannot produce a grounded schema.
+    default: ""
+    description: Optional Hermes model alias; empty inherits Hermes fallback routing.
   auto_download_attachments:
     type: bool
     default: true
     description: Download model-selected useful attachments without mutating mailbox state.
-  forward_attachments_to_weixin:
+  forward_attachments:
     type: bool
     default: true
     description: Forward safe bounded downloaded attachments with their notification.

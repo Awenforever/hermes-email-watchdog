@@ -67,7 +67,7 @@ checks={
  "handler_onboarding":"EMAIL_WATCHDOG_ONBOARDING_CONTEXT_CAPTURE_V1" in handler,
  "handler_state_transaction_lock":"EMAIL_WATCHDOG_STATE_TRANSACTION_LOCK_V1" in handler,
  "onboarding_transaction_lock":"EMAIL_WATCHDOG_ONBOARDING_TRANSACTION_LOCK_V1" in onboarding,
- "handler_baseline_identical":handler==baseline,
+ "handler_generic_delivery":"def _send_channel(" in handler and "configured Hermes delivery target" in handler,
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
  "renderer_v1g":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G" in renderer and "adaptive_v1g" in renderer,
  "intent_composer_v3":"EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V3" in composer and "intelligent_v3.1" in composer,

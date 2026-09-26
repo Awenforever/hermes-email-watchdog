@@ -27,6 +27,7 @@ def canonical_sha(value: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+@unittest.skipIf(os.name == "nt", "POSIX signal and executable-bit concurrency matrix")
 class StateConcurrencyRecoveryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory(prefix="email-watchdog-state-concurrency.")

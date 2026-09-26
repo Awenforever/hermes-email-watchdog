@@ -503,7 +503,7 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     allowed, _ = _migrate_known_v6_model_fallback(allowed)
 
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
-    cfg["version"] = 6
+    cfg["version"] = 7
     cfg["paths"] = {
         key: cfg.get("paths", {}).get(key, email_config.DEFAULT_CONFIG["paths"][key])
         for key in sorted(ALLOWED_PATH_KEYS)
@@ -592,8 +592,6 @@ def _resolve_target(input_data: dict[str, Any], current: dict[str, Any]) -> tupl
         ("existing_config", configured),
     ):
         if target.get("chat_id"):
-            if not target.get("platform"):
-                target["platform"] = "weixin"
             return target, source
     return explicit, "unresolved"
 
@@ -886,8 +884,8 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
     target, target_source = _resolve_target(input_data, current)
     if not target.get("chat_id"):
         unresolved.append("delivery_target")
-    elif target.get("platform") != "weixin":
-        raise OnboardingError("this release candidate supports a Weixin notification target only")
+    elif not target.get("platform"):
+        unresolved.append("delivery_platform")
 
     cfg = _sanitize_existing_config(current)
     cfg["accounts"] = accounts
@@ -920,8 +918,10 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
     delivery = cfg.setdefault("delivery", {})
     if "auto_download_attachments" in options:
         delivery["auto_download_attachments"] = bool(options["auto_download_attachments"])
-    if "forward_attachments_to_weixin" in options:
-        delivery["forward_attachments_to_weixin"] = bool(options["forward_attachments_to_weixin"])
+    if "forward_attachments" in options:
+        delivery["forward_attachments"] = bool(options["forward_attachments"])
+    elif "forward_attachments_to_weixin" in options:  # legacy input
+        delivery["forward_attachments"] = bool(options["forward_attachments_to_weixin"])
     if options.get("attachment_max_mb") is not None:
         try:
             max_mb = int(options["attachment_max_mb"])
@@ -931,7 +931,7 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
             raise OnboardingError("attachment_max_mb must be between 1 and 100")
         delivery["attachment_max_bytes"] = max_mb * 1024 * 1024
     cfg["safety"] = copy.deepcopy(email_config.DEFAULT_CONFIG["safety"])
-    cfg["version"] = 5
+    cfg["version"] = 7
 
     unresolved = sorted(set(unresolved))
     return {
@@ -1078,7 +1078,7 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
         "accounts_explicit_himalaya": bool(accounts) and all(
             isinstance(a, dict) and a.get("type") == "himalaya" for a in accounts
         ),
-        "weixin_target_present": target.get("platform") == "weixin" and bool(target.get("chat_id")),
+        "delivery_target_present": bool(target.get("platform")) and bool(target.get("chat_id")),
     }
     account_results = [
         _validate_himalaya_account(_normalize_account(a))
@@ -1321,7 +1321,7 @@ def status() -> dict[str, Any]:
         effective_target, target_source = pending, "pending_context"
     else:
         effective_target, target_source = {}, "missing"
-    configured = bool(valid_accounts) and target.get("platform") == "weixin" and bool(target.get("chat_id"))
+    configured = bool(valid_accounts) and bool(target.get("platform")) and bool(target.get("chat_id"))
     himalaya = _himalaya_status()
     return {
         "configured": configured,

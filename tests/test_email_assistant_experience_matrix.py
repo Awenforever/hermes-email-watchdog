@@ -49,11 +49,12 @@ class AssistantExperienceTests(unittest.TestCase):
 
     def test_01_defaults_use_deepseek_with_qwen_fallback_and_no_rule_bypass(self):
         cfg = email_config.DEFAULT_CONFIG
-        self.assertEqual(cfg["semantic_engine"]["model"], "deepseek-flash")
-        self.assertEqual(cfg["semantic_engine"]["fallback_model"], "qwen3.8-chat")
+        self.assertEqual(cfg["semantic_engine"]["provider"], "hermes")
+        self.assertEqual(cfg["semantic_engine"]["model"], "")
+        self.assertEqual(cfg["semantic_engine"]["fallback_model"], "")
         self.assertFalse(cfg["notification"]["fast_lane_enabled"])
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
-        self.assertTrue(cfg["delivery"]["forward_attachments_to_weixin"])
+        self.assertTrue(cfg["delivery"]["forward_attachments"])
 
     def test_02_model_attachment_policy_reaches_delivery_planner(self):
         decision = {

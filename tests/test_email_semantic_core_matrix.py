@@ -800,10 +800,10 @@ class EngineIntegrationTests(unittest.TestCase):
     def test_22_config_defaults(self):
         settings = email_config.DEFAULT_CONFIG["semantic_engine"]
         self.assertEqual(settings["timeout_seconds"], 120)
-        self.assertEqual(settings["provider"], "hermes_openai")
-        self.assertEqual(settings["provider_name"], "USTC")
-        self.assertEqual(settings["model"], "deepseek-flash")
-        self.assertEqual(settings["fallback_model"], "qwen3.8-chat")
+        self.assertEqual(settings["provider"], "hermes")
+        self.assertEqual(settings["provider_name"], "")
+        self.assertEqual(settings["model"], "")
+        self.assertEqual(settings["fallback_model"], "")
         self.assertEqual(settings["num_thread"], 5)
         self.assertEqual(settings["num_predict_mode"], "adaptive")
         self.assertEqual(settings["num_predict"], 1800)

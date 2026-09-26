@@ -24,7 +24,7 @@ _WARNED = False
 _CACHE = None
 
 DEFAULT_CONFIG = {
-    "version": 6,
+    "version": 7,
     "default_account": "",
     "accounts": [],
     "paths": {
@@ -56,12 +56,15 @@ DEFAULT_CONFIG = {
     "semantic_engine": {
         "enabled": True,
         "mode": "shadow",
-        "provider": "hermes_openai",
-        "provider_name": "USTC",
+        # Hermes owns providers, credentials and fallback routing. Empty model
+        # names inherit the profile's primary/fallback model; users may put any
+        # model alias already configured in Hermes here to pin this plugin.
+        "provider": "hermes",
+        "provider_name": "",
         "endpoint": "",
         "api_key_env": "",
-        "model": "deepseek-flash",
-        "fallback_model": "qwen3.8-chat",
+        "model": "",
+        "fallback_model": "",
         "timeout_seconds": 120,
         "temperature": 0.0,
         "max_body_chars": 16000,
@@ -76,9 +79,7 @@ DEFAULT_CONFIG = {
         "num_predict_standard": 1200,
         "num_predict_complex": 1800,
         "num_predict_hard_cap": 2048,
-        # USTC currently permits 20 requests/minute per key. Keep headroom for
-        # semantic analysis, editorial review and correction/critic calls.
-        "request_min_interval_seconds": 3.2,
+        "request_min_interval_seconds": 0.0,
     },
     # EMAIL_WATCHDOG_ADAPTIVE_RENDERER_CONFIG_SHADOW_V1
     "notification": {
@@ -91,7 +92,7 @@ DEFAULT_CONFIG = {
         "editorial_review_version": "model_editorial_gate_v2a",
         # Every production semantic decision is made by the configured model.
         # Deterministic extraction remains a grounding/safety layer, not a
-        # parallel classifier that silently bypasses deepseek-flash.
+        # parallel classifier that silently bypasses the selected Hermes model.
         "fast_lane_enabled": False,
         "original_policy": "auto",
         "original_max_chars": 900,
@@ -112,7 +113,7 @@ DEFAULT_CONFIG = {
     },
     "delivery": {
         "auto_download_attachments": True,
-        "forward_attachments_to_weixin": True,
+        "forward_attachments": True,
         "auto_forward_safe_attachments": True,
         "attachment_max_bytes": 25 * 1024 * 1024,
         "attachment_safe_extensions": [

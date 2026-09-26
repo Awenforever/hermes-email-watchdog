@@ -90,7 +90,10 @@ def _record_output_model(model):
         _LAST_OUTPUT_MODELS.add(value)
 
 def _record_output_attachments(items):
-    if HAS_V3 and not email_config.get_delivery_settings().get("forward_attachments_to_weixin", True):
+    if HAS_V3 and not email_config.get_delivery_settings().get(
+        "forward_attachments",
+        email_config.get_delivery_settings().get("forward_attachments_to_weixin", True),
+    ):
         return
     for item in items or []:
         if not isinstance(item, dict) or not item.get("send_to_weixin"):

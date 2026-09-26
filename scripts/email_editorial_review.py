@@ -630,7 +630,7 @@ def review_notification(
     settings["temperature"] = 0.0
     prompt = _prompt(email, decision, draft, links, attachments)
     errors: list[str] = []
-    models = [str(settings.get("model") or "deepseek-flash")]
+    models = [str(settings.get("model") or "")]
     fallback = str(settings.get("fallback_model") or "").strip()
     if fallback and fallback not in models:
         models.append(fallback)
