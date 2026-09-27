@@ -385,7 +385,7 @@ def _academic_document_view(body: str) -> Dict[str, Any]:
         if skip_table or re.match(r"^[-_:| ]{5,}$", line):
             continue
         source_link = re.match(
-            r"^\s*(?:[-*•]\s*)?\*{0,2}(?:链接|原文|论文链接|DOI)\*{0,2}\s*[:：]\s*(https?://\S+)",
+            r"^\s*(?:[-*•]\s*)?\*{0,2}(?:链接|原文|论文链接|DOI)\*{0,2}\s*[:：]\*{0,2}\s*(https?://\S+)",
             line,
             re.I,
         )
