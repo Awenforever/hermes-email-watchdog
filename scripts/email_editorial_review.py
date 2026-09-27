@@ -223,6 +223,17 @@ def _prompt(
     attachments: list[dict[str, Any]],
 ) -> str:
     now = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="minutes")
+    category = _text(
+        (decision.get("classification") or {}).get("category")
+        if isinstance(decision.get("classification"), Mapping) else "",
+        80,
+    ).casefold()
+    document_view = (
+        email_assistant_composer._academic_document_view(
+            _text(email.get("body") or email.get("body_plain") or email.get("text"), 30000)
+        )
+        if category == "academic_report_digest" else None
+    )
     payload = {
         "current_time": now,
         "message": {
@@ -232,6 +243,7 @@ def _prompt(
             "body": _text(email.get("body") or email.get("body_plain") or email.get("text"), 12000),
             "links": links,
             "attachments": attachments,
+            "document_view": document_view,
         },
         "grounded_analysis": decision,
         "candidate_draft": draft[:5000],
@@ -264,6 +276,12 @@ def _prompt(
         "only effects that actually succeeded. Do not create a card title or received/sent timestamp "
         "line; the runtime owns and prepends mailbox identity and timestamp provenance after your "
         "editorial pass.\n"
+        "For a long academic report, use message.document_view as the reading map: write a compact "
+        "reader briefing with the report-level judgment (when present), the actual paper count, two "
+        "or three clean paper titles, and at most one grounded research question or finding. Never "
+        "copy Markdown table rows, heading markers such as ##/###, pipeline statistics, truncated "
+        "source fragments, author-profile inventories, or the report body wholesale. The attached "
+        "report is the detailed artifact, so the chat card should remain short.\n"
         "3. Judge time relative to current_time and sent_at. Never present an old relative deadline "
         "or expired availability window as live. If a concrete deadline/expiry exists, copy its exact "
         "source wording into temporal.evidence, resolve relative wording to an absolute ISO-8601 value, "

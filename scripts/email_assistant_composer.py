@@ -18,8 +18,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 
-COMPOSER_VERSION = "intelligent_v3.1"
-MARKER = "EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V3"
+COMPOSER_VERSION = "intelligent_v4.0"
+MARKER = "EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V4"
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -304,33 +304,122 @@ def _account_status_mode(source: str) -> str:
     return "status"
 
 
+def _ellipsize(value: Any, limit: int) -> str:
+    text = " ".join(_clean(value).split())
+    if len(text) <= limit:
+        return text
+    window = text[: limit + 1]
+    stops = [m.end() for m in re.finditer(r"(?:[。！？]|[.!?](?=\s|$))", window)]
+    usable = [position for position in stops if position >= limit // 2]
+    if usable:
+        return window[: usable[-1]].strip()
+    spaces = [m.start() for m in re.finditer(r"\s+", window)]
+    cut = spaces[-1] if spaces and spaces[-1] >= limit // 2 else limit
+    return window[:cut].rstrip("，,；;:：- ") + "…"
+
+
+def _clean_academic_label(value: Any) -> str:
+    """Turn a source Markdown label into reader text without leaking syntax."""
+    label = html.unescape(_text(value, 800))
+    markdown_link = re.search(r"\[([^\]]+)\]\(https?://", label)
+    if markdown_link:
+        label = markdown_link.group(1)
+    label = re.sub(r"^\s*#{1,6}\s*", "", label)
+    label = re.sub(r"^\s*(?:[-*•]+|\d+[.)、])\s*", "", label)
+    label = re.sub(r"[*_`]+", "", label)
+    label = re.sub(r"^\[|\]$", "", label.strip())
+    return _ellipsize(label.strip(" -—:："), 110)
+
+
+def _academic_document_view(body: str) -> Dict[str, Any]:
+    """Project a long scholarly Markdown document into semantic reading units.
+
+    This is intentionally topic-neutral.  It understands document structure,
+    not wildfire/AI/biomedicine keywords, so it remains useful for any report.
+    """
+    source = _clean(body)
+    lines = source.splitlines()
+    papers: List[Dict[str, str]] = []
+    current: Dict[str, str] | None = None
+    section = ""
+    judgments: List[str] = []
+    skip_table = False
+    label_re = re.compile(
+        r"^\s*(?:[-*•]\s*)?\*{0,2}(研究问题|为什么值得关注|核心结论|主要发现|"
+        r"方法(?:链|路径)?|关键证据|局限(?:与验证点)?)\*{0,2}\s*[:：]\s*(.+)$",
+        re.I,
+    )
+    paper_re = re.compile(
+        r"^\s*#{2,6}\s*\d+[.)、]?\s*\[([^\]]+)\]\((https?://[^)]+)\)\s*$"
+    )
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            skip_table = False
+            continue
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", line)
+        paper_match = paper_re.match(line)
+        if paper_match:
+            current = {
+                "title": _clean_academic_label(paper_match.group(1)),
+                "url": _clean_url(paper_match.group(2)),
+            }
+            papers.append(current)
+            section = "paper"
+            continue
+        if heading:
+            section = _clean_academic_label(heading.group(1))
+            current = None
+            skip_table = False
+            continue
+        if line.startswith("|"):
+            skip_table = True
+            continue
+        if skip_table or re.match(r"^[-_:| ]{5,}$", line):
+            continue
+        label_match = label_re.match(line)
+        if current is not None and label_match:
+            key = {
+                "研究问题": "research_question", "为什么值得关注": "why_it_matters",
+                "核心结论": "finding", "主要发现": "finding",
+                "方法": "method", "方法链": "method", "方法路径": "method",
+                "关键证据": "evidence", "局限": "limitations", "局限与验证点": "limitations",
+            }.get(label_match.group(1), label_match.group(1))
+            value = re.sub(r"^\*{1,2}\s*", "", label_match.group(2)).strip()
+            current[str(key)] = _ellipsize(value, 260)
+            continue
+        if re.search(r"总体判断|本周判断|综合结论|跨论文(?:综合|发现)|执行摘要|executive summary", section, re.I):
+            point = _useful_point(line)
+            if point and not re.match(r"^(?:生成|更新|发送)时间", point):
+                judgments.append(_ellipsize(point, 240))
+    return {
+        "paper_count": len(papers),
+        "papers": papers[:8],
+        "judgments": list(dict.fromkeys(judgments))[:3],
+    }
+
+
 def _weekly_report_points(body: str) -> List[str]:
-    paragraphs = [" ".join(_clean(x).split()) for x in re.split(r"\n\s*\n+", body)]
-    candidates: List[Tuple[int, int, str]] = []
-    for index, paragraph in enumerate(paragraphs):
-        if len(paragraph) < 45 or _NOISE.search(paragraph):
-            continue
-        if re.search(r"(?i)附件|祝研究顺利|下周见|自动发送|举报|退订|tel:|中国科学技术大学|重点实验室", paragraph):
-            continue
-        score = sum(bool(re.search(pattern, paragraph, re.I)) for pattern in (
-            r"foundation model|HighFM|Mamba|论文|文献",
-            r"反直觉|数据质量|领域对齐|方法论|迁移",
-            r"FireSat|开源|动态|卫星|烟雾",
-        ))
-        if score:
-            sentences = re.split(r"(?<=[。！？.!?])\s*", paragraph)
-            concise = "".join(sentences[:3]).strip()
-            if len(concise) > 260:
-                concise = concise[:257].rstrip("，,；; ") + "…"
-            candidates.append((-score, index, concise))
-    candidates.sort()
-    out: List[str] = []
-    for _, _, point in candidates:
-        if point and point not in out:
-            out.append(point)
-        if len(out) >= 3:
-            break
-    return out
+    view = _academic_document_view(body)
+    papers = list(view.get("papers") or [])
+    points: List[str] = []
+    for judgment in list(view.get("judgments") or [])[:1]:
+        if judgment:
+            points.append(judgment)
+    if papers:
+        titles = [f"《{paper['title']}》" for paper in papers[:3] if paper.get("title")]
+        count = int(view.get("paper_count") or len(papers))
+        if titles:
+            suffix = "等" if count > len(titles) else ""
+            points.append(f"本期收录 {count} 篇论文，重点包括{'、'.join(titles)}{suffix}。")
+        lead = papers[0]
+        if lead.get("research_question"):
+            points.append("首篇关注：" + _ellipsize(lead["research_question"], 220))
+        elif lead.get("finding"):
+            points.append("首篇发现：" + _ellipsize(lead["finding"], 220))
+        if lead.get("why_it_matters"):
+            points.append("价值：" + _ellipsize(lead["why_it_matters"], 220))
+    return list(dict.fromkeys(point for point in points if point))[:3]
 
 
 def _clean_url(value: str) -> str:
@@ -371,6 +460,11 @@ def _body_link_pairs(email: Mapping[str, Any]) -> List[Tuple[str, str]]:
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     out: List[Tuple[str, str]] = []
     for index, line in enumerate(lines):
+        markdown_links = list(re.finditer(r"\[([^\]]+)\]\((https?://[^)]+)\)", line))
+        if markdown_links:
+            for found in markdown_links:
+                out.append((_clean_academic_label(found.group(1)), _clean_url(found.group(2))))
+            continue
         match = re.search(r"https?://[^\s<>]+", line)
         if not match:
             continue
@@ -381,7 +475,7 @@ def _body_link_pairs(email: Mapping[str, Any]) -> List[Tuple[str, str]]:
                     and not _NOISE.search(candidate)):
                 label = candidate
                 break
-        out.append((label, _clean_url(match.group(0))))
+        out.append((_clean_academic_label(label), _clean_url(match.group(0))))
     return out
 
 
@@ -403,7 +497,18 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
     seen = set()
     candidates: List[Any] = list(_items(email.get("links")))
     if category in {"academic_report_digest", "academic_alert_digest"}:
-        candidates = [{"display_text": label, "url": url} for label, url in _body_link_pairs(email)] + candidates
+        body = _clean(email.get("body") or email.get("body_plain") or email.get("text"))
+        report_papers = list(_academic_document_view(body).get("papers") or [])
+        if category == "academic_report_digest" and re.search(r"周报|weekly", str(email.get("subject") or ""), re.I) and report_papers:
+            # A structured report declares its primary papers in numbered headings.
+            # Author profiles, related works and bibliography links are supporting
+            # material and must never displace those primary destinations.
+            candidates = [
+                {"display_text": paper.get("title"), "url": paper.get("url")}
+                for paper in report_papers
+            ]
+        else:
+            candidates = [{"display_text": label, "url": url} for label, url in _body_link_pairs(email)] + candidates
     for item in candidates:
         if isinstance(item, Mapping):
             url, label = _text(item.get("url"), 3000), _clean(item.get("display_text"))
@@ -422,9 +527,28 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
         haystack = f"{label} {url}"
         score = 50
         if category in {"academic_report_digest", "academic_alert_digest"}:
-            title_like = bool(label and 12 <= len(label) <= 220 and not re.search(r"(?i)打开|click|view|pdf$|www\.", label))
-            scholarly_target = bool(academic_host.search(urlparse(url).netloc.casefold()))
-            score = 0 if title_like and (research_link.search(haystack) or scholarly_target) else (5 if research_link.search(haystack) else 50)
+            label = _clean_academic_label(label)
+            host = urlparse(url).netloc.casefold()
+            author_profile = bool(
+                re.search(r"openalex\.org/(?:A|authors/)", url, re.I)
+                or re.search(r"scholar\.google\.com/(?:citations|scholar)\?[^\s]*\b(?:user|q)=", url, re.I)
+            )
+            paper_destination = bool(
+                re.search(r"(?i)arxiv\.org/abs/|doi\.org/|openreview\.net/(?:forum|pdf)|/article/|/chapter/|/paper/", url)
+            )
+            scholarly_target = bool(academic_host.search(host))
+            title_like = bool(
+                label and 12 <= len(label) <= 220
+                and not re.search(r"(?i)打开|click|view|pdf$|www\.|作者|主页|profile", label)
+            )
+            if author_profile:
+                score = 50
+            elif title_like and (paper_destination or scholarly_target or research_link.search(haystack)):
+                score = 0
+            elif paper_destination or research_link.search(haystack):
+                score = 5
+            else:
+                score = 50
         if category == "invoice_receipt" and re.search(
             r"(?i)viewinvoice|pay(?:ment)?(?:/|\?|[-_ ]?(?:ui|charges?))|billing/(?:invoice|pay)|"
             r"download[^\s]*invoice|raise\s+an?\s+invoice|apc[-_/]?payment|发票.{0,12}(?:下载|付款|支付)",
@@ -452,16 +576,24 @@ def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
             score = 50
         host = urlparse(url).netloc
         if category in {"academic_report_digest", "academic_alert_digest"} and label:
-            label = re.sub(r"\s+", " ", label).strip(" -*•")
+            label = _clean_academic_label(label)
         ranked.append((score, label or (f"打开 {host}" if host else "打开链接"), url))
     ranked.sort(key=lambda row: row[0])
     useful = [row for row in ranked if row[0] < 50]
     if useful and useful[0][0] == 0:
         useful = [row for row in useful if row[0] == 0]
-    return [(
-        re.sub(r"[\[\]]", "", label)[:120],
-        url.replace(" ", "%20").replace("(", "%28").replace(")", "%29"),
-    ) for _, label, url in useful[:4]]
+    result: List[Tuple[str, str]] = []
+    normalized_labels: set[str] = set()
+    for _, label, url in useful:
+        clean_label = _clean_academic_label(label) if category in {"academic_report_digest", "academic_alert_digest"} else re.sub(r"[\[\]]", "", label)
+        identity = re.sub(r"\W+", "", clean_label).casefold()
+        if not clean_label or (identity and identity in normalized_labels):
+            continue
+        normalized_labels.add(identity)
+        result.append((clean_label, url.replace(" ", "%20").replace("(", "%28").replace(")", "%29")))
+        if len(result) >= (3 if category in {"academic_report_digest", "academic_alert_digest"} else 4):
+            break
+    return result
 
 
 def _attachment_lines(email: Mapping[str, Any], delivery: Mapping[str, Any], category: str = "") -> List[str]:

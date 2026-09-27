@@ -331,6 +331,91 @@ Best regards""",
         self.assertNotIn("agent.qq.com", text)
         self.assertIn("**report.pdf** · 已附上", text)
 
+    def test_weekly_report_fallback_understands_document_structure(self):
+        body = """# 学术研究周报 2026-W39
+
+## 流水线统计
+| 论文 | 研究问题 | 方法路径 |
+|---|---|---|
+| Broken table payload | must never become a chat bullet | raw |
+
+## 入选论文
+### 1. [A General Paper About Robust Vision](https://openreview.net/forum?id=paper-one)
+- **来源：** OpenReview
+- **作者：** Example Author
+
+**研究问题：** 如何在分布变化下提升视觉模型的可靠性。
+
+**为什么值得关注：** 该工作给出了可复现的跨数据集验证。
+
+### 2. [A Journal Paper Beyond Preprints](https://doi.org/10.1000/example-two)
+- **来源：** DOI / Crossref
+
+**研究问题：** 如何校准多模态模型的不确定性。
+
+### 3. [A Third Paper](https://arxiv.org/abs/2609.00001)
+**研究问题：** 如何压缩大模型。
+"""
+        email = {
+            "account": "USTC", "subject": "⚚ 学术研究周报 2026-W39",
+            "from_name": "Weekly", "body": body,
+            "attachments": [{"filename": "report.pdf"}], "links": [],
+        }
+        decision = {
+            "classification": {"category": "academic_report_digest", "label": "学术报告摘要"},
+            "importance": {"level": "low"},
+            "notification": {
+                "summary_style": "bullets", "summary": "",
+                "key_points": [
+                    "| 论文 | 研究问题 | 方法路径 | |---|---|---|",
+                    "## 入选论文 ### 1. [A General Paper About Robust Vision](https://openreview.net/forum?id=paper-one)",
+                ],
+                "original_policy": "none",
+            },
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(
+            email, decision,
+            {"attachments": [{"filename": "report.pdf", "download_status": "downloaded", "send_to_weixin": True}]},
+        )["text"]
+        self.assertIn("本期收录 3 篇论文", text)
+        self.assertIn("《A General Paper About Robust Vision》", text)
+        self.assertIn("首篇关注：如何在分布变化下提升视觉模型的可靠性", text)
+        self.assertIn("[A General Paper About Robust Vision](https://openreview.net/forum?id=paper-one)", text)
+        self.assertIn("[A Journal Paper Beyond Preprints](https://doi.org/10.1000/example-two)", text)
+        self.assertNotIn("| 论文 |", text)
+        self.assertNotIn("## 入选论文", text)
+        self.assertNotIn("### 1.", text)
+        self.assertNotIn("作者画像", text)
+
+    def test_weekly_report_links_are_primary_papers_not_author_related_works(self):
+        email = {
+            "account": "USTC", "subject": "学术研究周报 2026-W39",
+            "body": """## 入选论文
+### 1. [Primary Paper One](https://arxiv.org/abs/2609.00001)
+- **作者团队：** Example Lab
+- [An author's older work (2023)](https://doi.org/10.1000/old)
+### 2. [Primary Paper Two](https://openreview.net/forum?id=paper-two)
+- **研究问题：** 第二篇研究什么？
+### 3. [Primary Paper Three](https://doi.org/10.1000/primary-three)
+""",
+            "links": [{"url": "https://openalex.org/A123", "display_text": "Author profile"}],
+        }
+        decision = {
+            "classification": {"category": "academic_report_digest", "label": "学术报告摘要"},
+            "importance": {"level": "normal"},
+            "notification": {"summary": "", "key_points": [], "original_policy": "none"},
+            "action": {"required": False}, "deadline": {"has_deadline": False},
+            "risk": {"level": "none", "notes": []},
+        }
+        text = composer.render_notification(email, decision)["text"]
+        self.assertIn("[Primary Paper One](https://arxiv.org/abs/2609.00001)", text)
+        self.assertIn("[Primary Paper Two](https://openreview.net/forum?id=paper-two)", text)
+        self.assertIn("[Primary Paper Three](https://doi.org/10.1000/primary-three)", text)
+        self.assertNotIn("older work", text)
+        self.assertNotIn("openalex.org/A123", text)
+
     def test_attachment_failure_is_explicit_not_silent(self):
         email = {"subject": "周报", "from_addr": "x@example.test", "attachments": [{"filename": "report.pdf"}]}
         decision = {

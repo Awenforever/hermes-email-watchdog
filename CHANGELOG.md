@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0 - 2026-09-28
+
+- Replace topic-specific weekly-report fallback rules with a structural academic
+  document reader that understands paper headings, research questions, evidence,
+  value and report-level judgments without copying Markdown tables or pipeline data.
+- Give the editorial model the same compact document projection so both the model
+  path and deterministic fallback operate on semantic reading units.
+- Treat numbered report headings as the authoritative primary-paper list; author
+  profiles, cited related work and report chrome can no longer displace original
+  paper links in the message card.
+- Validate the fallback against 24 real historical weekly-report messages without
+  sending, mutating mailbox state or replaying historical notifications.
+
 ## 0.7.0 - 2026-09-25
 
 - Add a first-class guided setup entry so Hermes can inspect unresolved mailbox
