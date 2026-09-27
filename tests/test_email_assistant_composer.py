@@ -416,6 +416,27 @@ Best regards""",
         self.assertNotIn("older work", text)
         self.assertNotIn("openalex.org/A123", text)
 
+    def test_legacy_weekly_report_pairs_plain_headings_with_following_links(self):
+        email = {
+            "account": "USTC", "subject": "学术研究周报 2026-W28",
+            "body": """## 入选论文
+### 1. First Plain Heading Paper
+- **DOI：** 10.1000/first
+- **链接：** https://doi.org/10.1000/first
+### 2. Second Plain Heading Paper
+- **原文：** https://openreview.net/forum?id=second
+""",
+        }
+        view = composer._academic_document_view(email["body"])
+        self.assertEqual(2, view["paper_count"])
+        self.assertEqual("https://doi.org/10.1000/first", view["papers"][0]["url"])
+        self.assertEqual("https://openreview.net/forum?id=second", view["papers"][1]["url"])
+        links = composer._links(email, "academic_report_digest")
+        self.assertEqual([
+            ("First Plain Heading Paper", "https://doi.org/10.1000/first"),
+            ("Second Plain Heading Paper", "https://openreview.net/forum?id=second"),
+        ], links)
+
     def test_attachment_failure_is_explicit_not_silent(self):
         email = {"subject": "周报", "from_addr": "x@example.test", "attachments": [{"filename": "report.pdf"}]}
         decision = {

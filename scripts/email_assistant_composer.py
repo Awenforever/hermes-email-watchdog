@@ -352,6 +352,7 @@ def _academic_document_view(body: str) -> Dict[str, Any]:
     paper_re = re.compile(
         r"^\s*#{2,6}\s*\d+[.)、]?\s*\[([^\]]+)\]\((https?://[^)]+)\)\s*$"
     )
+    plain_paper_re = re.compile(r"^\s*#{2,6}\s*\d+[.)、]?\s+(.+?)\s*$")
     for raw in lines:
         line = raw.strip()
         if not line:
@@ -367,6 +368,12 @@ def _academic_document_view(body: str) -> Dict[str, Any]:
             papers.append(current)
             section = "paper"
             continue
+        plain_paper_match = plain_paper_re.match(line)
+        if plain_paper_match:
+            current = {"title": _clean_academic_label(plain_paper_match.group(1)), "url": ""}
+            papers.append(current)
+            section = "paper"
+            continue
         if heading:
             section = _clean_academic_label(heading.group(1))
             current = None
@@ -376,6 +383,14 @@ def _academic_document_view(body: str) -> Dict[str, Any]:
             skip_table = True
             continue
         if skip_table or re.match(r"^[-_:| ]{5,}$", line):
+            continue
+        source_link = re.match(
+            r"^\s*(?:[-*•]\s*)?\*{0,2}(?:链接|原文|论文链接|DOI)\*{0,2}\s*[:：]\s*(https?://\S+)",
+            line,
+            re.I,
+        )
+        if current is not None and source_link and not current.get("url"):
+            current["url"] = _clean_url(source_link.group(1))
             continue
         label_match = label_re.match(line)
         if current is not None and label_match:
