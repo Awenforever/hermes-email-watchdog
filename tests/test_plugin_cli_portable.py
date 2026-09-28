@@ -5,6 +5,7 @@ import io
 import json
 import hashlib
 import tarfile
+import zipfile
 import sys
 import tempfile
 import types
@@ -123,6 +124,26 @@ class PluginCliPortableTests(unittest.TestCase):
         ), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(2, self.module._install_himalaya(True))
         self.assertFalse((self.home / "bin" / "himalaya").exists())
+
+    def test_windows_release_accepts_identical_duplicate_executables(self):
+        executable = b"signed-windows-himalaya"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, mode="w") as archive:
+            archive.writestr("result/bin/himalaya.exe", executable)
+            archive.writestr("himalaya.x86_64-windows.tgz", b"nested release archive")
+            archive.writestr("himalaya.exe", executable)
+        self.assertEqual(
+            executable,
+            self.module._binary_from_archive("himalaya.x86_64-windows.zip", buffer.getvalue()),
+        )
+
+    def test_windows_release_rejects_conflicting_duplicate_executables(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, mode="w") as archive:
+            archive.writestr("result/bin/himalaya.exe", b"one")
+            archive.writestr("himalaya.exe", b"two")
+        with self.assertRaisesRegex(RuntimeError, "conflicting executables"):
+            self.module._binary_from_archive("himalaya.x86_64-windows.zip", buffer.getvalue())
 
 
 if __name__ == "__main__":

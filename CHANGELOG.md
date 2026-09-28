@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.2 - 2026-09-28
+
+- Fixed the Windows Himalaya installer for the official v1.2.0 archive, which contains two byte-identical copies of `himalaya.exe`.
+- The installer still fails closed when duplicate executable entries differ, while retaining the pinned release-archive SHA-256 check.
+
 ## 0.9.1 - 2026-09-28
 
 - Add a consent-gated, profile-scoped Himalaya installer for Linux, Windows, WSL2, macOS and common NAS architectures.

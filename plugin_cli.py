@@ -138,9 +138,17 @@ def _binary_from_archive(asset: str, payload: bytes) -> bytes:
     if asset.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             matches = [name for name in archive.namelist() if Path(name).name.casefold() == expected]
-            if len(matches) != 1:
-                raise RuntimeError("Himalaya archive does not contain exactly one executable")
-            return archive.read(matches[0])
+            if not matches:
+                raise RuntimeError("Himalaya archive does not contain its executable")
+            # Some official Windows releases contain both a top-level binary
+            # and an identical copy under result/bin/.  Reject genuinely
+            # ambiguous payloads, but do not fail a signed, checksum-pinned
+            # release solely because it repeats the same bytes.
+            binaries = [archive.read(name) for name in matches]
+            digests = {hashlib.sha256(binary).digest() for binary in binaries}
+            if len(digests) != 1:
+                raise RuntimeError("Himalaya archive contains conflicting executables")
+            return binaries[0]
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
         matches = [member for member in archive.getmembers() if member.isfile() and Path(member.name).name == expected]
         if len(matches) != 1:
