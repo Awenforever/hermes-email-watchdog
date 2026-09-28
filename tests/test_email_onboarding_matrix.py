@@ -310,10 +310,11 @@ def main() -> None:
         result, _ = run_setup(env_for(root / "case-bad-value", fake), "plan", "--input-json", json.dumps(bad2), expect=2)
         ok("literal secret value" in result["error"], "secret value rejected")
 
-        # Unsupported notification platform is rejected.
-        bad3 = {"accounts": [account], "delivery_target": {"platform": "telegram", "chat_id": "x"}}
-        result, _ = run_setup(env_for(root / "case-bad-platform", fake), "plan", "--input-json", json.dumps(bad3), expect=2)
-        ok("Weixin" in result["error"], "unsupported platform rejected")
+        # Delivery platforms are inherited from Hermes rather than frozen to
+        # Weixin.  A valid Hermes channel name must survive the portable plan.
+        portable = {"accounts": [account], "delivery_target": {"platform": "telegram", "chat_id": "x"}}
+        result, _ = run_setup(env_for(root / "case-portable-platform", fake), "plan", "--input-json", json.dumps(portable))
+        ok(result["delivery_target"]["platform"] == "telegram", "Hermes platform preserved")
 
         # Failed validation restores exact config, enabled state, and generated file.
         case = root / "case-rollback"
