@@ -656,7 +656,7 @@ class WeixinAttachmentTransportTests(unittest.IsolatedAsyncioTestCase):
                 async def send_document(self, chat_id, file_path, **kwargs):
                     nonlocal second_attempts
                     calls.append(("document", Path(file_path).name))
-                    if Path(file_path) == second:
+                    if Path(file_path).name == second.name:
                         second_attempts += 1
                         if second_attempts == 1:
                             return Result(False, "transient")
@@ -677,6 +677,30 @@ class WeixinAttachmentTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls.count(("text", "invoice")), 1)
             self.assertEqual(calls.count(("document", "first.pdf")), 1)
             self.assertEqual(calls.count(("document", "second.pdf")), 2)
+
+    def test_17_himalaya_attachments_are_decoded_from_raw_mime_without_byte_loss(self):
+        from email.message import EmailMessage
+
+        binary = bytes(range(256)) * 4
+        message = EmailMessage()
+        message["Subject"] = "binary attachment"
+        message.set_content("See attachment")
+        message.add_attachment(binary, maintype="application", subtype="octet-stream", filename="data.bin")
+
+        with tempfile.TemporaryDirectory() as td:
+            def export_message(command, **_kwargs):
+                destination = Path(command[command.index("--destination") + 1])
+                destination.write_bytes(message.as_bytes())
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.object(
+                email_delivery,
+                "_himalaya_cmd_variants",
+                side_effect=lambda _cfg, args: [["himalaya", *args]],
+            ), mock.patch.object(email_delivery.subprocess, "run", side_effect=export_message):
+                paths = email_delivery._download_himalaya("mail.toml", "42", td)
+            self.assertEqual(1, len(paths))
+            self.assertEqual(binary, Path(paths[0]).read_bytes())
 
 
 if __name__ == "__main__":

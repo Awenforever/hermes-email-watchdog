@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.3 - 2026-09-28
+
+- Preserve attachment bytes by exporting the original RFC 822 message and decoding MIME parts locally, avoiding the known Himalaya v1.2.0 binary-attachment corruption path.
+- Sanitize attachment names, bound decoded payload sizes, publish files atomically, and retain the legacy download command only as a compatibility fallback.
+- Make the partial-delivery retry regression portable across Windows short/long path representations.
+
 ## 0.9.2 - 2026-09-28
 
 - Fixed the Windows Himalaya installer for the official v1.2.0 archive, which contains two byte-identical copies of `himalaya.exe`.

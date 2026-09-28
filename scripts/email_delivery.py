@@ -9,9 +9,12 @@ import re
 import socket
 import subprocess
 import shutil
+import tempfile
 from html import unescape
 import sys
 from datetime import datetime, timedelta, timezone
+from email import policy as email_policy
+from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -1059,6 +1062,13 @@ def _himalaya_cmd_variants(config_path, args):
 
 def _download_himalaya(config_path, msg_id, save_dir):
     os.makedirs(save_dir, exist_ok=True)
+    # Himalaya v1.2.0's attachment download command can corrupt arbitrary
+    # binary payloads. Exporting the original RFC 822 message and decoding its
+    # MIME parts in Python preserves bytes exactly and also gives us one
+    # portable implementation across Windows, Linux, WSL and Docker.
+    exported = _download_himalaya_from_raw_message(config_path, msg_id, save_dir)
+    if exported is not None:
+        return exported
     for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -1073,6 +1083,58 @@ def _download_himalaya(config_path, msg_id, save_dir):
             # empty download.  Return the complete post-download file set.
             return sorted(_snapshot(save_dir))
     return []
+
+
+def _download_himalaya_from_raw_message(config_path, msg_id, save_dir):
+    """Return decoded MIME attachments, or ``None`` when export is unsupported."""
+    attempts = []
+    with tempfile.TemporaryDirectory(prefix="hermes-email-attachment-export-") as raw:
+        message_path = Path(raw) / "message.eml"
+        args = ["message", "export", str(msg_id), "--full", "--destination", str(message_path)]
+        for cmd in _himalaya_cmd_variants(config_path, args):
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+                attempts.append(exc)
+                continue
+            if result.returncode == 0 and message_path.is_file():
+                break
+        else:
+            return None
+
+        try:
+            message = BytesParser(policy=email_policy.default).parsebytes(message_path.read_bytes())
+        except Exception:
+            return None
+
+        root = Path(save_dir).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        saved = []
+        total_bytes = 0
+        for index, part in enumerate(message.walk(), start=1):
+            filename = part.get_filename()
+            if part.get_content_disposition() != "attachment" and not filename:
+                continue
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+            total_bytes += len(payload)
+            if len(payload) > 100 * 1024 * 1024 or total_bytes > 200 * 1024 * 1024:
+                return []
+            leaf = Path(str(filename or f"attachment-{index}").replace("\\", "/")).name
+            leaf = re.sub(r"[\x00-\x1f<>:\"/\\|?*]+", "_", leaf).strip(" .")[:220]
+            if not leaf:
+                leaf = f"attachment-{index}"
+            target = root / leaf
+            suffix = 2
+            while target.exists() and target.read_bytes() != payload:
+                target = root / f"{Path(leaf).stem}-{suffix}{Path(leaf).suffix}"
+                suffix += 1
+            stage = target.with_name(f".{target.name}.{os.getpid()}.part")
+            stage.write_bytes(payload)
+            os.replace(stage, target)
+            saved.append(str(target))
+        return sorted(dict.fromkeys(saved))
 
 def _download_agently(msg_id, att_id, save_dir):
     cmd = ["agently-cli", "attachment", "+download", "--msg", str(msg_id), "--att", str(att_id), "--output", save_dir]
