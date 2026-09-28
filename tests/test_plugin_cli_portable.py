@@ -3,6 +3,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import hashlib
+import tarfile
 import sys
 import tempfile
 import types
@@ -82,6 +84,45 @@ class PluginCliPortableTests(unittest.TestCase):
             rc = self.module.email_watchdog_command(Namespace(email_watchdog_action="setup"))
         self.assertEqual(rc, 0)
         run.assert_called_once_with("status")
+
+    def test_himalaya_assets_cover_acceptance_platforms(self):
+        self.assertEqual("himalaya.x86_64-linux.tgz", self.module._himalaya_asset("Linux", "AMD64")[0])
+        self.assertEqual("himalaya.x86_64-windows.zip", self.module._himalaya_asset("Windows", "x86_64")[0])
+        self.assertEqual("himalaya.aarch64-linux.tgz", self.module._himalaya_asset("Linux", "arm64")[0])
+
+    def test_himalaya_install_requires_consent(self):
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            rc = self.module._install_himalaya(False)
+        self.assertEqual(2, rc)
+        self.assertFalse((self.home / "bin" / "himalaya").exists())
+
+    def test_himalaya_install_verifies_archive_and_publishes_atomically(self):
+        executable = b"test-himalaya-binary"
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            info = tarfile.TarInfo("release/himalaya")
+            info.size = len(executable)
+            archive.addfile(info, io.BytesIO(executable))
+        payload = buffer.getvalue()
+        digest = hashlib.sha256(payload).hexdigest()
+        checked = Namespace(returncode=0, stdout="himalaya v1.2.0\n", stderr="")
+        output = io.StringIO()
+        with mock.patch.object(self.module, "_himalaya_asset", return_value=("himalaya.x86_64-linux.tgz", digest)), mock.patch.object(
+            self.module, "_download", return_value=payload
+        ), mock.patch.object(self.module.subprocess, "run", return_value=checked), contextlib.redirect_stdout(output):
+            self.assertEqual(0, self.module._install_himalaya(True))
+        result = json.loads(output.getvalue())
+        installed = Path(result["binary"])
+        self.assertEqual(executable, installed.read_bytes())
+        self.assertEqual(digest, result["archive_sha256"])
+
+    def test_himalaya_install_rejects_checksum_mismatch(self):
+        with mock.patch.object(self.module, "_himalaya_asset", return_value=("himalaya.x86_64-linux.tgz", "0" * 64)), mock.patch.object(
+            self.module, "_download", return_value=b"tampered"
+        ), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(2, self.module._install_himalaya(True))
+        self.assertFalse((self.home / "bin" / "himalaya").exists())
 
 
 if __name__ == "__main__":

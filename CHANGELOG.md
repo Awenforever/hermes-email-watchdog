@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 - 2026-09-28
+
+- Add a consent-gated, profile-scoped Himalaya installer for Linux, Windows, WSL2, macOS and common NAS architectures.
+- Pin the production-vetted Himalaya v1.2.0 release and verify official GitHub asset SHA-256 digests before atomically publishing the executable.
+- Back up an existing managed binary and never execute a remote installer script.
+
 ## 0.9.0 - 2026-09-28
 
 - Replace topic-specific weekly-report fallback rules with a structural academic

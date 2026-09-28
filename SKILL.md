@@ -1,7 +1,7 @@
 ---
 name: hermes-email-watchdog
 description: 安装、个性化配置并运行只读多账号邮件助理；智能判断邮件价值并通过 Hermes 已有消息渠道发送可行动提醒、链接、附件和期限通知。
-version: 0.9.0
+version: 0.9.1
 tags: [email, watchdog, notification, read-only, hermes, onboarding]
 ---
 
@@ -14,7 +14,7 @@ Email Watchdog 是独立的只读邮箱助理。它读取邮件并把值得打�
 当用户要求安装、配置、迁移或启用 Email Watchdog 时，必须主动引导：
 
 1. 运行 `hermes email-watchdog setup`，读取已检测账户、当前状态和 `unresolved`。
-2. 若 `unresolved` 包含 `himalaya`，先识别 Windows、WSL、Linux 或 NAS 容器环境，说明将安装只读邮箱客户端 Himalaya，获得同意后通过该平台可信的软件包管理器安装并验证 `himalaya --version`。不要使用 `curl | sh`，也不要在未获同意时修改系统环境。
+2. 若 `unresolved` 包含 `himalaya`，说明将下载经过版本固定和 SHA-256 校验的只读邮箱客户端到当前 Hermes profile；获得同意后运行 `hermes email-watchdog himalaya-install --yes`，再重新执行 `setup`。不要使用 `curl | sh`，也不要在未获同意时安装。
 3. 使用当前 Hermes 会话作为通知目标。底层会读取 `HERMES_SESSION_PLATFORM` 与 `HERMES_SESSION_CHAT_ID`；Hook 也会保存待确认目标。
 4. 若只检测到一个有效 Himalaya 配置，自动复用；不要询问已经可靠检测到的账户或路径。
 5. 只逐项询问缺失的用户级信息：

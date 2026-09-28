@@ -83,6 +83,7 @@ hermes email-watchdog setup
 
 # 安装或刷新运行时，再做只读体检
 hermes email-watchdog install-runtime
+hermes email-watchdog himalaya-install --yes
 hermes email-watchdog doctor
 
 # 单次轮询，不开启持续监控
@@ -95,6 +96,8 @@ hermes email-watchdog disable
 ```
 
 Email Watchdog 需要读取环境变量型凭据、调用 Himalaya、通过 Hermes 访问模型并投递消息，因此 Hermes 的社区插件安全扫描可能要求你确认这些能力。请先查看扫描结果；确认仓库来源与权限符合预期后再批准。不要关闭全局安全扫描。首次启用后按 Hermes 提示重启 gateway，再继续 `setup`，已完成步骤不会重复。
+
+`himalaya-install` 不执行远程脚本：它只从 Himalaya 官方 GitHub Release 下载经过本插件验证的 v1.2.0 二进制，核对固定 SHA-256 后安装到当前 Hermes profile 的 `bin/`；不会修改系统软件包或其他 Hermes profile。已有二进制会先备份，失败则保留原版本。
 
 自动化部署仍可使用同一套 plan/apply 内核；详见 [安装与自动化说明](INSTALLATION.md)。自然对话与自动化路径生成相同的标准配置，并共享原子回滚和只读验证。
 
