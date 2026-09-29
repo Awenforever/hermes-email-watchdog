@@ -14,6 +14,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -1049,6 +1050,13 @@ def _redact_command(command: list[str]) -> list[str]:
     return result
 
 
+def _himalaya_config_context(config_path: str | Path, platform: str | None = None) -> tuple[str, str | None]:
+    value = os.path.expanduser(str(config_path))
+    if (platform or os.name) == "nt":
+        return ntpath.basename(value), ntpath.dirname(value) or "."
+    return value, None
+
+
 def _validate_himalaya_account(account: dict[str, Any]) -> dict[str, Any]:
     config_path = Path(str(account.get("himalaya_config") or account.get("config") or "")).expanduser()
     if not config_path.is_file():
@@ -1056,10 +1064,17 @@ def _validate_himalaya_account(account: dict[str, Any]) -> dict[str, Any]:
     binary = _himalaya_binary()
     args = ["envelope", "list", "--page-size", "1", "--output", "json"]
     attempts: list[dict[str, Any]] = []
+    # Himalaya v1.2 treats ':' as a multi-config separator even on Windows,
+    # so an absolute path such as C:\... is split at the drive letter and
+    # launches the interactive config wizard. Run beside the config and pass
+    # only its basename on native Windows.
+    config_argument, working_directory = _himalaya_config_context(config_path)
     for flag in ("-c", "--config"):
-        command = [binary, flag, str(config_path), *args]
+        command = [binary, flag, config_argument, *args]
         try:
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=20)
+            completed = subprocess.run(
+                command, capture_output=True, text=True, timeout=20, cwd=working_directory
+            )
             row = {
                 "command": _redact_command(command),
                 "return_code": completed.returncode,

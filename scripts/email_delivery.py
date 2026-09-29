@@ -4,6 +4,7 @@
 import hashlib
 import ipaddress
 import json
+import ntpath
 import os
 import re
 import socket
@@ -1042,13 +1043,21 @@ def _himalaya_binary():
             return expanded
     return "himalaya"
 
+def _himalaya_config_context(config_path, platform=None):
+    cfg = os.path.expanduser(config_path or "")
+    if cfg and (platform or os.name) == "nt":
+        return ntpath.basename(cfg), ntpath.dirname(cfg) or "."
+    return cfg, None
+
+
 def _himalaya_cmd_variants(config_path, args):
     cfg = os.path.expanduser(config_path or "")
     base = _himalaya_binary()
     variants = []
     if cfg:
-        variants.append([base, "-c", cfg] + list(args))
-        variants.append([base, "--config", cfg] + list(args))
+        config_argument, _ = _himalaya_config_context(cfg)
+        variants.append([base, "-c", config_argument] + list(args))
+        variants.append([base, "--config", config_argument] + list(args))
     variants.append([base] + list(args))
     unique = []
     seen = set()
@@ -1058,6 +1067,10 @@ def _himalaya_cmd_variants(config_path, args):
             unique.append(cmd)
             seen.add(key)
     return unique
+
+
+def _himalaya_cwd(config_path):
+    return _himalaya_config_context(config_path)[1]
 
 
 def _download_himalaya(config_path, msg_id, save_dir):
@@ -1071,7 +1084,10 @@ def _download_himalaya(config_path, msg_id, save_dir):
         return exported
     for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60,
+                cwd=_himalaya_cwd(config_path),
+            )
         except FileNotFoundError:
             return []
         except Exception:
@@ -1093,7 +1109,10 @@ def _download_himalaya_from_raw_message(config_path, msg_id, save_dir):
         args = ["message", "export", str(msg_id), "--full", "--destination", str(message_path)]
         for cmd in _himalaya_cmd_variants(config_path, args):
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=60,
+                    cwd=_himalaya_cwd(config_path),
+                )
             except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
                 attempts.append(exc)
                 continue

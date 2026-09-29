@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.5 - 2026-09-29
+
+- Fix native Windows mailbox access with Himalaya v1.2: its config-path parser
+  treats the drive-letter colon as a multi-config separator. All onboarding,
+  polling, message export, and attachment paths now run from the configuration
+  directory and pass a colon-free basename.
+- Add cross-platform regression coverage for Windows drive-letter paths while
+  preserving absolute POSIX paths.
+
 ## 0.9.4 - 2026-09-29
 
 - Add `secret_env` onboarding so the plugin generates a safe external secret
