@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import sys
 import unittest
 from pathlib import Path
@@ -18,7 +19,10 @@ class WindowsSecretReaderTests(unittest.TestCase):
     def test_windows_reader_is_strictly_scoped_to_one_user_environment_variable(self):
         command = onboarding._secret_command_from_env("EMAIL_WATCHDOG_IMAP_PASSWORD", "nt")
         self.assertIn("powershell.exe", command)
-        self.assertIn("GetEnvironmentVariable('EMAIL_WATCHDOG_IMAP_PASSWORD','User')", command)
+        self.assertIn("-EncodedCommand", command)
+        encoded = command.rsplit(" ", 1)[-1]
+        script = base64.b64decode(encoded).decode("utf-16le")
+        self.assertIn("GetEnvironmentVariable('EMAIL_WATCHDOG_IMAP_PASSWORD','User')", script)
         self.assertEqual("powershell.exe", onboarding._validate_secret_command(command))
 
     def test_posix_reader_uses_printenv(self):
@@ -32,6 +36,11 @@ class WindowsSecretReaderTests(unittest.TestCase):
         with self.assertRaises(onboarding.OnboardingError):
             onboarding._validate_secret_command(
                 'powershell.exe -NoProfile -NonInteractive -Command "Get-ChildItem Env:"'
+            )
+        unsafe = base64.b64encode("[Console]::Write('x');iex".encode("utf-16le")).decode("ascii")
+        with self.assertRaises(onboarding.OnboardingError):
+            onboarding._validate_secret_command(
+                f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {unsafe}"
             )
 
 

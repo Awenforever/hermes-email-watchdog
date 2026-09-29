@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.6 - 2026-09-29
+
+- Generate a strictly validated PowerShell `EncodedCommand` for Windows
+  environment-backed credentials. This prevents Himalaya's shell layer from
+  reinterpreting nested quotes or password characters while keeping the
+  credential outside plugin configuration and logs.
+- Reject encoded PowerShell payloads unless they decode to exactly one read of
+  one uppercase user-environment variable.
+
 ## 0.9.5 - 2026-09-29
 
 - Fix native Windows mailbox access with Himalaya v1.2: its config-path parser

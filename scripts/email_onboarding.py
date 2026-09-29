@@ -10,6 +10,7 @@ request.
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import copy
 import hashlib
@@ -641,12 +642,30 @@ def _validate_secret_command(command: str) -> str:
         if len(parts) != 2 or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", parts[1]):
             raise OnboardingError("printenv secret_command must reference one uppercase environment variable")
     if command_name in {"powershell", "powershell.exe"}:
-        pattern = (
+        plain_pattern = (
             r'^powershell(?:\.exe)? -NoProfile -NonInteractive -Command '
             r'"\[Console\]::Out\.Write\(\[Environment\]::GetEnvironmentVariable\('
             r"'[A-Z_][A-Z0-9_]*','User'\)\)\"$"
         )
-        if not re.fullmatch(pattern, text, flags=re.IGNORECASE):
+        encoded_match = re.fullmatch(
+            r"powershell(?:\.exe)? -NoProfile -NonInteractive -EncodedCommand ([A-Za-z0-9+/]+={0,2})",
+            text,
+            flags=re.IGNORECASE,
+        )
+        encoded_safe = False
+        if encoded_match:
+            try:
+                script = base64.b64decode(encoded_match.group(1), validate=True).decode("utf-16le")
+            except Exception:
+                script = ""
+            encoded_safe = bool(
+                re.fullmatch(
+                    r"\[Console\]::Out\.Write\(\[Environment\]::GetEnvironmentVariable\('"
+                    r"[A-Z_][A-Z0-9_]*','User'\)\)",
+                    script,
+                )
+            )
+        if not re.fullmatch(plain_pattern, text, flags=re.IGNORECASE) and not encoded_safe:
             raise OnboardingError(
                 "PowerShell secret_command must only read one uppercase user environment variable"
             )
@@ -658,10 +677,12 @@ def _secret_command_from_env(name: str, platform: str | None = None) -> str:
     if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", variable):
         raise OnboardingError("secret_env must name one uppercase environment variable")
     if (platform or os.name) == "nt":
-        return (
-            "powershell.exe -NoProfile -NonInteractive -Command "
-            f'"[Console]::Out.Write([Environment]::GetEnvironmentVariable(\'{variable}\',\'User\'))"'
+        script = (
+            "[Console]::Out.Write([Environment]::GetEnvironmentVariable("
+            f"'{variable}','User'))"
         )
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        return f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}"
     return f"printenv {variable}"
 
 
