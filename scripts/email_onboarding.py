@@ -1440,18 +1440,98 @@ def export_redacted() -> dict[str, Any]:
     }
 
 
+def _unwrap_envelope_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [row for row in value if isinstance(row, dict)]
+    if isinstance(value, dict):
+        for key in ("envelopes", "messages", "items", "data"):
+            child = value.get(key)
+            rows = _unwrap_envelope_list(child)
+            if rows:
+                return rows
+    return []
+
+
+def _baseline_account_envelopes(account: dict[str, Any], lookback: int) -> list[dict[str, Any]]:
+    if account.get("type") == "himalaya":
+        config_path = Path(str(account.get("himalaya_config") or account.get("config") or "")).expanduser()
+        config_argument, working_directory = _himalaya_config_context(config_path)
+        command = [
+            _himalaya_binary(), "-c", config_argument, "envelope", "list",
+            "--page-size", str(lookback), "--output", "json",
+        ]
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=30, cwd=working_directory
+        )
+        if completed.returncode != 0:
+            raise OnboardingError("cannot initialize mailbox baseline after read-only validation")
+        try:
+            return _unwrap_envelope_list(json.loads((completed.stdout or "[]").strip() or "[]"))
+        except json.JSONDecodeError as exc:
+            raise OnboardingError("mailbox baseline response was not JSON") from exc
+
+    if account.get("type") == "agently":
+        command = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(lookback)]
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        if completed.returncode != 0:
+            raise OnboardingError("cannot initialize Agently mailbox baseline")
+        try:
+            payload = json.loads((completed.stdout or "{}").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise OnboardingError("Agently mailbox baseline response was not JSON") from exc
+        return _unwrap_envelope_list(payload)
+
+    raise OnboardingError("cannot initialize baseline for unsupported account type")
+
+
+def _initialize_seen_baseline(config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    paths = config.get("paths") if isinstance(config.get("paths"), dict) else {}
+    seen_path = Path(str(paths.get("seen") or (STATE_ROOT / "seen.json"))).expanduser()
+    existing = _load_json(seen_path, {})
+    if not isinstance(existing, dict):
+        existing = {}
+    if state.get("baseline_completed") or existing:
+        return {"initialized": False, "reason": "already_initialized", "count": len(existing)}
+
+    watchdog = config.get("watchdog") if isinstance(config.get("watchdog"), dict) else {}
+    lookback = max(1, min(int(watchdog.get("lookback") or 5), 100))
+    baseline = dict(existing)
+    for raw_account in config.get("accounts") or []:
+        account = _normalize_account(raw_account)
+        prefix = str(account.get("label") or account.get("name") or account.get("id") or "account")
+        for envelope in _baseline_account_envelopes(account, lookback):
+            message_id = str(envelope.get("id") or envelope.get("message_id") or "").strip()
+            if message_id:
+                baseline[f"{prefix}:{message_id}"] = True
+    _atomic_write_json(seen_path, baseline)
+    return {"initialized": True, "reason": "fresh_install", "count": len(baseline)}
+
+
 def enable() -> dict[str, Any]:
     with _transaction_lock():
         validation = validate_current()
         if not validation.get("passed"):
             raise OnboardingError("cannot enable before read-only validation passes")
-        _write_enabled(True)
+        current_raw = _load_json(CONFIG_PATH, {})
+        current = _sanitize_existing_config(current_raw if isinstance(current_raw, dict) else {})
         state = _load_json(ONBOARDING_FILE, {})
-        if isinstance(state, dict):
-            state["enabled"] = True
-            state["updated_at"] = _now()
-            _atomic_write_json(ONBOARDING_FILE, state)
-        return {"passed": True, "enabled": True, "validation": validation}
+        if not isinstance(state, dict):
+            state = {}
+        baseline = _initialize_seen_baseline(current, state)
+        _write_enabled(True)
+        state["enabled"] = True
+        state["updated_at"] = _now()
+        state["baseline_completed"] = True
+        state["baseline_completed_at"] = _now()
+        state["baseline_count"] = baseline["count"]
+        _atomic_write_json(ONBOARDING_FILE, state)
+        return {
+            "passed": True,
+            "enabled": True,
+            "validation": validation,
+            "baseline": baseline,
+            "historical_messages_replayed": False,
+        }
 
 
 def disable() -> dict[str, Any]:

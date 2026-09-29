@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -65,6 +66,45 @@ class WindowsHimalayaPathTests(unittest.TestCase):
             self.assertTrue(result["passed"])
             self.assertEqual("ustc.toml", run.call_args.args[0][2])
             self.assertEqual(self.WINDOWS_CONFIG.rsplit("\\", 1)[0], run.call_args.kwargs["cwd"])
+
+    def test_fresh_enable_baselines_existing_envelopes_without_reading_bodies(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config_path = root / "ustc.toml"
+            config_path.write_text("", encoding="utf-8")
+            seen_path = root / "seen.json"
+            config = {
+                "accounts": [
+                    {
+                        "id": "ustc",
+                        "type": "himalaya",
+                        "himalaya_config": str(config_path),
+                        "config": str(config_path),
+                    }
+                ],
+                "paths": {"seen": str(seen_path)},
+                "watchdog": {"lookback": 5},
+            }
+            with mock.patch.object(
+                onboarding,
+                "_baseline_account_envelopes",
+                return_value=[{"id": "old-1"}, {"message_id": "old-2"}],
+            ) as envelopes:
+                result = onboarding._initialize_seen_baseline(config, {})
+            self.assertEqual({"ustc:old-1": True, "ustc:old-2": True}, json.loads(seen_path.read_text()))
+            self.assertEqual(2, result["count"])
+            envelopes.assert_called_once()
+
+    def test_completed_baseline_is_never_replayed_or_rebuilt(self):
+        with tempfile.TemporaryDirectory() as td:
+            seen_path = Path(td) / "seen.json"
+            seen_path.write_text('{"ustc:existing": true}', encoding="utf-8")
+            config = {"accounts": [], "paths": {"seen": str(seen_path)}, "watchdog": {"lookback": 5}}
+            with mock.patch.object(onboarding, "_baseline_account_envelopes") as envelopes:
+                result = onboarding._initialize_seen_baseline(config, {"baseline_completed": True})
+            self.assertFalse(result["initialized"])
+            self.assertEqual({"ustc:existing": True}, json.loads(seen_path.read_text()))
+            envelopes.assert_not_called()
 
 
 if __name__ == "__main__":

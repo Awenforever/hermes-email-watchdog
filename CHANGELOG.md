@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.7 - 2026-09-29
+
+- On first enable, establish a read-only envelope baseline before scheduling.
+  Existing messages are recorded as already seen without reading bodies,
+  downloading attachments, invoking a model, or sending notifications.
+- Preserve an existing seen index and completed baseline across upgrades,
+  disable/enable cycles, uninstall, and reinstall so historical mail is never
+  replayed accidentally.
+
 ## 0.9.6 - 2026-09-29
 
 - Generate a strictly validated PowerShell `EncodedCommand` for Windows
