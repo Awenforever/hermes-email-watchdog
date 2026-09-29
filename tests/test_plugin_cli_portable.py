@@ -64,14 +64,53 @@ class PluginCliPortableTests(unittest.TestCase):
         self.assertEqual((state / "enabled").read_text(encoding="utf-8"), "false\n")
         self.assertFalse(self.command("status")["enabled"])
 
-    def test_install_runtime_is_profile_scoped_and_backed_up(self):
+    def test_install_runtime_is_profile_scoped_and_idempotent(self):
         first = self.command("install-runtime")
         hook = self.home / "hooks" / "hermes-email-watchdog"
         self.assertEqual(Path(first["hook"]), hook)
         self.assertTrue((hook / "HOOK.yaml").is_file())
         second = self.command("install-runtime")
-        self.assertTrue(Path(second["backup"]).is_dir())
-        self.assertTrue((Path(second["backup"]) / "HOOK.yaml").is_file())
+        self.assertIsNone(first["backup"])
+        self.assertIsNone(second["backup"])
+        manifest = json.loads(
+            (self.home / "plugin-data" / "hermes-email-watchdog" / "install" / "runtime-install.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertTrue(manifest["installed"])
+        self.assertEqual("hermes-email-watchdog", manifest["owner"])
+
+    def test_uninstall_runtime_removes_owned_hook_and_preserves_user_data(self):
+        self.command("install-runtime")
+        state = self.home / "plugin-data" / "hermes-email-watchdog"
+        (state / "config.json").write_text('{"keep": true}\n', encoding="utf-8")
+        result = self.command("uninstall-runtime")
+        self.assertTrue(result["runtime_removed"])
+        self.assertTrue(result["user_data_preserved"])
+        self.assertFalse((self.home / "hooks" / "hermes-email-watchdog").exists())
+        self.assertEqual('{"keep": true}\n', (state / "config.json").read_text(encoding="utf-8"))
+
+    def test_runtime_lifecycle_refuses_to_overwrite_or_remove_external_changes(self):
+        self.command("install-runtime")
+        hook = self.home / "hooks" / "hermes-email-watchdog"
+        (hook / "HOOK.yaml").write_text("externally changed\n", encoding="utf-8")
+        for action in ("install-runtime", "uninstall-runtime"):
+            with contextlib.redirect_stderr(io.StringIO()):
+                rc = self.module.email_watchdog_command(Namespace(email_watchdog_action=action))
+            self.assertEqual(2, rc)
+        self.assertEqual("externally changed\n", (hook / "HOOK.yaml").read_text(encoding="utf-8"))
+
+    def test_runtime_lifecycle_backs_up_and_restores_foreign_hook(self):
+        hook = self.home / "hooks" / "hermes-email-watchdog"
+        hook.mkdir(parents=True)
+        (hook / "HOOK.yaml").write_text("original foreign hook\n", encoding="utf-8")
+        installed = self.command("install-runtime")
+        backup = Path(installed["backup"])
+        self.assertTrue(backup.is_dir())
+        self.assertEqual("original foreign hook\n", (backup / "HOOK.yaml").read_text(encoding="utf-8"))
+        removed = self.command("uninstall-runtime")
+        self.assertTrue(removed["previous_hook_restored"])
+        self.assertEqual("original foreign hook\n", (hook / "HOOK.yaml").read_text(encoding="utf-8"))
 
     def test_enable_fails_closed_until_read_only_validation_passes(self):
         output = io.StringIO()

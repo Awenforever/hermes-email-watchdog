@@ -32,12 +32,19 @@ Upgrade:
 bash upgrade.sh
 ```
 
-Default uninstall removes code and the active Hook while preserving all owned
-configuration, onboarding, state, and learning data:
+Default uninstall first removes only the runtime Hook owned by this plugin,
+then removes the plugin package. Configuration, mailbox authentication,
+onboarding, state, and learning data remain in the Hermes profile:
 
 ```bash
-bash uninstall.sh
+hermes email-watchdog uninstall-runtime
+hermes plugins remove hermes-email-watchdog
 ```
+
+`uninstall-runtime` works on Windows, Linux, WSL2, and Docker. It verifies the
+installed files before removal, refuses to touch externally changed files, and
+restores a pre-existing Hook when one was backed up. `bash uninstall.sh`
+remains available for legacy POSIX installations.
 
 Destructive purge requires:
 

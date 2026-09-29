@@ -93,6 +93,10 @@ hermes email-watchdog status
 # 确认无误后启用；也可随时立即停用
 hermes email-watchdog enable
 hermes email-watchdog disable
+
+# 卸载运行代码并保留邮箱认证、配置和历史状态，然后移除插件包
+hermes email-watchdog uninstall-runtime
+hermes plugins remove hermes-email-watchdog
 ```
 
 Email Watchdog 需要读取环境变量型凭据、调用 Himalaya、通过 Hermes 访问模型并投递消息，因此 Hermes 的社区插件安全扫描可能要求你确认这些能力。请先查看扫描结果；确认仓库来源与权限符合预期后再批准。不要关闭全局安全扫描。首次启用后按 Hermes 提示重启 gateway，再继续 `setup`，已完成步骤不会重复。
@@ -118,7 +122,7 @@ Email Watchdog 需要读取环境变量型凭据、调用 Himalaya、通过 Herm
 plugin-data/hermes-email-watchdog/
 ```
 
-安装与升级会保留邮箱认证、通知目标、个性化设置和历史状态；已自定义的策略不会被新版默认值覆盖。写入采用锁、临时文件替换与失败回滚，默认卸载也会保留用户数据。
+安装与升级会保留邮箱认证、通知目标、个性化设置和历史状态；已自定义的策略不会被新版默认值覆盖。写入采用锁、临时文件替换与失败回滚。默认卸载只移除插件拥有的运行代码，若运行文件曾被外部修改则拒绝操作；邮箱认证、配置和历史状态均会保留，重装后可无缝继续。
 
 ## 运行要求
 

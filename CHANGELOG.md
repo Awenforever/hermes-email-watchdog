@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.8 - 2026-09-29
+
+- Add a portable `uninstall-runtime` lifecycle command for Windows, Linux,
+  WSL2, and Docker. It removes only the Hook owned by Email Watchdog while
+  preserving mailbox authentication, configuration, indexes, learning data,
+  attachments, schedules, and the durable outbox.
+- Record the installed runtime hash, refuse to overwrite or remove externally
+  changed files, and restore any genuinely pre-existing Hook on uninstall.
+- Make repeated runtime installation idempotent instead of creating redundant
+  backups of byte-identical plugin files.
+
 ## 0.9.7 - 2026-09-29
 
 - On first enable, establish a read-only envelope baseline before scheduling.

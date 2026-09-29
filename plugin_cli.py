@@ -56,6 +56,7 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
     actions.add_parser("status", help="Show runtime and account readiness")
     actions.add_parser("setup", help="Inspect guided mailbox onboarding and show the next unresolved step")
     actions.add_parser("install-runtime", help="Install or refresh the profile-scoped gateway hook")
+    actions.add_parser("uninstall-runtime", help="Remove owned runtime code while preserving all user data")
     mail_client = actions.add_parser("himalaya-install", help="Install the vetted profile-scoped Himalaya mail client")
     mail_client.add_argument("--yes", action="store_true", help="Confirm the download and profile-scoped installation")
     actions.add_parser("enable", help="Enable read-only polling")
@@ -70,24 +71,114 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(func=email_watchdog_command)
 
 
+def _tree_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    if not path.is_dir():
+        return ""
+    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+        digest.update(item.relative_to(path).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(item.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _runtime_manifest_path() -> Path:
+    return _state() / "install" / "runtime-install.json"
+
+
+def _write_json_atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
 def _install_runtime() -> int:
     source = _root() / "hooks" / "hermes-email-watchdog"
     target = _hook()
+    source_hash = _tree_hash(source)
+    manifest_path = _runtime_manifest_path()
+    previous_manifest = _load_json(manifest_path)
+    previous_backup = str(previous_manifest.get("original_backup") or "")
+    previous_installed_hash = str(previous_manifest.get("installed_sha256") or "")
+    target_hash = _tree_hash(target)
+    if target.exists() and previous_installed_hash and target_hash != previous_installed_hash:
+        print("Refusing to overwrite a runtime Hook changed outside Email Watchdog.", file=sys.stderr)
+        return 2
     target.parent.mkdir(parents=True, exist_ok=True)
     stage = target.with_name(f".{target.name}.stage")
     if stage.exists():
         shutil.rmtree(stage)
     shutil.copytree(source, stage)
-    backup = None
+    backup = previous_backup or None
     if target.exists():
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = _state() / "hook-backups" / stamp
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
-        target.replace(backup_path)
-        backup = str(backup_path)
+        # A byte-identical Hook was installed by Hermes from this plugin and
+        # belongs to this lifecycle; it is not pre-existing user state.
+        if not previous_manifest and target_hash != source_hash:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = _state() / "hook-backups" / stamp
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            target.replace(backup_path)
+            backup = str(backup_path)
+        else:
+            shutil.rmtree(target)
     stage.replace(target)
     _state().mkdir(parents=True, exist_ok=True)
+    _write_json_atomic(
+        manifest_path,
+        {
+            "owner": "hermes-email-watchdog",
+            "installed": True,
+            "installed_sha256": source_hash,
+            "original_backup": backup or "",
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "user_data_deleted": False,
+        },
+    )
     print(json.dumps({"ok": True, "hook": str(target), "backup": backup}))
+    return 0
+
+
+def _uninstall_runtime() -> int:
+    source = _root() / "hooks" / "hermes-email-watchdog"
+    target = _hook()
+    manifest_path = _runtime_manifest_path()
+    manifest = _load_json(manifest_path)
+    expected_hash = str(manifest.get("installed_sha256") or _tree_hash(source))
+    if target.exists() and _tree_hash(target) != expected_hash:
+        print("Refusing to remove a runtime Hook changed outside Email Watchdog.", file=sys.stderr)
+        return 2
+    if target.exists():
+        shutil.rmtree(target)
+    backup_text = str(manifest.get("original_backup") or "")
+    restored = False
+    if backup_text:
+        backup = Path(backup_text)
+        if not backup.is_dir():
+            print("Owned runtime backup is missing; refusing incomplete uninstall.", file=sys.stderr)
+            return 2
+        backup.replace(target)
+        restored = True
+    manifest.update(
+        {
+            "owner": "hermes-email-watchdog",
+            "installed": False,
+            "last_uninstalled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "user_data_deleted": False,
+        }
+    )
+    _write_json_atomic(manifest_path, manifest)
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "runtime_removed": not target.exists() or restored,
+                "previous_hook_restored": restored,
+                "user_data_preserved": True,
+            }
+        )
+    )
     return 0
 
 
@@ -271,6 +362,8 @@ def email_watchdog_command(args: argparse.Namespace) -> int:
         return _run_onboarding("status")
     if action == "install-runtime":
         return _install_runtime()
+    if action == "uninstall-runtime":
+        return _uninstall_runtime()
     if action == "himalaya-install":
         return _install_himalaya(bool(getattr(args, "yes", False)))
     if action == "enable":
