@@ -261,7 +261,7 @@ def main() -> None:
                 "id": "gmail",
                 "email": "person@gmail.com",
                 "display_name": "Person",
-                "secret_command": "printenv EMAIL_WATCHDOG_IMAP_PASSWORD",
+                "secret_env": "EMAIL_WATCHDOG_IMAP_PASSWORD",
             },
             "enable": False,
         }
@@ -273,6 +273,8 @@ def main() -> None:
         generated = state_root / "email_watchdog_himalaya/gmail.toml"
         content = generated.read_text(encoding="utf-8")
         ok("imap.gmail.com" in content and "smtp" not in content.lower() and "message.send" not in content, "generated TOML contract")
+        expected_secret_reader = "powershell.exe" if os.name == "nt" else "printenv"
+        ok(expected_secret_reader in content, "generated secret reader matches operating system")
         ok(stat.S_IMODE(generated.stat().st_mode) == 0o600, "generated TOML mode")
         cfg = json.loads(Path(env["EMAIL_WATCHDOG_CONFIG"]).read_text(encoding="utf-8"))
         ok(cfg["safety"] == email_config.DEFAULT_CONFIG["safety"], "immutable safety")
@@ -309,6 +311,11 @@ def main() -> None:
         bad2 = {"password": "literal", "accounts": [account], "delivery_target": {"platform": "weixin", "chat_id": "x"}}
         result, _ = run_setup(env_for(root / "case-bad-value", fake), "plan", "--input-json", json.dumps(bad2), expect=2)
         ok("literal secret value" in result["error"], "secret value rejected")
+
+        bad3 = json.loads(json.dumps(payload))
+        bad3["new_himalaya"]["secret_env"] = "unsafe-variable;echo"
+        result, _ = run_setup(env_for(root / "case-bad-env", fake), "plan", "--input-json", json.dumps(bad3), expect=2)
+        ok("secret_env" in result["error"], "unsafe secret environment name rejected")
 
         # Delivery platforms are inherited from Hermes rather than frozen to
         # Weixin.  A valid Hermes channel name must survive the portable plan.

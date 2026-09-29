@@ -158,6 +158,8 @@ ALLOWED_SECRET_COMMAND_PREFIXES = {
     "op",
     "bw",
     "printenv",
+    "powershell",
+    "powershell.exe",
 }
 FORBIDDEN_SECRET_KEYS = {
     "password",
@@ -637,7 +639,29 @@ def _validate_secret_command(command: str) -> str:
     if command_name == "printenv":
         if len(parts) != 2 or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", parts[1]):
             raise OnboardingError("printenv secret_command must reference one uppercase environment variable")
+    if command_name in {"powershell", "powershell.exe"}:
+        pattern = (
+            r'^powershell(?:\.exe)? -NoProfile -NonInteractive -Command '
+            r'"\[Console\]::Out\.Write\(\[Environment\]::GetEnvironmentVariable\('
+            r"'[A-Z_][A-Z0-9_]*','User'\)\)\"$"
+        )
+        if not re.fullmatch(pattern, text, flags=re.IGNORECASE):
+            raise OnboardingError(
+                "PowerShell secret_command must only read one uppercase user environment variable"
+            )
     return command_name
+
+
+def _secret_command_from_env(name: str, platform: str | None = None) -> str:
+    variable = str(name or "").strip()
+    if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", variable):
+        raise OnboardingError("secret_env must name one uppercase environment variable")
+    if (platform or os.name) == "nt":
+        return (
+            "powershell.exe -NoProfile -NonInteractive -Command "
+            f'"[Console]::Out.Write([Environment]::GetEnvironmentVariable(\'{variable}\',\'User\'))"'
+        )
+    return f"printenv {variable}"
 
 
 def _toml_string(value: Any) -> str:
@@ -666,7 +690,11 @@ def _build_himalaya_toml(data: dict[str, Any], account_id: str) -> str:
     host = str(data.get("imap_host") or _infer_imap_host(email)).strip()
     login = str(data.get("imap_login") or email).strip()
     encryption = str(data.get("imap_encryption") or "tls").strip().lower()
-    secret_command = str(data.get("secret_command") or "").strip()
+    secret_env = str(data.get("secret_env") or "").strip()
+    secret_command = (
+        _secret_command_from_env(secret_env)
+        if secret_env else str(data.get("secret_command") or "").strip()
+    )
     try:
         port = int(data.get("imap_port") or 993)
     except Exception as exc:

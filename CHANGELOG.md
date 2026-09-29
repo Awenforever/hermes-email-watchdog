@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.4 - 2026-09-29
+
+- Add `secret_env` onboarding so the plugin generates a safe external secret
+  reader for the active operating system: `printenv` on POSIX and a strictly
+  validated user-environment PowerShell reader on native Windows.
+- Continue rejecting literal passwords and arbitrary shell commands; mailbox
+  credentials never enter the plugin configuration.
+
 ## 0.9.3 - 2026-09-28
 
 - Preserve attachment bytes by exporting the original RFC 822 message and decoding MIME parts locally, avoiding the known Himalaya v1.2.0 binary-attachment corruption path.
