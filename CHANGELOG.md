@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.9 - 2026-09-29
+
+- Exclude generated Python bytecode and operating-system metadata from runtime
+  ownership hashes, so a Hook that has actually run remains safely upgradable
+  and uninstallable.
+- Recognize and stop restoring redundant pre-manifest Hook backups whose source
+  files are identical and differ only by generated runtime cache.
+
 ## 0.9.8 - 2026-09-29
 
 - Add a portable `uninstall-runtime` lifecycle command for Windows, Linux,

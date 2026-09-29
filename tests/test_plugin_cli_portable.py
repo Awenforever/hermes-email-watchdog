@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import hashlib
+import shutil
 import tarfile
 import zipfile
 import sys
@@ -69,6 +70,9 @@ class PluginCliPortableTests(unittest.TestCase):
         hook = self.home / "hooks" / "hermes-email-watchdog"
         self.assertEqual(Path(first["hook"]), hook)
         self.assertTrue((hook / "HOOK.yaml").is_file())
+        cache = hook / "__pycache__"
+        cache.mkdir(exist_ok=True)
+        (cache / "runtime.cpython-311.pyc").write_bytes(b"generated runtime cache")
         second = self.command("install-runtime")
         self.assertIsNone(first["backup"])
         self.assertIsNone(second["backup"])
@@ -79,6 +83,25 @@ class PluginCliPortableTests(unittest.TestCase):
         )
         self.assertTrue(manifest["installed"])
         self.assertEqual("hermes-email-watchdog", manifest["owner"])
+
+    def test_redundant_pre_manifest_backup_is_not_restored(self):
+        self.command("install-runtime")
+        hook = self.home / "hooks" / "hermes-email-watchdog"
+        state = self.home / "plugin-data" / "hermes-email-watchdog"
+        backup = state / "hook-backups" / "legacy"
+        shutil.copytree(hook, backup)
+        cache = backup / "__pycache__"
+        cache.mkdir(exist_ok=True)
+        (cache / "runtime.pyc").write_bytes(b"generated")
+        manifest_path = state / "install" / "runtime-install.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["original_backup"] = str(backup)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        self.command("install-runtime")
+        refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual("", refreshed["original_backup"])
+        self.command("uninstall-runtime")
+        self.assertFalse(hook.exists())
 
     def test_uninstall_runtime_removes_owned_hook_and_preserves_user_data(self):
         self.command("install-runtime")

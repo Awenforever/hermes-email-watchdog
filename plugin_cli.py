@@ -75,7 +75,16 @@ def _tree_hash(path: Path) -> str:
     digest = hashlib.sha256()
     if not path.is_dir():
         return ""
-    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+    ignored_names = {".DS_Store", "Thumbs.db"}
+    files = (
+        candidate
+        for candidate in path.rglob("*")
+        if candidate.is_file()
+        and "__pycache__" not in candidate.relative_to(path).parts
+        and candidate.suffix.casefold() not in {".pyc", ".pyo"}
+        and candidate.name not in ignored_names
+    )
+    for item in sorted(files):
         digest.update(item.relative_to(path).as_posix().encode("utf-8"))
         digest.update(b"\0")
         digest.update(item.read_bytes())
@@ -101,6 +110,11 @@ def _install_runtime() -> int:
     manifest_path = _runtime_manifest_path()
     previous_manifest = _load_json(manifest_path)
     previous_backup = str(previous_manifest.get("original_backup") or "")
+    # Releases before the ownership manifest treated Python's generated cache
+    # as a source change and could create a redundant backup. Never restore an
+    # older byte-identical copy over a clean uninstall.
+    if previous_backup and _tree_hash(Path(previous_backup)) == source_hash:
+        previous_backup = ""
     previous_installed_hash = str(previous_manifest.get("installed_sha256") or "")
     target_hash = _tree_hash(target)
     if target.exists() and previous_installed_hash and target_hash != previous_installed_hash:
