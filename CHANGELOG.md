@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.10 - 2026-09-29
+
+- Keep model ownership in Hermes: fresh installs inherit the active Hermes
+  route, and upgrades preserve every existing primary and fallback model alias.
+- Remove the provider-specific fallback substitution from the portable upgrade
+  path.
+
 ## 0.9.9 - 2026-09-29
 
 - Exclude generated Python bytecode and operating-system metadata from runtime

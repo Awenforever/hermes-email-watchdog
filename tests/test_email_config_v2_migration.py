@@ -167,8 +167,8 @@ class ConfigMigrationTests(unittest.TestCase):
             "custom_extension": {"keep": "exactly"},
             "accounts": [{"id": "private", "email": "user@example.invalid"}],
             "semantic_engine": {
-                "model": "deepseek-flash",
-                "fallback_model": "qwen3.6-chat",
+                "model": "organization/main-model",
+                "fallback_model": "organization/fallback-model",
                 "protocol": "readable_grounded_core_v1u",
             },
             "notification": {"fast_lane_enabled": True},
@@ -182,6 +182,8 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["custom_extension"], {"keep": "exactly"})
         self.assertEqual(migrated["accounts"], raw["accounts"])
         self.assertEqual(migrated["delivery"]["target"], raw["delivery"]["target"])
+        self.assertEqual(migrated["semantic_engine"]["model"], "organization/main-model")
+        self.assertEqual(migrated["semantic_engine"]["fallback_model"], "organization/fallback-model")
         self.assertEqual(raw["version"], 2)
 
     def test_release_migration_leaves_custom_v2_unchanged(self):
@@ -199,24 +201,20 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertFalse(changed)
         self.assertEqual(migrated, raw)
 
-    def test_v6_replaces_only_retired_shipped_ustc_fallback(self):
-        shipped = {
-            "version": 5,
+    def test_sanitize_preserves_arbitrary_hermes_model_aliases(self):
+        raw = {
+            "version": 6,
             "semantic_engine": {
-                "provider": "hermes_openai", "provider_name": "USTC",
-                "model": "deepseek-flash", "fallback_model": "qwen3.6-chat",
+                "provider": "hermes",
+                "provider_name": "private-provider",
+                "model": "organization/main-model",
+                "fallback_model": "organization/fallback-model",
             },
         }
-        migrated, changed = email_onboarding._migrate_known_v6_model_fallback(shipped)
-        self.assertTrue(changed)
-        self.assertEqual(migrated["version"], 6)
-        self.assertEqual(migrated["semantic_engine"]["fallback_model"], "qwen3.8-chat")
-
-        custom = copy.deepcopy(shipped)
-        custom["semantic_engine"]["fallback_model"] = "private-fallback"
-        migrated, changed = email_onboarding._migrate_known_v6_model_fallback(custom)
-        self.assertFalse(changed)
-        self.assertEqual(migrated, custom)
+        migrated = email_onboarding._sanitize_existing_config(raw)
+        self.assertEqual(migrated["semantic_engine"]["provider_name"], "private-provider")
+        self.assertEqual(migrated["semantic_engine"]["model"], "organization/main-model")
+        self.assertEqual(migrated["semantic_engine"]["fallback_model"], "organization/fallback-model")
 
 
 if __name__ == "__main__":

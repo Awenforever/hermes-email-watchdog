@@ -309,8 +309,6 @@ def _migrate_known_v2_assistant_policy(
     delivery = source.get("delivery") if isinstance(source.get("delivery"), dict) else {}
     known_v2_signature = bool(
         source_version == 2
-        and str(semantic.get("model") or "") == "deepseek-flash"
-        and str(semantic.get("fallback_model") or "") == "qwen3.6-chat"
         and str(semantic.get("protocol") or "") == "readable_grounded_core_v1u"
         and notification.get("fast_lane_enabled") is True
         and delivery.get("auto_download_attachments") is False
@@ -319,7 +317,6 @@ def _migrate_known_v2_assistant_policy(
         return source, False
 
     semantic["protocol"] = "readable_grounded_core_v1x"
-    semantic["fallback_model"] = "qwen3.8-chat"
     semantic["num_predict_simple"] = 700
     semantic["num_predict_standard"] = 1200
     semantic["num_predict_complex"] = 1800
@@ -425,25 +422,6 @@ def _migrate_known_v5_storage_policy(
     return source, True
 
 
-def _migrate_known_v6_model_fallback(
-    data: dict[str, Any] | None,
-) -> tuple[dict[str, Any], bool]:
-    """Replace the retired shipped USTC fallback while preserving custom models."""
-    source = copy.deepcopy(data) if isinstance(data, dict) else {}
-    semantic = source.get("semantic_engine") if isinstance(source.get("semantic_engine"), dict) else {}
-    if not (
-        str(semantic.get("provider") or "hermes_openai") == "hermes_openai"
-        and str(semantic.get("provider_name") or "USTC").casefold() == "ustc"
-        and str(semantic.get("model") or "") == "deepseek-flash"
-        and str(semantic.get("fallback_model") or "") == "qwen3.6-chat"
-    ):
-        return source, False
-    semantic["fallback_model"] = "qwen3.8-chat"
-    source["semantic_engine"] = semantic
-    source["version"] = 6
-    return source, True
-
-
 def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     source = data if isinstance(data, dict) else {}
     try:
@@ -504,8 +482,6 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     allowed, _ = _migrate_known_v3_assistant_policy(allowed)
     allowed, _ = _migrate_known_v4_presentation_policy(allowed)
     allowed, _ = _migrate_known_v5_storage_policy(allowed)
-    allowed, _ = _migrate_known_v6_model_fallback(allowed)
-
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
     cfg["version"] = 7
     cfg["paths"] = {
@@ -1180,8 +1156,7 @@ def migrate_current_config() -> dict[str, Any]:
         migrated, changed_v3 = _migrate_known_v3_assistant_policy(migrated)
         migrated, changed_v4 = _migrate_known_v4_presentation_policy(migrated)
         migrated, changed_v5 = _migrate_known_v5_storage_policy(migrated)
-        migrated, changed_v6 = _migrate_known_v6_model_fallback(migrated)
-        changed = changed_v2 or changed_v3 or changed_v4 or changed_v5 or changed_v6
+        changed = changed_v2 or changed_v3 or changed_v4 or changed_v5
         if not changed:
             return {
                 "passed": True,
