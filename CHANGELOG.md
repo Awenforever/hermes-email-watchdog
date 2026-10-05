@@ -6,6 +6,9 @@
   allowing Hermes' configured provider/model fallback chain to run after a
   primary provider authorization failure. No provider, credential, or fallback
   model is copied into Email Watchdog.
+- Allow guided setup to clear prior plugin-specific model pins explicitly, so
+  an existing installation can return to the inherited Hermes route without
+  hand-editing configuration files.
 
 ## 0.10.0 - 2026-10-05
 

@@ -928,9 +928,9 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
         semantic["enabled"] = bool(options["semantic_enabled"])
     elif "ollama_enabled" in options:  # compatibility with early onboarding payloads
         semantic["enabled"] = bool(options["ollama_enabled"])
-    if options.get("semantic_model"):
+    if "semantic_model" in options:
         semantic["model"] = str(options["semantic_model"]).strip()
-    if options.get("semantic_fallback_model"):
+    if "semantic_fallback_model" in options:
         semantic["fallback_model"] = str(options["semantic_fallback_model"]).strip()
 
     notification = cfg.setdefault("notification", {})
