@@ -1,5 +1,31 @@
 # Release acceptance
 
+## 0.10.1 evidence-complete publication acceptance
+
+The production candidate completed final acceptance on 2026-10-05:
+
+- Windows regression suite: 400 tests passed, with 4 POSIX-only concurrency
+  cases skipped by platform.
+- Linux/NAS regression suite: 400 tests passed, including the POSIX runtime
+  paths.
+- Ten consecutive isolated rounds used 20 unique real historical mailbox
+  messages with zero plugin errors. The sample covered academic reports and
+  attachments, account login links, bills and electronic invoices, spam,
+  service-disconnection notices, conference correspondence, school platform
+  messages, and manuscript review requests.
+- Eighteen messages completed semantic and final editorial review. Two
+  deliberately observed editorial failures completed the evidence-preserving
+  degraded path with zero missing safe artifacts, malformed Markdown, mailbox
+  chrome, or attachment loss.
+- Replays used read-only raw export, isolated databases/state/attachments, and
+  no message delivery. They did not alter mailbox flags or enqueue historical
+  notifications.
+
+Evidence is stored on the production host under
+`/opt/data/migration-staging/email-watchdog-v0101-acceptance/streak-r01`
+through `streak-r10`. The accepted source lineage ends at the public commit
+recorded by the installed package checksums.
+
 ## 0.6.1 card identity and receipt-time acceptance
 
 The `0.6.1` production candidate passed the following isolated acceptance on
