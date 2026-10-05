@@ -33,6 +33,11 @@ The deterministic runtime is therefore an evidence fallback, not a substitute
 semantic model. Model fallback remains Hermes' configured primary/fallback
 route and is outside this plugin's credential ownership.
 
+An inherited model route must call Hermes with provider `auto`, not merely an
+empty model name on an auxiliary task. The latter can remain pinned to the
+primary provider and never traverse Hermes' cross-provider fallback chain after
+an authorization failure.
+
 ## Regression rule
 
 Do not fix missing evidence by adding a phrase such as “click”, “log in”, or

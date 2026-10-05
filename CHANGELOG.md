@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1 - 2026-10-05
+
+- Enter an inherited Hermes model route through the `auto` provider boundary,
+  allowing Hermes' configured provider/model fallback chain to run after a
+  primary provider authorization failure. No provider, credential, or fallback
+  model is copied into Email Watchdog.
+
 ## 0.10.0 - 2026-10-05
 
 - Add an evidence-complete publication boundary. If final model editorial

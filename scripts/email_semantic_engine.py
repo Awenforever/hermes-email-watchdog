@@ -1036,10 +1036,20 @@ def _hermes_request(
 
     route_info: Dict[str, str] = {}
     model = str(settings.get("model") or "").strip() or None
+    # An inherited route must enter Hermes through ``auto``.  Passing no
+    # provider lets an auxiliary task resolve to the explicit primary provider;
+    # Hermes intentionally does not leave an explicit provider after an auth
+    # error, so its configured main fallback chain would never be reached.
+    # ``auto`` keeps provider/model/credentials owned by Hermes while allowing
+    # the complete primary -> fallback route to run.
+    route_provider = str(settings.get("hermes_provider") or "").strip() or None
+    if model is None and route_provider is None:
+        route_provider = "auto"
     started = time.monotonic()
     try:
         response = call_llm(
             task="email_watchdog",
+            provider=route_provider,
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=float(temperature),

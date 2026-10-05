@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -175,6 +176,33 @@ class EvidenceContractTests(unittest.TestCase):
         ])
         self.assertEqual(result["model"], "hermes-live")
         self.assertTrue(result["metrics"]["hermes_default_route_used"])
+
+    def test_inherited_hermes_route_enters_auto_provider_for_full_fallback_chain(self):
+        calls = []
+        auxiliary = types.ModuleType("agent.auxiliary_client")
+
+        def call_llm(**kwargs):
+            calls.append(kwargs)
+            kwargs["route_info"].update({
+                "resolved_provider": "deepseek", "resolved_model": "deepseek-chat",
+            })
+            return {"choices": [{"message": {"content": '{"ok":true}'}}]}
+
+        auxiliary.call_llm = call_llm
+        auxiliary.extract_content_or_reasoning = (
+            lambda response: response["choices"][0]["message"]["content"]
+        )
+        agent = types.ModuleType("agent")
+        with mock.patch.dict(sys.modules, {
+            "agent": agent, "agent.auxiliary_client": auxiliary,
+        }):
+            result = email_semantic_engine._hermes_request(
+                "prompt", {"model": ""}, timeout_seconds=10,
+                temperature=0.0, num_predict=100,
+            )
+        self.assertEqual(calls[0]["provider"], "auto")
+        self.assertIsNone(calls[0]["model"])
+        self.assertEqual(result["metrics"]["resolved_provider"], "deepseek")
 
     def test_editorial_review_uses_hermes_default_after_both_pins_fail(self):
         attempts = []
