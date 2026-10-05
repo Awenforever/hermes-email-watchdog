@@ -25,17 +25,19 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 try:
     import email_config
+    import email_evidence_contract
     import email_feature_extractor
     import email_semantic_schema
     import email_semantic_core
 except Exception:  # Import safety: delivery wrapper catches and logs failures.
     email_config = None
+    email_evidence_contract = None
     email_feature_extractor = None
     email_semantic_schema = None
     email_semantic_core = None
 
 MARKER = "EMAIL_WATCHDOG_SEMANTIC_ENGINE_READABLE_GROUNDED_CORE_ADAPTIVE_OUTPUT_BUDGET_SHADOW_V1"
-PROMPT_VERSION = "semantic_v2_assistant_actions_editorial_v2_20260923"
+PROMPT_VERSION = "semantic_v2_assistant_actions_evidence_bound_20261005"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 STATE_ROOT = Path(
     os.environ.get(
@@ -140,6 +142,8 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
         "api_key_env": "",
         "endpoint": "",
         "model": "",
+        "fallback_model": "",
+        "inherit_default_on_failure": True,
         "timeout_seconds": 300,
         "temperature": 0.1,
         "max_body_chars": 12000,
@@ -170,6 +174,10 @@ def _settings(override: Mapping[str, Any] | None = None) -> Dict[str, Any]:
     endpoint_default = "http://127.0.0.1:11434" if defaults["provider"] == "ollama" else ""
     defaults["endpoint"] = str(defaults.get("endpoint") or endpoint_default).rstrip("/")
     defaults["model"] = str(defaults.get("model") or "").strip()
+    defaults["fallback_model"] = str(defaults.get("fallback_model") or "").strip()
+    defaults["inherit_default_on_failure"] = bool(
+        defaults.get("inherit_default_on_failure", True)
+    )
     defaults["timeout_seconds"] = max(1, min(1800, int(defaults.get("timeout_seconds") or 300)))
     defaults["temperature"] = max(0.0, min(1.0, float(defaults.get("temperature", 0.1))))
     defaults["max_body_chars"] = max(1000, min(50000, int(defaults.get("max_body_chars") or 12000)))
@@ -405,6 +413,10 @@ def _facts(email: Mapping[str, Any], features: Mapping[str, Any]) -> Dict[str, A
         # and is never persisted in semantic_observations.
         "source_subject": subject_text,
         "source_body": body_text,
+        "source_link_inventory": (
+            email_evidence_contract.prompt_inventory(email)
+            if email_evidence_contract is not None else []
+        ),
     }
 
 
@@ -562,6 +574,10 @@ def _safe_payload(
             "names": _attachment_names(email),
             "profile": dict(features.get("attachment_profile") or {}),
         },
+        "link_inventory": (
+            email_evidence_contract.prompt_inventory(email)
+            if email_evidence_contract is not None else []
+        ),
         "deterministic_facts": {
             "code_candidates": list(features.get("code_candidates") or [])[:8],
             "body_shape": dict(features.get("body_shape") or {}),
@@ -1195,32 +1211,48 @@ def _call_model_once(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]
 
 
 def call_ollama(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
-    """Run the configured model, then one explicitly configured sibling model.
-
-    The fallback reuses the same provider credentials and bounded request
-    policy. It is attempted only when ``fallback_model`` is present and differs
-    from the primary, preserving legacy behavior for existing configurations.
-    """
+    """Use explicit model preferences, then return routing to Hermes itself."""
     primary_model = str(settings.get("model") or "").strip()
     fallback_model = str(settings.get("fallback_model") or "").strip()
-    try:
-        return _call_model_once(prompt, settings)
-    except Exception as primary_error:
-        if not fallback_model or fallback_model == primary_model:
-            raise
-        fallback_settings = dict(settings)
-        fallback_settings["model"] = fallback_model
-        result = _call_model_once(prompt, fallback_settings)
-        metrics = dict(result.get("metrics") or {})
-        metrics.update({
-            "model_fallback_used": True,
-            "primary_model": primary_model,
-            "fallback_model": fallback_model,
-            "primary_error_type": type(primary_error).__name__,
-        })
-        result["metrics"] = metrics
-        result["model"] = fallback_model
-        return result
+    models: list[str] = []
+    for candidate in (primary_model, fallback_model):
+        if candidate not in models:
+            models.append(candidate)
+    if (
+        str(settings.get("provider") or "hermes").strip().lower() in {"hermes", "hermes_openai"}
+        and bool(settings.get("inherit_default_on_failure", True))
+        and any(models)
+        and "" not in models
+    ):
+        models.append("")
+    if not models:
+        models = [""]
+
+    errors: list[tuple[str, Exception]] = []
+    for index, model_name in enumerate(models):
+        call_settings = dict(settings)
+        call_settings["model"] = model_name
+        call_settings["fallback_model"] = ""
+        try:
+            result = _call_model_once(prompt, call_settings)
+            metrics = dict(result.get("metrics") or {})
+            metrics.update({
+                "model_fallback_used": index > 0,
+                "primary_model": primary_model,
+                "configured_fallback_model": fallback_model,
+                "fallback_model": model_name,
+                "primary_error_type": type(errors[0][1]).__name__ if errors else "",
+                "hermes_default_route_used": model_name == "" and bool(primary_model or fallback_model),
+                "attempted_models": [name or "<hermes-default>" for name, _ in errors] + [model_name or "<hermes-default>"],
+                "failed_attempt_types": [type(error).__name__ for _, error in errors],
+            })
+            result["metrics"] = metrics
+            return result
+        except Exception as exc:
+            if isinstance(exc, SemanticEngineTruncated):
+                raise
+            errors.append((model_name, exc))
+    raise errors[-1][1]
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -1552,71 +1584,95 @@ def analyze_email(
             return normalized, candidate_errors, [], keys
 
         decision, errors, normalization_repairs, model_core_keys = normalize_response(response)
-        # Transport-level fallback already handles timeouts and malformed JSON.
-        # A syntactically valid response can still fail our grounded schema;
-        # give the configured sibling model one clean attempt before using the
-        # conservative deterministic fallback.
+        # Transport-level fallback handles request failures. A syntactically
+        # valid response can still fail the grounded schema, so continue across
+        # every route not already attempted: explicit fallback, then Hermes'
+        # live default route. Deterministic rendering is not a model substitute.
         fallback_model = str(effective_settings.get("fallback_model") or "").strip()
         response_model = str(response.get("model") or model).strip()
-        if (
-            (errors or decision is None)
-            and transport is None
-            and fallback_model
-            and fallback_model != response_model
-        ):
+        if (errors or decision is None) and transport is None:
             primary_validation_errors = list(errors or ["schema normalization failed"])
-            fallback_settings = dict(effective_settings)
-            fallback_settings["model"] = fallback_model
-            fallback_settings["fallback_model"] = ""
-            with _CALL_LOCK:
-                fallback_response = _call_model_once(prompt, fallback_settings)
-            fallback_decision, fallback_errors, fallback_repairs, fallback_keys = normalize_response(
-                fallback_response
+            attempted_markers = set(
+                str(item) for item in (response.get("metrics") or {}).get("attempted_models", [])
             )
-            if not fallback_errors and fallback_decision is not None:
-                response = fallback_response
-                decision = fallback_decision
+            attempted_markers.add(response_model)
+            retry_models: list[str] = []
+            if fallback_model and fallback_model not in attempted_markers:
+                retry_models.append(fallback_model)
+            use_hermes_default = (
+                str(effective_settings.get("provider") or "hermes").strip().lower()
+                in {"hermes", "hermes_openai"}
+                and bool(effective_settings.get("inherit_default_on_failure", True))
+                and not bool((response.get("metrics") or {}).get("hermes_default_route_used"))
+                and "<hermes-default>" not in attempted_markers
+            )
+            if use_hermes_default:
+                retry_models.append("")
+
+            retry_errors: list[str] = []
+            for retry_model in retry_models:
+                retry_settings = dict(effective_settings)
+                retry_settings["model"] = retry_model
+                retry_settings["fallback_model"] = ""
+                try:
+                    with _CALL_LOCK:
+                        retry_response = _call_model_once(prompt, retry_settings)
+                except Exception as retry_exc:
+                    retry_errors.append(
+                        f"{retry_model or '<hermes-default>'}: {_safe_error(retry_exc)}"
+                    )
+                    continue
+                retry_decision, candidate_errors, retry_repairs, retry_keys = normalize_response(
+                    retry_response
+                )
+                subject_bridge_used = False
+                if candidate_errors or retry_decision is None:
+                    # Retain the existing narrowly scoped grounding bridge, but
+                    # apply it to each real model route rather than ending the
+                    # chain after one configured alias.
+                    bridge_facts = dict(facts)
+                    bridge_facts["_allow_subject_bridge_for_editor"] = True
+                    bridge_decision, bridge_errors, bridge_repairs, bridge_keys = normalize_response(
+                        retry_response, bridge_facts
+                    )
+                    if not bridge_errors and bridge_decision is not None:
+                        retry_decision = bridge_decision
+                        candidate_errors = []
+                        retry_repairs = bridge_repairs
+                        retry_keys = bridge_keys
+                        subject_bridge_used = True
+                    else:
+                        retry_errors.extend(
+                            f"{retry_model or '<hermes-default>'}: {value}"
+                            for value in (candidate_errors or ["schema normalization failed"])
+                        )
+                        continue
+
+                response = retry_response
+                decision = retry_decision
                 errors = []
-                normalization_repairs = fallback_repairs
-                model_core_keys = fallback_keys
+                normalization_repairs = retry_repairs
+                model_core_keys = retry_keys
                 model_fallback_used = True
-                fallback_metrics = dict(fallback_response.get("metrics") or {})
+                fallback_metrics = dict(retry_response.get("metrics") or {})
                 fallback_metrics.update({
                     "model_fallback_used": True,
                     "primary_model": response_model,
-                    "fallback_model": fallback_model,
+                    "fallback_model": retry_model,
                     "fallback_trigger": "schema_validation",
                     "primary_validation_errors": primary_validation_errors[:8],
+                    "semantic_subject_bridge_used": subject_bridge_used,
+                    "hermes_default_route_used": retry_model == "",
                 })
                 response["metrics"] = fallback_metrics
+                break
             else:
-                bridge_facts = dict(facts)
-                bridge_facts["_allow_subject_bridge_for_editor"] = True
-                bridge_decision, bridge_errors, bridge_repairs, bridge_keys = normalize_response(
-                    fallback_response, bridge_facts
-                )
-                if not bridge_errors and bridge_decision is not None:
-                    response = fallback_response
-                    decision = bridge_decision
-                    errors = []
-                    normalization_repairs = bridge_repairs
-                    model_core_keys = bridge_keys
-                    model_fallback_used = True
-                    fallback_metrics = dict(fallback_response.get("metrics") or {})
-                    fallback_metrics.update({
-                        "model_fallback_used": True,
-                        "semantic_subject_bridge_used": True,
-                        "primary_model": response_model,
-                        "fallback_model": fallback_model,
-                        "fallback_trigger": "schema_validation_then_grounded_bridge",
-                        "primary_validation_errors": primary_validation_errors[:8],
-                        "fallback_validation_errors": list(fallback_errors)[:8],
-                    })
-                    response["metrics"] = fallback_metrics
-                else:
-                    errors = primary_validation_errors + [
-                        "fallback: " + value for value in (fallback_errors or ["schema normalization failed"])
-                    ]
+                errors = primary_validation_errors + retry_errors
+
+            # Compatibility: a valid retry exits above; invalid retries leave a
+            # complete audit trail for the transparent evidence fallback.
+            if errors and decision is not None:
+                decision = None
 
         raw_fields = _raw_semantic_fields(response.get("parsed"))
         raw_category = raw_fields["raw_category"]

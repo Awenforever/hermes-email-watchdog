@@ -67,18 +67,18 @@ class DeliveryRouteTests(unittest.TestCase):
    m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
    r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
    self.assertEqual(r['route_lane'],'fast'); llm.assert_not_called(); persist.assert_called_once()
- def test_03_semantic_fallback_uses_legacy_once(self):
+ def test_03_semantic_fallback_uses_lossless_evidence_card(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
        mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
        mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":True,"timeout":True,"error_code":"timeout","decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
-       mock.patch('email_production_router.legacy_fallback_analysis',return_value={"should_notify":True}), \
-       mock.patch.object(email_delivery,'_ew_v4_original_deliver_email',return_value={"notification_text":"LEGACY","status":"pushed"}) as legacy:
-   m['production_route_enabled'].return_value=True
+       mock.patch('email_production_router.legacy_fallback_analysis') as legacy_analysis, \
+       mock.patch.object(email_delivery,'_ew_v4_original_deliver_email') as legacy:
+   m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
    r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
-   self.assertEqual(r['notification_text'],'LEGACY'); self.assertTrue(r['legacy_fallback_used']); self.assertEqual(r['semantic']['error_code'],'timeout'); self.assertIn('editorial',r); legacy.assert_called_once(); persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'legacy_fallback')
+   self.assertNotEqual(r['notification_text'],'LEGACY'); self.assertFalse(r['legacy_fallback_used']); self.assertEqual(r['semantic']['error_code'],'timeout'); self.assertEqual(r['renderer']['renderer_version'],'evidence_lossless_v1'); self.assertTrue(r['renderer']['degraded']); legacy.assert_not_called(); legacy_analysis.assert_not_called(); persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'intelligent_v2')
  def test_04_composer_failure_uses_semantic_emergency_not_legacy(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \

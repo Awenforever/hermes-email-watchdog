@@ -589,7 +589,9 @@ Best regards""",
         text = composer.render_notification(email, decision)["text"]
         self.assertNotIn("please visit", text)
         self.assertIn("确认是否授权 Crossref", text)
-        self.assertIn("授权 Crossref 更新 ORCID", text)
+        # Legacy decisions without evidence IDs retain the source label instead
+        # of inventing a semantic label and binding it to a URL by guesswork.
+        self.assertIn("[Grant permission]", text)
 
     def test_runtime_chrome_preserves_mailbox_and_distinguishes_received_from_sent(self):
         email = {

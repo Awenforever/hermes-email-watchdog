@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import email_assistant_composer
 import email_semantic_engine
 
-EDITOR_VERSION = "model_editorial_gate_v2n"
+EDITOR_VERSION = "model_editorial_gate_v2o"
 _NOISE = re.compile(
     r"(?i)forwarded message|original message|\[image(?::[^\]]*)?\]|"
     r"unsubscribe|manage preferences|举报退订"
@@ -652,6 +652,15 @@ def review_notification(
     fallback = str(settings.get("fallback_model") or "").strip()
     if fallback and fallback not in models:
         models.append(fallback)
+    if (
+        str(settings.get("provider") or "hermes").strip().lower() in {"hermes", "hermes_openai"}
+        and bool(settings.get("inherit_default_on_failure", True))
+        and any(models)
+        and "" not in models
+    ):
+        # Empty means "let Hermes choose its live primary/fallback route".  Do
+        # not scrape a provider's 403 body and invent an unconfigured model.
+        models.append("")
     for model in models:
         call_settings = dict(settings)
         call_settings["model"] = model
@@ -778,7 +787,9 @@ def review_notification(
                 return normalized
             errors.extend(f"{model}:{item}" for item in validation_errors)
         except Exception as exc:
-            errors.append(f"{model}:{type(exc).__name__}:{str(exc)[:240]}")
+            errors.append(
+                f"{model or '<hermes-default>'}:{type(exc).__name__}:{str(exc)[:240]}"
+            )
     return {"ok": False, "version": EDITOR_VERSION, "errors": errors[:12], "links": links}
 
 

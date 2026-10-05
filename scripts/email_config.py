@@ -65,6 +65,9 @@ DEFAULT_CONFIG = {
         "api_key_env": "",
         "model": "",
         "fallback_model": "",
+        # Explicit plugin pins are preferences, not a second provider registry.
+        # If both pins are unavailable, return to Hermes' live default route.
+        "inherit_default_on_failure": True,
         "timeout_seconds": 120,
         "temperature": 0.0,
         "max_body_chars": 16000,

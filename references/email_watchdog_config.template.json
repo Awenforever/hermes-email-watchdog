@@ -36,6 +36,7 @@
     "api_key_env": "",
     "model": "",
     "fallback_model": "",
+    "inherit_default_on_failure": true,
     "timeout_seconds": 120,
     "temperature": 0.0,
     "max_body_chars": 16000,

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.11 - 2026-10-05
+
+- Bind actionable links to immutable IDs from the source email, so models select
+  evidence while the runtime materializes the original URL without invention or
+  accidental omission.
+- Route model failures through the configured primary, configured fallback, and
+  finally Hermes' live default route instead of treating a formatter as a model
+  substitute or guessing models from provider errors.
+- When every model route is unavailable, publish an explicitly degraded,
+  evidence-preserving card with safe source links and attachments, without
+  pretending to infer intent, priority, action, or deadline.
+- Remove the fixed 4,000-character action-quote truncation that could surface a
+  cut-off word from long messages.
+
 ## 0.9.10 - 2026-09-29
 
 - Keep model ownership in Hermes: fresh installs inherit the active Hermes

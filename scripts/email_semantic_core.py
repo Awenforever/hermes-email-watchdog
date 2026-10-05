@@ -25,7 +25,7 @@ CORE_KEYS = {
     "deadline", "attachment_policy", "attachment_reason", "risk",
     "topic_tags", "uncertainties",
 }
-ACTION_KEYS = {"type", "description", "next_step", "evidence"}
+ACTION_KEYS = {"type", "description", "next_step", "evidence", "link_ids"}
 DEADLINE_KEYS = {"datetime", "date_text", "confidence", "evidence"}
 RISK_KEYS = {"level", "notes"}
 FORBIDDEN_KEYS = {
@@ -449,7 +449,10 @@ def _semantic_hints(facts: Mapping[str, Any]) -> Dict[str, bool]:
 
 
 def _extract_action_quote(source: str) -> str:
-    for part in re.split(r"[\\n。！？；!?;]+", _text(source)):
+    # The source is already bounded before it reaches the core.  A second
+    # 4,000-character truncation used to cut a final sentence into fragments
+    # such as "please decli" and then promote that fragment as an action.
+    for part in re.split(r"[\\n。！？；!?;]+", _text(source, 12000)):
         text = part.strip()
         match = _ACTION_SIGNAL_RE.search(text) if text else None
         if match:
@@ -561,7 +564,7 @@ def ollama_format_schema() -> Dict[str, Any]:
                     {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["type", "description", "next_step", "evidence"],
+                        "required": ["type", "description", "next_step", "evidence", "link_ids"],
                         "properties": {
                             "type": {
                                 "type": "string",
@@ -570,6 +573,12 @@ def ollama_format_schema() -> Dict[str, Any]:
                             "description": {"type": "string", "maxLength": 240},
                             "next_step": {"type": "string", "maxLength": 240},
                             "evidence": {"type": "string", "maxLength": 180, "description": "Short verbatim quote directly proving the recipient action."},
+                            "link_ids": {
+                                "type": "array",
+                                "items": {"type": "string", "pattern": "^link_[0-9]+$"},
+                                "maxItems": 8,
+                                "description": "IDs from link_inventory that directly help complete this action. Never copy or invent a URL. Empty only when the action has no useful source link.",
+                            },
                         },
                     },
                 ]
@@ -621,7 +630,8 @@ def build_prompt(payload: Mapping[str, Any]) -> str:
         "You cannot call tools, cannot change mailbox state, and cannot authorize side effects. Analyze only.\n"
         "Return exactly one JSON object matching the provided JSON schema and no Markdown.\n"
         "Keep the entire JSON response compact and below 1100 output tokens: summary <= 180 Chinese characters; each key point/evidence/reason <= 90 Chinese characters; use at most 4 key points/evidence items and at most 3 risk notes/uncertainties.\n"
-        "Use concise Chinese for semantic fields. Do not invent dates, amounts, attachments, actions, deadlines, risks, people, systems, or submission requirements.\n\n"
+        "Use concise Chinese for semantic fields. Do not invent dates, amounts, attachments, actions, deadlines, risks, people, systems, or submission requirements.\n"
+        "For an action, select only IDs from link_inventory that directly help complete it. Never copy, rewrite, or invent a URL.\n\n"
         "CLASSIFICATION GUIDE (choose the main purpose):\n"
         "- school_notice: university/school/college/graduate-school administrative or student-affairs notice. Keep this category even when the notice contains a task or deadline.\n"
         "- task_deadline: a generic task mainly about completion by a due time, only when no more specific domain category applies.\n"
@@ -1122,12 +1132,22 @@ def normalize_and_expand_detailed(
     action_description = _text(action.get("description"), 600)
     action_next = _text(action.get("next_step"), 600)
     action_evidence = _text(action.get("evidence"), 240)
+    action_link_ids = _text_list(action.get("link_ids"), 8, 80)
+    known_safe_link_ids = {
+        _text(item.get("id"), 80)
+        for item in (facts.get("source_link_inventory") or [])
+        if isinstance(item, Mapping) and item.get("display_safe") is True
+    }
+    invalid_link_ids = [item for item in action_link_ids if item not in known_safe_link_ids]
+    if invalid_link_ids:
+        hard_errors.append("core.action.link_ids contains unknown or unsafe source IDs")
     action_required = bool(action_description or action_next)
     if action_required and not _quote_supported(action_evidence, grounding_source):
         action_required = False
         action_type = ""
         action_description = ""
         action_next = ""
+        action_link_ids = []
         repairs.append("grounding:drop_unsupported_action")
     if action and not action_required:
         repairs.append("repair:empty_action_to_null")
@@ -1182,6 +1202,7 @@ def normalize_and_expand_detailed(
         action_description = ""
         action_next = ""
         action_evidence = ""
+        action_link_ids = []
         repairs.append("consistency:marketing_clears_promotional_action")
 
     if (
@@ -1320,6 +1341,7 @@ def normalize_and_expand_detailed(
             "type": action_type if action_required else "",
             "description": action_description if action_required else "",
             "next_step": action_next if action_required else "",
+            "link_ids": action_link_ids if action_required else [],
         },
         "deadline": {
             "has_deadline": has_deadline,

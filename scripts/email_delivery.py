@@ -1820,6 +1820,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         import email_production_router
         import email_feature_extractor
         import email_assistant_composer
+        import email_evidence_contract
         import email_editorial_review
         import email_notification_renderer
         import email_semantic_engine
@@ -1827,6 +1828,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         email_production_router = importlib.reload(email_production_router)
         email_feature_extractor = importlib.reload(email_feature_extractor)
         email_assistant_composer = importlib.reload(email_assistant_composer)
+        email_evidence_contract = importlib.reload(email_evidence_contract)
         email_editorial_review = importlib.reload(email_editorial_review)
         email_notification_renderer = importlib.reload(email_notification_renderer)
         email_semantic_engine = importlib.reload(email_semantic_engine)
@@ -1836,6 +1838,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         renderer_meta = {}
         route_lane = "durable"
         route_reason = []
+        evidence_fallback_reason = ""
         try:
             features = email_production_router.extract_features(email or {})
             lane = email_production_router.classify_fast_lane(email or {}, features)
@@ -1863,19 +1866,23 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 )
                 if not semantic_meta.get("ok") or not semantic_meta.get("schema_valid"):
                     raise RuntimeError("semantic engine did not return a valid decision")
-                if semantic_meta.get("fallback_used") or semantic_meta.get("timeout"):
-                    raise RuntimeError(
-                        "semantic engine fallback: " + str(semantic_meta.get("error_code") or "unknown")
-                    )
                 decision = semantic_meta.get("decision")
                 if not isinstance(decision, dict):
                     raise RuntimeError("semantic decision missing")
+
+                if semantic_meta.get("fallback_used") or semantic_meta.get("timeout"):
+                    evidence_fallback_reason = (
+                        "semantic model routes unavailable: "
+                        + str(semantic_meta.get("error_code") or "unknown")
+                    )
 
                 # A second model pass owns the final editorial judgment and
                 # presentation.  The deterministic composer is supplied only
                 # as a criticizable draft and remains the safe fallback if the
                 # editorial model or its compact contract fails.
                 try:
+                    if evidence_fallback_reason:
+                        raise RuntimeError(evidence_fallback_reason)
                     editorial_enabled = bool(
                         email_config.get_notification_settings().get("editorial_review_enabled", True)
                     )
@@ -1940,7 +1947,12 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 delivery_warnings.append("schedule:" + repr(phase_exc)[:300])
                 schedule, cron_entries = [], []
             try:
-                if editorial_meta.get("ok"):
+                if evidence_fallback_reason:
+                    renderer_meta = email_evidence_contract.render_lossless_fallback(
+                        email or {}, account or {}, reason=evidence_fallback_reason,
+                        delivered_attachments=attachments,
+                    )
+                elif editorial_meta.get("ok"):
                     renderer_meta = email_editorial_review.finalize_markdown(
                         editorial_meta,
                         {"attachments": attachments, "schedule": schedule},

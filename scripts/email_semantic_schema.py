@@ -69,7 +69,7 @@ _ALLOWED = {
         "should_notify", "content_mode", "summary_style", "summary", "key_points",
         "original_policy", "original_reason", "special_card",
     },
-    "action": {"required", "type", "description", "next_step"},
+    "action": {"required", "type", "description", "next_step", "link_ids"},
     "deadline": {"has_deadline", "datetime", "date_text", "confidence"},
     "attachments": {"present", "policy", "important_names", "reason"},
     "risk": {"level", "notes"},
@@ -180,7 +180,7 @@ def _base_decision(message_key: str) -> Dict[str, Any]:
             "original_reason": "",
             "special_card": "none",
         },
-        "action": {"required": False, "type": "", "description": "", "next_step": ""},
+        "action": {"required": False, "type": "", "description": "", "next_step": "", "link_ids": []},
         "deadline": {"has_deadline": False, "datetime": "", "date_text": "", "confidence": 0.0},
         "attachments": {"present": False, "policy": "none", "important_names": [], "reason": ""},
         "risk": {"level": "none", "notes": []},
@@ -300,7 +300,7 @@ def normalize_and_validate(
 
     action = _mapping(source.get("action"))
     errors.extend(_unknown_keys(action, _ALLOWED["action"], "action"))
-    for required_key in sorted(_ALLOWED["action"] - set(action.keys())):
+    for required_key in sorted((_ALLOWED["action"] - {"link_ids"}) - set(action.keys())):
         errors.append(f"action: missing field {required_key}")
     action_required = _bool(action.get("required"), False)
     action_type = _text(action.get("type"), 80)
@@ -308,15 +308,25 @@ def normalize_and_validate(
         errors.append("action.type requests a forbidden side effect")
     action_description = _text(action.get("description"), 500)
     action_next = _text(action.get("next_step"), 500)
+    action_link_ids = _list_of_text(action.get("link_ids"), 24, 80)
     if action_required and not (action_description or action_next):
         errors.append("required action needs description or next_step")
-    if not action_required and (action_type or action_description or action_next):
+    if not action_required and (action_type or action_description or action_next or action_link_ids):
         errors.append("non-required action must be empty")
+    known_link_ids = {
+        _text(item.get("id"), 80)
+        for item in (facts or {}).get("source_link_inventory", [])
+        if isinstance(item, Mapping) and item.get("display_safe") is True
+    }
+    unknown_link_ids = [item for item in action_link_ids if item not in known_link_ids]
+    if unknown_link_ids:
+        errors.append("action.link_ids contains unknown or unsafe source IDs")
     decision["action"] = {
         "required": action_required,
         "type": action_type,
         "description": action_description,
         "next_step": action_next,
+        "link_ids": action_link_ids if action_required else [],
     }
 
     deadline = _mapping(source.get("deadline"))

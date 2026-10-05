@@ -70,7 +70,7 @@ checks={
  "handler_generic_delivery":"def _send_channel(" in handler and "configured Hermes delivery target" in handler,
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
  "renderer_v1g":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G" in renderer and "adaptive_v1g" in renderer,
- "intent_composer_v4":"EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V4" in composer and "intelligent_v4.0" in composer,
+ "evidence_bound_composer_v5":"EMAIL_WATCHDOG_EVIDENCE_BOUND_COMPOSER_V5" in composer and "intelligent_v5.0" in composer,
  "protocol_v1x":"readable_grounded_core_v1x" in config_text,
  "safe_thread_tracker":"email_thread_tracker" in watch and "email_reply" not in watch,
  "weixin_not_present":not any(p.name=="weixin.py" for p in root.rglob("weixin.py")),

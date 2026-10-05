@@ -17,9 +17,11 @@ from typing import Any, Dict, List, Mapping, Sequence, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
+import email_evidence_contract
 
-COMPOSER_VERSION = "intelligent_v4.0"
-MARKER = "EMAIL_WATCHDOG_INTENT_AWARE_COMPOSER_V4"
+
+COMPOSER_VERSION = "intelligent_v5.0"
+MARKER = "EMAIL_WATCHDOG_EVIDENCE_BOUND_COMPOSER_V5"
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -494,7 +496,34 @@ def _body_link_pairs(email: Mapping[str, Any]) -> List[Tuple[str, str]]:
     return out
 
 
-def _links(email: Mapping[str, Any], category: str) -> List[Tuple[str, str]]:
+def _links(
+    email: Mapping[str, Any], category: str, decision: Mapping[str, Any] | None = None
+) -> List[Tuple[str, str]]:
+    decision = decision if isinstance(decision, Mapping) else {}
+    action = _mapping(decision.get("action"))
+    selected = email_evidence_contract.resolve_link_ids(
+        email, action.get("link_ids"), safe_only=True
+    )
+    if selected:
+        return [
+            (
+                str(item["label"]).replace("[", "").replace("]", ""),
+                str(item["url"]).replace(" ", "%20").replace("(", "%28").replace(")", "%29"),
+            )
+            for item in selected
+        ]
+    if bool(action.get("required")):
+        # A model can legitimately omit link selection or an older cached
+        # decision may predate link IDs. Preserve every structurally safe source
+        # destination under neutral source labels; never guess usefulness from
+        # a finite business-verb vocabulary.
+        return [
+            (
+                str(item["label"]).replace("[", "").replace("]", ""),
+                str(item["url"]).replace(" ", "%20").replace("(", "%28").replace(")", "%29"),
+            )
+            for item in email_evidence_contract.safe_source_links(email)
+        ]
     low_value = re.compile(
         r"(?i)unsubscribe|privacy|terms|contact|support|home|website|退订|隐私|条款|"
         r"举报|identity|agent\.qq\.com(?:/page/(?:identity|report))?"
@@ -896,7 +925,7 @@ def render_notification(
         _section(lines, "需要处理", [f"- {x}" for x in action_lines])
         blocks.append("需要处理")
 
-    links = _links(email, category)
+    links = _links(email, category, decision)
     if links:
         link_title = "论文与资料" if category in {"academic_report_digest", "academic_alert_digest"} else "快捷操作"
         _section(lines, link_title, [f"- [{label}]({url})" for label, url in links])
