@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Mapping
-from urllib.parse import unquote, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote, urlparse, urlunparse
 
 MARKER = "EMAIL_WATCHDOG_EVIDENCE_CONTRACT_V1"
 
@@ -34,10 +34,28 @@ def _clean_url(value: Any) -> str:
 def _display_policy(url: str, label: str = "") -> str:
     parsed = urlparse(url)
     decoded = unquote(url).casefold()
+    query = [(key.casefold(), value.casefold()) for key, value in parse_qsl(parsed.query)]
+    query_keys = {key for key, _value in query}
+    query_values = " ".join(value for _key, value in query)
+    tracking_query = bool(
+        query_keys.intersection({"scisig", "citsig", "mc_cid", "mc_eid"})
+        or any(key.startswith("utm_") for key in query_keys)
+        or any(key in {"oi", "source"} and "alert" in value for key, value in query)
+    )
+    stateful_mail_operation = bool(
+        any(
+            (key in {"action", "op", "operation", "view_op", "update_op"} or key.endswith("_op"))
+            and re.search(r"(?i)(?:cancel|unsubscribe|opt.?out|share|add|save|manage|preference|follow)", value)
+            for key, value in query
+        )
+        or re.search(r"(?i)(?:^|[/_-])(?:social_?)?share(?:[/_?-]|$)", parsed.path)
+        or re.search(r"(?i)(?:unsubscribe|opt.?out|cancel.?alert|manage.?preference)", query_values)
+    )
     tracking_wrapper = bool(
         len(url) > 1200
         or re.search(r"(?i)(?:^|\.)(?:click|track|tracking|url\d+)\.", parsed.netloc)
         or re.search(r"(?i)/(?:ls/)?click(?:/|\?|$)", parsed.path)
+        or tracking_query
     )
     mail_chrome_pattern = (
         r"(?i)(?:unsubscribe|opt[-_ ]?out|manage[_ -]?preferences?|"
@@ -46,6 +64,8 @@ def _display_policy(url: str, label: str = "") -> str:
         r"[^&]*(?:add|save|share|subscribe|follow))"
     )
     mail_chrome = bool(
+        stateful_mail_operation
+        or
         re.search(
             mail_chrome_pattern, decoded,
         )
@@ -184,9 +204,28 @@ def render_evidence_complete_draft(
     every attachment is retained, so a model outage cannot turn actionable
     prose into an unusable notification.
     """
-    lines = [str(draft or "").strip()]
+    safe_draft = str(draft or "").strip()
+    # Operational instructions require a successful editorial gate.  On
+    # degradation, keep the semantic explanation but rebuild actions solely as
+    # neutral source evidence below; this prevents an unreviewed fragment from
+    # becoming an instruction.
+    safe_draft = re.sub(
+        r"(?ms)^\*\*(?:需要处理|快捷操作)\*\*\s*\n.*?(?=^\*\*|^###|\Z)",
+        "", safe_draft,
+    ).strip()
+    # A draft may already contain source URLs. Drop any whole line containing
+    # an artifact rejected by the same structural policy used for append.
+    unsafe_urls = {
+        str(item["url"]) for item in link_inventory(email) if not item["display_safe"]
+    }
+    if unsafe_urls:
+        safe_draft = "\n".join(
+            line for line in safe_draft.splitlines()
+            if not any(url in line for url in unsafe_urls)
+        ).strip()
+    lines = [safe_draft]
     links = safe_source_links(email)
-    present = str(draft or "")
+    present = safe_draft
     missing_links = [item for item in links if str(item["url"]) not in present]
     if missing_links:
         lines.extend(["", "**邮件中的链接**"])

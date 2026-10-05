@@ -11,6 +11,9 @@
   editor omitted every artifact.
 - Keep tracking, unsubscribe, preference-management, and other mail chrome out
   of the evidence fallback without relying on a list of action phrases.
+- In degraded editorial mode, remove unreviewed operational sections and
+  rebuild them as neutral source evidence, preventing partial model phrases
+  from being published as instructions.
 
 ## 0.9.12 - 2026-10-05
 

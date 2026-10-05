@@ -19,8 +19,10 @@ corresponding source evidence available to the runtime.
 1. A valid semantic decision plus a successful editorial review publishes the
    reviewed Markdown and the explicitly selected source artifacts.
 2. A valid semantic decision plus an unavailable editorial chain publishes the
-   semantic draft with every display-safe source link and attachment preserved.
-   This degraded mode is explicit in metadata and in the card.
+   semantic explanation with every display-safe source link and attachment
+   preserved. Unreviewed operational sections are removed and rebuilt as
+   neutral evidence, so fragments cannot become user instructions. This
+   degraded mode is explicit in metadata and in the card.
 3. If no semantic model route is usable, the runtime publishes a transparent
    lossless source card and does not pretend to infer action, importance, or
    deadlines.

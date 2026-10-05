@@ -133,6 +133,29 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertTrue(email_editorial_review._needs_independent_critic(review, [], [{"name": "a.pdf"}]))
         self.assertFalse(email_editorial_review._needs_independent_critic(review, [], []))
 
+    def test_degraded_draft_drops_unreviewed_action_fragment_and_mail_chrome(self):
+        email = self.review_invitation()
+        email["links"].extend([
+            {
+                "url": "https://scholar.google.com/scholar_share?oi=scholaralrt&ss=tw",
+                "display_text": "Share",
+            },
+            {
+                "url": "https://scholar.google.com/scholar_alerts?view_op=cancel_alert_options",
+                "display_text": "Cancel alert",
+            },
+        ])
+        draft = (
+            "### 📬 新邮件｜USTC\n\n**邮件摘要**\n需要接受或拒绝邀请。\n\n"
+            "**需要处理**\n- please decli\n- 截止时间：`21天内`\n\n"
+            "**快捷操作**\n- [Share](https://scholar.google.com/scholar_share?oi=scholaralrt&ss=tw)"
+        )
+        result = evidence.render_evidence_complete_draft(email, draft)
+        self.assertNotIn("please decli", result["text"])
+        self.assertNotIn("scholar_share", result["text"])
+        self.assertNotIn("cancel_alert", result["text"])
+        self.assertIn("review-invitation/token", result["text"])
+
     def test_explicit_models_then_return_to_hermes_default_route(self):
         def route(_prompt, settings):
             model = settings.get("model")
