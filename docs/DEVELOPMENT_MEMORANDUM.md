@@ -76,3 +76,13 @@ The failure had three independent causes:
 - Verify behavior, not merely file presence: scheduler running, Hook loaded,
   configuration preserved, historical dry replay correct, and no change to
   mailbox authentication or message-adapter code.
+
+## 2026-10-05 — Portable path expansion during enable
+
+Production recovery exposed a migrated configuration whose `paths.seen` value
+was `$HERMES_EMAIL_WATCHDOG_STATE_ROOT/seen.json`. Runtime loading expanded it,
+but the enable-time baseline check constructed a `Path` directly and attempted
+to access a literal dollar-prefixed directory. Every lifecycle entry point must
+apply the same portable path expansion contract. Upgrade acceptance must include
+disable → restart → enable with an existing non-empty seen index and must prove
+that no historical message is replayed.

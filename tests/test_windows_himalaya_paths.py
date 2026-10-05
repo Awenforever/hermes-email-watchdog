@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -104,6 +105,24 @@ class WindowsHimalayaPathTests(unittest.TestCase):
                 result = onboarding._initialize_seen_baseline(config, {"baseline_completed": True})
             self.assertFalse(result["initialized"])
             self.assertEqual({"ustc:existing": True}, json.loads(seen_path.read_text()))
+            envelopes.assert_not_called()
+
+    def test_migrated_environment_path_is_expanded_before_enable_baseline(self):
+        with tempfile.TemporaryDirectory() as td:
+            seen_path = Path(td) / "seen.json"
+            seen_path.write_text('{"ustc:existing": true}', encoding="utf-8")
+            config = {
+                "accounts": [],
+                "paths": {"seen": "$HERMES_EMAIL_WATCHDOG_STATE_ROOT/seen.json"},
+                "watchdog": {"lookback": 5},
+            }
+            with (
+                mock.patch.dict(os.environ, {"HERMES_EMAIL_WATCHDOG_STATE_ROOT": td}),
+                mock.patch.object(onboarding, "_baseline_account_envelopes") as envelopes,
+            ):
+                result = onboarding._initialize_seen_baseline(config, {})
+            self.assertFalse(result["initialized"])
+            self.assertEqual(1, result["count"])
             envelopes.assert_not_called()
 
 

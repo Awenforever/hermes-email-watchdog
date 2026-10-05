@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.12 - 2026-10-05
+
+- Expand profile environment variables in migrated seen-index paths before the
+  enable baseline check. Existing installations can now resume after upgrade
+  without treating the portable path token as a literal directory.
+
 ## 0.9.11 - 2026-10-05
 
 - Bind actionable links to immutable IDs from the source email, so models select

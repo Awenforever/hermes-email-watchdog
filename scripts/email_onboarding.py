@@ -1461,7 +1461,14 @@ def _baseline_account_envelopes(account: dict[str, Any], lookback: int) -> list[
 
 def _initialize_seen_baseline(config: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     paths = config.get("paths") if isinstance(config.get("paths"), dict) else {}
-    seen_path = Path(str(paths.get("seen") or (STATE_ROOT / "seen.json"))).expanduser()
+    # Migrated portable configs intentionally store profile paths using an
+    # environment variable. Expand it here just as the runtime config loader
+    # does; otherwise enable() tries to open a literal "$HERMES_..." directory.
+    seen_path = Path(
+        os.path.expandvars(
+            os.path.expanduser(str(paths.get("seen") or (STATE_ROOT / "seen.json")))
+        )
+    )
     existing = _load_json(seen_path, {})
     if not isinstance(existing, dict):
         existing = {}
