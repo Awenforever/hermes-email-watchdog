@@ -144,6 +144,80 @@ def safe_source_links(email: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return [item for item in link_inventory(email) if item["display_safe"]]
 
 
+def attachment_inventory(
+    email: Mapping[str, Any], delivered_attachments: Any = None
+) -> List[Dict[str, str]]:
+    """Inventory attachment evidence without deciding whether it is useful."""
+    source = list(delivered_attachments or []) or list(email.get("attachments") or [])
+    output: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    for item in source[:20]:
+        if isinstance(item, Mapping):
+            name = _text(item.get("filename") or item.get("name"), 240)
+            status = _text(item.get("download_status") or item.get("status"), 40)
+            path = _text(item.get("path") or item.get("local_path") or item.get("saved_path"), 1000)
+        else:
+            name, status, path = _text(item, 240), "", ""
+        identity = name.casefold()
+        if not name or identity in seen:
+            continue
+        seen.add(identity)
+        output.append({"name": name, "status": status, "path": path})
+    return output
+
+
+def has_publishable_evidence(
+    email: Mapping[str, Any], delivered_attachments: Any = None
+) -> bool:
+    """Whether final publication must preserve source artifacts explicitly."""
+    return bool(safe_source_links(email) or attachment_inventory(email, delivered_attachments))
+
+
+def render_evidence_complete_draft(
+    email: Mapping[str, Any], draft: str, *, reason: str = "",
+    delivered_attachments: Any = None,
+) -> Dict[str, Any]:
+    """Preserve a grounded semantic draft while closing its artifact inventory.
+
+    This is used only when the final editorial model chain is unavailable.  It
+    does not infer which artifact matters: every display-safe source link and
+    every attachment is retained, so a model outage cannot turn actionable
+    prose into an unusable notification.
+    """
+    lines = [str(draft or "").strip()]
+    links = safe_source_links(email)
+    present = str(draft or "")
+    missing_links = [item for item in links if str(item["url"]) not in present]
+    if missing_links:
+        lines.extend(["", "**邮件中的链接**"])
+        for item in missing_links:
+            label = str(item["label"]).replace("[", "").replace("]", "")
+            url = str(item["url"]).replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+            lines.append(f"- [{label}]({url})")
+
+    attachments = attachment_inventory(email, delivered_attachments)
+    missing_attachments = [item for item in attachments if item["name"] not in present]
+    if missing_attachments:
+        lines.extend(["", "**附件**"])
+        for item in missing_attachments:
+            name = item["name"].replace("*", "")
+            suffix = " · 已附上" if item["status"] == "downloaded" else " · 请在邮箱查看"
+            lines.append(f"- **{name}**{suffix}")
+
+    lines.extend(["", "> 编辑审校暂不可用；为避免信息丢失，已保全邮件中的安全链接与附件。"])
+    return {
+        "ok": True,
+        "marker": MARKER,
+        "renderer_version": "evidence_complete_draft_v1",
+        "text": "\n".join(lines).strip(),
+        "blocks": ["semantic_draft", "source_links", "source_attachments"],
+        "degraded": True,
+        "degraded_reason": _text(reason, 400),
+        "source_link_count": len(links),
+        "source_attachment_count": len(attachments),
+    }
+
+
 def _sender(email: Mapping[str, Any]) -> str:
     name = _text(email.get("from_name") or email.get("sender_name"), 160).strip('" ')
     address = _text(email.get("from_addr") or email.get("from_email") or email.get("sender"), 240)
@@ -210,13 +284,9 @@ def render_lossless_fallback(
             url = str(item["url"]).replace(" ", "%20").replace("(", "%28").replace(")", "%29")
             lines.append(f"- [{safe_label}]({url})")
     attachments = []
-    attachment_source = list(delivered_attachments or []) or list(email.get("attachments") or [])
-    for item in attachment_source[:20]:
-        name = _text(item.get("filename") or item.get("name"), 240) if isinstance(item, Mapping) else _text(item, 240)
-        if name:
-            status = _text(item.get("download_status"), 40) if isinstance(item, Mapping) else ""
-            suffix = " · 已附上" if status == "downloaded" else " · 请在邮箱查看"
-            attachments.append((name.replace("*", ""), suffix))
+    for item in attachment_inventory(email, delivered_attachments):
+        suffix = " · 已附上" if item["status"] == "downloaded" else " · 请在邮箱查看"
+        attachments.append((item["name"].replace("*", ""), suffix))
     if attachments:
         lines.extend(["", "**附件**"] + [f"- **{name}**{suffix}" for name, suffix in attachments])
     lines.extend(["", "> 模型暂时不可用，本卡片未推断操作、截止时间或重要性；请以原邮件为准。"])

@@ -134,5 +134,27 @@ class DeliveryRouteTests(unittest.TestCase):
    self.assertEqual(r['renderer']['renderer_version'],'model_editorial_gate_v2a')
    self.assertEqual(r['editorial']['model'],'deepseek-flash')
    review_call.assert_called_once(); finalize.assert_called_once(); legacy.assert_not_called()
+ def test_07_editorial_failure_cannot_drop_source_link(self):
+  email=dict(self.email)
+  email["links"]=[
+   {"url":"https://accounts.example.test/login/token","display_text":"Log in"},
+   {"url":"https://mailer.example.test/unsubscribe/token","display_text":"Unsubscribe"},
+  ]
+  with self.common() as m, \
+       mock.patch('importlib.reload', side_effect=lambda m:m), \
+       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
+       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
+       mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
+       mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}), \
+       mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
+       mock.patch('email_editorial_review.review_notification',return_value={"ok":False,"errors":["all editorial routes returned 403"]}), \
+       mock.patch('email_assistant_composer.render_notification',return_value={"ok":True,"text":"请点击登录链接。","renderer_version":"intelligent_v2"}), \
+       mock.patch.object(email_delivery,'_ew_v4_original_deliver_email') as legacy:
+   m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
+   r=email_delivery.deliver_email(email,self.rule,self.analysis,self.account)
+   self.assertEqual(r['renderer']['renderer_version'],'evidence_complete_draft_v1')
+   self.assertIn('https://accounts.example.test/login/token',r['notification_text'])
+   self.assertNotIn('unsubscribe/token',r['notification_text'])
+   self.assertTrue(r['renderer']['degraded']); legacy.assert_not_called()
 if __name__=='__main__':
  suite=unittest.defaultTestLoader.loadTestsFromTestCase(DeliveryRouteTests); result=unittest.TextTestRunner(verbosity=2).run(suite); print(f"PRODUCTION_DELIVERY_MATRIX={result.testsRun-len(result.failures)-len(result.errors)}/{result.testsRun}"); raise SystemExit(0 if result.wasSuccessful() else 1)

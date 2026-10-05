@@ -568,13 +568,18 @@ def _correction_prompt(original_prompt: str, candidate: Any, errors: list[str]) 
     )
 
 
-def _needs_independent_critic(review: Mapping[str, Any]) -> bool:
+def _needs_independent_critic(
+    review: Mapping[str, Any], links: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> bool:
     temporal = review.get("temporal") if isinstance(review.get("temporal"), Mapping) else {}
     action = review.get("live_action") if isinstance(review.get("live_action"), Mapping) else {}
     return bool(
         review.get("publish")
         and (
-            review.get("selected_links")
+            any(item.get("display_safe") for item in list(links or []))
+            or bool(attachments)
+            or review.get("selected_links")
             or review.get("attachment_intent") == "send"
             or action.get("required")
             or temporal.get("status") in {"active", "expired", "historical", "unknown"}
@@ -685,7 +690,7 @@ def review_notification(
                     metrics["editorial_self_correction"] = True
                     response["metrics"] = metrics
             if normalized is not None:
-                if transport is None and _needs_independent_critic(normalized):
+                if transport is None and _needs_independent_critic(normalized, links, attachments):
                     critic_model = fallback if fallback and fallback != model else models[0]
                     critic_settings = dict(settings)
                     critic_settings.update({"model": critic_model, "fallback_model": "", "temperature": 0.0})

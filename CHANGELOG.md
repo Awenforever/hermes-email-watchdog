@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.0 - 2026-10-05
+
+- Add an evidence-complete publication boundary. If final model editorial
+  review is unavailable, the grounded semantic draft is retained and every
+  display-safe source link and attachment is appended instead of silently
+  publishing an unusable action summary.
+- Require independent editorial criticism whenever a published email contains
+  source links or attachments, including the important case where the first
+  editor omitted every artifact.
+- Keep tracking, unsubscribe, preference-management, and other mail chrome out
+  of the evidence fallback without relying on a list of action phrases.
+
 ## 0.9.12 - 2026-10-05
 
 - Expand profile environment variables in migrated seen-index paths before the

@@ -108,6 +108,31 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertNotIn("reviewer-opt-out", result["text"])
         self.assertNotIn("please decli\n", result["text"].lower())
 
+    def test_editorial_failure_preserves_semantic_draft_and_all_safe_artifacts(self):
+        email = self.review_invitation()
+        email["attachments"] = [{"filename": "manuscript.pdf"}]
+        result = evidence.render_evidence_complete_draft(
+            email, "请接受或拒绝本次审稿邀请。", reason="editorial routes failed",
+            delivered_attachments=[{"filename": "manuscript.pdf", "download_status": "downloaded"}],
+        )
+        self.assertEqual(result["renderer_version"], "evidence_complete_draft_v1")
+        self.assertIn("请接受或拒绝本次审稿邀请", result["text"])
+        self.assertIn("review-invitation/token", result["text"])
+        self.assertIn("reviewer.springernature.com", result["text"])
+        self.assertNotIn("reviewer-opt-out", result["text"])
+        self.assertIn("manuscript.pdf", result["text"])
+        self.assertIn("已附上", result["text"])
+
+    def test_artifact_inventory_forces_independent_critic_even_when_model_omits_it(self):
+        review = {
+            "publish": True, "selected_links": [], "attachment_intent": "ignore",
+            "live_action": {"required": False}, "temporal": {},
+        }
+        links = [{"display_safe": True}, {"display_safe": False}]
+        self.assertTrue(email_editorial_review._needs_independent_critic(review, links, []))
+        self.assertTrue(email_editorial_review._needs_independent_critic(review, [], [{"name": "a.pdf"}]))
+        self.assertFalse(email_editorial_review._needs_independent_critic(review, [], []))
+
     def test_explicit_models_then_return_to_hermes_default_route(self):
         def route(_prompt, settings):
             model = settings.get("model")

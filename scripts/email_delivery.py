@@ -1836,6 +1836,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         semantic_meta = {}
         editorial_meta = {}
         renderer_meta = {}
+        draft_meta = {}
         route_lane = "durable"
         route_reason = []
         evidence_fallback_reason = ""
@@ -1959,6 +1960,14 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                         decision,
                         email or {},
                         account or {},
+                    )
+                elif email_evidence_contract.has_publishable_evidence(
+                    email or {}, attachments
+                ):
+                    renderer_meta = email_evidence_contract.render_evidence_complete_draft(
+                        email or {}, str(draft_meta.get("text") or ""),
+                        reason="; ".join(str(item) for item in editorial_meta.get("errors", [])),
+                        delivered_attachments=attachments,
                     )
                 else:
                     renderer_meta = email_assistant_composer.render_notification(
