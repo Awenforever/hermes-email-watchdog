@@ -110,7 +110,7 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
     for line in text.splitlines():
         if "\u200b" in line or "\ufeff" in line:
             errors.append("invisible_character_in_output")
-        if "](" in line and line.count("](") != line.count(")"):
+        if "](" in line and not re.search(r"\[[^\]]+\]\(https?://.+\)\s*$", line):
             errors.append("broken_markdown_link")
             break
     if text.count("**快捷操作**") > 1 or text.count("**附件**") > 1:
@@ -246,7 +246,9 @@ def main() -> int:
                 errors.append("editorial_failure_not_evidence_complete")
             if renderer.get("renderer_version") in evidence_renderers:
                 for source_link in email_evidence_contract.safe_source_links(email):
-                    if str(source_link.get("url") or "") not in text:
+                    raw_url = str(source_link.get("url") or "")
+                    rendered_url = raw_url.replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+                    if raw_url not in text and rendered_url not in text:
                         errors.append(f"safe_source_link_missing:{source_link.get('id')}")
                 for source_link in email_evidence_contract.link_inventory(email):
                     if not source_link.get("display_safe") and str(source_link.get("url") or "") in text:

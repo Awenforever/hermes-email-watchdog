@@ -34,6 +34,7 @@ def _clean_url(value: Any) -> str:
 def _display_policy(url: str, label: str = "") -> str:
     parsed = urlparse(url)
     decoded = unquote(url).casefold()
+    path_lower = parsed.path.casefold()
     query = [(key.casefold(), value.casefold()) for key, value in parse_qsl(parsed.query)]
     query_keys = {key for key, _value in query}
     query_values = " ".join(value for _key, value in query)
@@ -51,6 +52,20 @@ def _display_policy(url: str, label: str = "") -> str:
         or re.search(r"(?i)(?:^|[/_-])(?:social_?)?share(?:[/_?-]|$)", parsed.path)
         or re.search(r"(?i)(?:unsubscribe|opt.?out|cancel.?alert|manage.?preference)", query_values)
     )
+    malformed_artifact = bool(
+        any(char in url for char in "[]*\n\r\t")
+        or any(char in url for char in "：，。；【】")
+        or re.search(r"(?i)%29(?:%5d|\])(?:%28|\()", url)
+    )
+    static_mail_asset = bool(
+        re.search(r"(?i)\.(?:svg|ico|css|js|woff2?|ttf)(?:$|\?)", path_lower)
+    )
+    mail_ui_path = bool(
+        re.search(
+            r"(?i)(?:^|[/_-])(?:report|abuse|identity|profile|preferences?|unsubscribe|optout)(?:[/_.?-]|$)",
+            path_lower,
+        )
+    )
     tracking_wrapper = bool(
         len(url) > 1200
         or re.search(r"(?i)(?:^|\.)(?:click|track|tracking|url\d+)\.", parsed.netloc)
@@ -65,13 +80,15 @@ def _display_policy(url: str, label: str = "") -> str:
     )
     mail_chrome = bool(
         stateful_mail_operation
-        or
-        re.search(
+        or mail_ui_path
+        or static_mail_asset
+        or malformed_artifact
+        or re.search(
             mail_chrome_pattern, decoded,
         )
         or re.search(
-            r"(?i)^(?:unsubscribe|opt out|manage (?:email )?preferences?|"
-            r"退订|取消订阅|管理邮件偏好|停止接收)",
+            r"(?i)^(?:unsubscribe|opt out|manage (?:email )?preferences?|report|report abuse|"
+            r"退订|取消订阅|管理邮件偏好|停止接收|举报)",
             label.strip(),
         )
     )

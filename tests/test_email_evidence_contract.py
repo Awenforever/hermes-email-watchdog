@@ -79,6 +79,16 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertFalse(item["display_safe"])
         self.assertEqual(item["display_policy"], "mail_chrome_action")
 
+    def test_mail_ui_static_assets_and_malformed_extractions_are_not_evidence(self):
+        email = {"links": [
+            {"url": "https://mail.example/page/report?token=x", "display_text": "举报"},
+            {"url": "https://cdn.example/images/avatar.svg", "display_text": "logo"},
+            {"url": "https://openalex.org/A123%29：**", "display_text": "OpenAlex"},
+            {"url": "https://doi.org/10.1000/example", "display_text": "Paper"},
+        ]}
+        items = evidence.link_inventory(email)
+        self.assertEqual([item["display_safe"] for item in items], [False, False, False, True])
+
     def test_model_selected_source_id_is_materialized_without_copying_url(self):
         result = composer.render_notification(
             self.review_invitation(), self.decision(["link_0"]), {}, {}

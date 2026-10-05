@@ -12,6 +12,9 @@
 - Self-correct well-formed model output that violates the semantic contract;
   if semantic routing still fails, force a transparent evidence-only delivery
   instead of allowing an unknown fallback category to suppress the email.
+- Reject malformed URL extractions, static mail assets, identity/report UI and
+  other mailbox chrome at the source-evidence boundary; keep valid content and
+  dashboard destinations independent of their wording.
 
 ## 0.10.0 - 2026-10-05
 
