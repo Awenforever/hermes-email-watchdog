@@ -1111,6 +1111,19 @@ def _json_repair_prompt(primary_content: str) -> str:
     )
 
 
+def _schema_correction_prompt(prompt: str, candidate: Any, errors: list[str]) -> str:
+    """Ask the same semantic route to replace a well-formed but invalid object."""
+    return (
+        prompt
+        + "\n\nSEMANTIC-CONTRACT-VALIDATION-FAILED:\n"
+        + json.dumps(errors[:12], ensure_ascii=False)
+        + "\nPREVIOUS-CANDIDATE:\n"
+        + json.dumps(candidate, ensure_ascii=False, separators=(",", ":"), default=str)[:8000]
+        + "\nReturn one complete replacement object using exactly the schema requested above. "
+        "Do not explain, wrap, abbreviate, or reuse obsolete flat fields."
+    )
+
+
 def _call_model_once(prompt: str, settings: Mapping[str, Any]) -> Dict[str, Any]:
     """Call Ollama with deterministic recovery and one format-only repair call.
 
@@ -1594,11 +1607,34 @@ def analyze_email(
             return normalized, candidate_errors, [], keys
 
         decision, errors, normalization_repairs, model_core_keys = normalize_response(response)
+        fallback_model = str(effective_settings.get("fallback_model") or "").strip()
+        if (errors or decision is None) and transport is None and not fallback_model:
+            correction_settings = dict(effective_settings)
+            correction_settings["fallback_model"] = ""
+            try:
+                with _CALL_LOCK:
+                    corrected_response = _call_model_once(
+                        _schema_correction_prompt(
+                            prompt, response.get("parsed"),
+                            list(errors or ["schema normalization failed"]),
+                        ),
+                        correction_settings,
+                    )
+                corrected_decision, corrected_errors, corrected_repairs, corrected_keys = normalize_response(
+                    corrected_response
+                )
+                if corrected_decision is not None and not corrected_errors:
+                    metrics = dict(corrected_response.get("metrics") or {})
+                    metrics["semantic_self_correction"] = True
+                    corrected_response["metrics"] = metrics
+                    response, decision, errors = corrected_response, corrected_decision, []
+                    normalization_repairs, model_core_keys = corrected_repairs, corrected_keys
+            except Exception:
+                pass
         # Transport-level fallback handles request failures. A syntactically
         # valid response can still fail the grounded schema, so continue across
         # every route not already attempted: explicit fallback, then Hermes'
         # live default route. Deterministic rendering is not a model substitute.
-        fallback_model = str(effective_settings.get("fallback_model") or "").strip()
         response_model = str(response.get("model") or model).strip()
         if (errors or decision is None) and transport is None:
             primary_validation_errors = list(errors or ["schema normalization failed"])

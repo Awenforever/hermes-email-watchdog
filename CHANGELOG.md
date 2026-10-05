@@ -9,6 +9,9 @@
 - Allow guided setup to clear prior plugin-specific model pins explicitly, so
   an existing installation can return to the inherited Hermes route without
   hand-editing configuration files.
+- Self-correct well-formed model output that violates the semantic contract;
+  if semantic routing still fails, force a transparent evidence-only delivery
+  instead of allowing an unknown fallback category to suppress the email.
 
 ## 0.10.0 - 2026-10-05
 

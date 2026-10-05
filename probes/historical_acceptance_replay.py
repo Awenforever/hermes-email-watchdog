@@ -231,6 +231,8 @@ def main() -> int:
         category = str((decision.get("classification") or {}).get("category") or "")
         errors = _lint(text, email, delivery)
         environment_warnings = []
+        if (delivery.get("semantic") or {}).get("fallback_used"):
+            environment_warnings.append("semantic_model_route_degraded")
         if delivery.get("legacy_fallback_used") or delivery.get("production_route") != "intelligent_v2":
             errors.append("semantic_production_route_failed")
         if delivery.get("route_lane") == "durable" and not editorial.get("ok"):
@@ -239,9 +241,10 @@ def main() -> int:
             has_artifacts = email_evidence_contract.has_publishable_evidence(
                 email, delivery.get("attachments") or []
             )
-            if has_artifacts and renderer.get("renderer_version") != "evidence_complete_draft_v1":
+            evidence_renderers = {"evidence_complete_draft_v1", "evidence_lossless_v1"}
+            if has_artifacts and renderer.get("renderer_version") not in evidence_renderers:
                 errors.append("editorial_failure_not_evidence_complete")
-            if renderer.get("renderer_version") == "evidence_complete_draft_v1":
+            if renderer.get("renderer_version") in evidence_renderers:
                 for source_link in email_evidence_contract.safe_source_links(email):
                     if str(source_link.get("url") or "") not in text:
                         errors.append(f"safe_source_link_missing:{source_link.get('id')}")

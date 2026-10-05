@@ -1910,6 +1910,11 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     }
 
             prod_analysis = email_production_router.decision_to_legacy_analysis(decision, analysis or {})
+            # A semantic outage cannot be allowed to make the suppression
+            # decision: that would convert model/schema failure into silent
+            # mail loss. Publish the transparent evidence-only card instead.
+            if evidence_fallback_reason:
+                prod_analysis["should_notify"] = True
             if prod_analysis.get("should_notify") is False:
                 _persist_delivery(email or {}, prod_analysis, "", "suppressed")
                 result = {
