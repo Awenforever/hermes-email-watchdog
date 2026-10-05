@@ -161,6 +161,7 @@ def main() -> int:
     sys.path.insert(0, str(scripts))
     import email_config
     import email_delivery
+    import email_evidence_contract
     import email_llm
     import email_store
     import email_watch
@@ -229,10 +230,24 @@ def main() -> int:
         status = str(delivery.get("status") or "")
         category = str((decision.get("classification") or {}).get("category") or "")
         errors = _lint(text, email, delivery)
+        environment_warnings = []
         if delivery.get("legacy_fallback_used") or delivery.get("production_route") != "intelligent_v2":
             errors.append("semantic_production_route_failed")
         if delivery.get("route_lane") == "durable" and not editorial.get("ok"):
-            errors.append("editorial_model_route_failed")
+            environment_warnings.append("editorial_model_route_failed")
+            renderer = delivery.get("renderer") if isinstance(delivery.get("renderer"), dict) else {}
+            has_artifacts = email_evidence_contract.has_publishable_evidence(
+                email, delivery.get("attachments") or []
+            )
+            if has_artifacts and renderer.get("renderer_version") != "evidence_complete_draft_v1":
+                errors.append("editorial_failure_not_evidence_complete")
+            if renderer.get("renderer_version") == "evidence_complete_draft_v1":
+                for source_link in email_evidence_contract.safe_source_links(email):
+                    if str(source_link.get("url") or "") not in text:
+                        errors.append(f"safe_source_link_missing:{source_link.get('id')}")
+                for source_link in email_evidence_contract.link_inventory(email):
+                    if not source_link.get("display_safe") and str(source_link.get("url") or "") in text:
+                        errors.append(f"unsafe_source_link_published:{source_link.get('id')}")
         if not text and status != "suppressed":
             errors.append("empty_notification")
         protected_suppression = bool(
@@ -265,6 +280,7 @@ def main() -> int:
             "text": text, "tagged_text": tagged,
             "attachments": delivery.get("attachments") or [],
             "delivery_warnings": delivery.get("delivery_warnings") or [],
+            "environment_warnings": environment_warnings,
             "errors": errors,
         }
         _write_json(state / "results" / f"{acceptance_id}.json", item)

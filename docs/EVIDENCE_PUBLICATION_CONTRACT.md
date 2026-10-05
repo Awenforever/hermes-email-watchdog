@@ -44,3 +44,9 @@ isolated rounds of real historical mail with no information-loss,
 presentation, attachment, temporal, or routing errors. Any failure resets the
 consecutive-round count. Replays must not mutate the mailbox or send historical
 notifications.
+
+The acceptance manifest separates plugin errors from host model-route warnings.
+A host-level 403 is not counted as a plugin defect only when the publication
+boundary demonstrably entered evidence-complete degraded mode and every safe
+source artifact remained present. It remains an explicit environment warning
+and must never be reported as a healthy editorial model.
