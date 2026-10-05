@@ -15,6 +15,9 @@
 - Reject malformed URL extractions, static mail assets, identity/report UI and
   other mailbox chrome at the source-evidence boundary; keep valid content and
   dashboard destinations independent of their wording.
+- Clean transparent source excerpts structurally: omit Markdown headings and
+  machine pipeline counters while retaining readable prose, and validate
+  inline Markdown links without confusing title parentheses with broken URLs.
 
 ## 0.10.0 - 2026-10-05
 

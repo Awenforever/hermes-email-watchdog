@@ -299,10 +299,18 @@ def _excerpt(email: Mapping[str, Any]) -> str:
         line = " ".join(raw.split()).strip()
         if not line or re.fullmatch(r"[-_=*]{5,}", line):
             continue
+        if re.match(r"^#{1,6}\s+", line):
+            continue
+        if re.match(r"(?i)^[-*]\s+\*\*[a-z][a-z0-9_]+[：:]\*\*\s*[-+]?\d", line):
+            continue
+        if re.match(r"^\*\*(?:生成时间|generated at)[：:]", line, re.I):
+            continue
         if re.fullmatch(r"https?://\S+", line):
             continue
         if re.search(r"(?i)unsubscribe|manage preferences|privacy policy", line):
             continue
+        line = re.sub(r"\[([^\]]+)\]\(https?://[^)\s]+\)", r"\1", line)
+        line = line.replace("**", "").replace("__", "")
         kept.append(line)
         if sum(len(item) for item in kept) >= 900:
             break

@@ -110,7 +110,8 @@ def _lint(text: str, email: dict[str, Any], delivery: dict[str, Any]) -> list[st
     for line in text.splitlines():
         if "\u200b" in line or "\ufeff" in line:
             errors.append("invisible_character_in_output")
-        if "](" in line and not re.search(r"\[[^\]]+\]\(https?://.+\)\s*$", line):
+        residual = re.sub(r"\[[^\]\n]+\]\(https?://[^)\s]+\)", "", line)
+        if "](" in residual:
             errors.append("broken_markdown_link")
             break
     if text.count("**快捷操作**") > 1 or text.count("**附件**") > 1:

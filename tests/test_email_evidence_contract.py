@@ -167,6 +167,23 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertNotIn("cancel_alert", result["text"])
         self.assertIn("review-invitation/token", result["text"])
 
+    def test_lossless_excerpt_omits_pipeline_telemetry_and_markdown_shell(self):
+        email = {
+            "subject": "Weekly report",
+            "body": (
+                "# Weekly report\n**生成时间：** 2026-09-27\n"
+                "- **raw_candidates：** 195\n- **selected_count：** 5\n"
+                "### 1. [Paper title](https://example.test/paper)\n"
+                "This paper introduces a robust wildfire dataset."
+            ),
+            "links": [], "attachments": [],
+        }
+        result = evidence.render_lossless_fallback(email)
+        self.assertNotIn("raw_candidates", result["text"])
+        self.assertNotIn("selected_count", result["text"])
+        self.assertNotIn("# Weekly report", result["text"])
+        self.assertIn("This paper introduces", result["text"])
+
     def test_explicit_models_then_return_to_hermes_default_route(self):
         def route(_prompt, settings):
             model = settings.get("model")
