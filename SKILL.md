@@ -1,7 +1,7 @@
 ---
 name: hermes-email-watchdog
 description: 安装、个性化配置并运行多账号邮件助理；只读监控邮件，并可在用户逐次确认后创建提醒、回复或转发邮件。
-version: 0.12.0
+version: 0.12.1
 tags: [email, watchdog, notification, read-only, hermes, onboarding]
 ---
 

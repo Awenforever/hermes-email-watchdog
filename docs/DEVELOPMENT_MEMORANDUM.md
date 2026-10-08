@@ -159,3 +159,22 @@ can arrive without a reference. It still belongs to Email Watchdog's namespace
 and must be consumed with a safe “quote required” explanation. Never infer the
 latest email. WeChat Enhance remains business-neutral: it only publishes the
 generic event after Context Token refresh/FIFO handling.
+
+# 2026-10-08 — Real transport contracts and mailbox identity
+
+Unit mocks must not define a third-party CLI contract. Himalaya accepts simple
+one-line templates as positional values, but complete multi-line MML reply and
+forward templates must be supplied on standard input. Passing a whole template
+as one argv item produces `cannot parse template` in the real v1.2 client even
+when mocked calls appear correct. Regression tests must assert both that stdin
+contains the complete template and that no user-authored body appears in argv.
+
+Mailbox account labels are presentation values, not case-stable identifiers.
+Every lookup of per-account signatures must normalize both the runtime label
+and configured keys with Unicode-aware `casefold`; the signature content itself
+must remain user-authored apart from newline normalization.
+
+For production acceptance, creating a draft is insufficient. A newly created
+draft must visibly contain the configured account signature, and an explicit
+confirmation must traverse the real configured mail client successfully. A
+failed or uncertain attempt must never be retried automatically.

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.1 - 2026-10-08
+
+- Resolve per-mailbox signatures case-insensitively so backend display labels
+  such as `USTC` select configuration keys such as `ustc`.
+- Send complete multi-line Himalaya MML templates through standard input, the
+  supported non-interactive transport contract; reply bodies no longer fail
+  with `cannot parse template` or appear in process arguments.
+- Apply the same transport correction to confirmed forwards, without changing
+  the two-step confirmation or fail-closed delivery semantics.
+
 ## 0.12.0 - 2026-10-08
 
 - Use exact `@回复` and `@转发 收件邮箱` commands, with a draft and explicit

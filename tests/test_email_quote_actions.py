@@ -72,6 +72,14 @@ class EmailQuoteActionTests(unittest.TestCase):
         draft = next(iter(state["drafts"].values()))
         self.assertEqual(draft["body"], "第一行\n第二行  \n\n祝好\n测试者")
 
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "默认签名", "signatures": {"ustc": "专属签名"}}})
+    def test_account_signature_lookup_is_case_insensitive(self, _config):
+        result = email_actions.handle_inbound(self.context("@回复\n正文", mid="in-case-signature"))
+        self.assertIn("正文\n\n专属签名", result["message"])
+        state = json.loads(email_actions.ACTION_FILE.read_text(encoding="utf-8"))
+        draft = next(iter(state["drafts"].values()))
+        self.assertEqual(draft["body"], "正文\n\n专属签名")
+
     def test_no_reply_sender_is_blocked(self):
         data = json.loads(email_actions.OUTBOX_FILE.read_text(encoding="utf-8"))
         data["entries"]["x"]["metadata"]["mail_actions"][0]["from_addr"] = "no-reply@example.com"
@@ -146,9 +154,11 @@ class EmailQuoteActionTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0][-1], "42")
         self.assertNotIn("原样正文", run.call_args_list[0].args[0])
         self.assertIn("send", run.call_args_list[1].args[0])
-        sent_template = run.call_args_list[1].args[0][-1]
+        self.assertEqual(run.call_args_list[1].args[0][-2:], ["template", "send"])
+        sent_template = run.call_args_list[1].kwargs["input"]
         self.assertEqual(sent_template.split("\n\n", 1)[1], "原样正文\n")
         self.assertNotIn("quoted original", sent_template)
+        self.assertNotIn("原样正文", " ".join(run.call_args_list[1].args[0]))
 
     def test_reply_template_rejects_missing_recipient_headers(self):
         with self.assertRaises(RuntimeError):
@@ -205,10 +215,12 @@ class EmailQuoteActionTests(unittest.TestCase):
         email_actions._send_himalaya_forward({"kind": "forward", "recipient": "friend@example.com", "body": "附言\n\n签名", "mail": {"account_type": "himalaya", "himalaya_config": str(config), "message_id": "42", "himalaya_account": "test"}})
         self.assertIn("forward", run.call_args_list[0].args[0])
         self.assertNotIn("附言", run.call_args_list[0].args[0])
-        sent_template = run.call_args_list[1].args[0][-1]
+        self.assertEqual(run.call_args_list[1].args[0][-2:], ["template", "send"])
+        sent_template = run.call_args_list[1].kwargs["input"]
         self.assertIn("附言\n\n签名\n\n-------- Forwarded Message --------", sent_template)
         self.assertIn("<#!part type=application/pdf", sent_template)
         self.assertNotIn("old signature", sent_template)
+        self.assertNotIn("附言", " ".join(run.call_args_list[1].args[0]))
 
 
 if __name__ == "__main__":

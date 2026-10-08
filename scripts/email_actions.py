@@ -183,8 +183,15 @@ def _signature(action: dict) -> str:
     cfg = email_config.load_config()
     reply = cfg.get("reply") if isinstance(cfg.get("reply"), dict) else {}
     signatures = reply.get("signatures") if isinstance(reply.get("signatures"), dict) else {}
-    account = str(action.get("account") or "")
-    value = signatures.get(account, reply.get("default_signature", ""))
+    account = str(action.get("account") or "").strip().casefold()
+    # Account labels originate in mail backends and are presentation-facing;
+    # their casing is not a stable identifier (for example ``USTC`` versus
+    # ``ustc``).  Signature selection must therefore be case-insensitive while
+    # preserving the configured signature text verbatim.
+    normalized_signatures = {
+        str(key).strip().casefold(): value for key, value in signatures.items()
+    }
+    value = normalized_signatures.get(account, reply.get("default_signature", ""))
     return str(value or "").replace("\r\n", "\n").strip()
 
 
@@ -299,7 +306,14 @@ def _send_himalaya_reply(draft: dict) -> None:
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成回复模板").strip()[:500])
     final_template = _replace_template_body(generated.stdout, draft["body"])
-    sent = subprocess.run(common + ["template", "send", final_template], capture_output=True, text=True, timeout=60, cwd=cwd)
+    # Himalaya accepts a short one-line template as an argv value, but its MML
+    # parser cannot reliably parse a complete multi-line template that way.
+    # Its non-interactive contract is to read the template from stdin.  This
+    # also keeps user-authored mail bodies out of process listings.
+    sent = subprocess.run(
+        common + ["template", "send"], input=final_template,
+        capture_output=True, text=True, timeout=60, cwd=cwd,
+    )
     if sent.returncode != 0:
         raise RuntimeError((sent.stderr or "邮件发送失败").strip()[:500])
 
@@ -321,7 +335,10 @@ def _send_himalaya_forward(draft: dict) -> None:
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成转发模板").strip()[:500])
     final_template = _replace_forward_template_body(generated.stdout, draft.get("body", ""), recipient)
-    sent = subprocess.run(common + ["template", "send", final_template], capture_output=True, text=True, timeout=60, cwd=cwd)
+    sent = subprocess.run(
+        common + ["template", "send"], input=final_template,
+        capture_output=True, text=True, timeout=60, cwd=cwd,
+    )
     if sent.returncode != 0:
         raise RuntimeError((sent.stderr or "邮件发送失败").strip()[:500])
 
