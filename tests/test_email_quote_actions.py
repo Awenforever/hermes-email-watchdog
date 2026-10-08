@@ -71,6 +71,8 @@ class EmailQuoteActionTests(unittest.TestCase):
         state = json.loads(email_actions.ACTION_FILE.read_text(encoding="utf-8"))
         draft = next(iter(state["drafts"].values()))
         self.assertEqual(draft["body"], "第一行\n第二行  \n\n祝好\n测试者")
+        self.assertEqual(draft["user_body"], "第一行\n第二行  ")
+        self.assertEqual(draft["signature"], "祝好\n测试者")
 
     @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "默认签名", "signatures": {"ustc": "专属签名"}}})
     def test_account_signature_lookup_is_case_insensitive(self, _config):
@@ -79,6 +81,26 @@ class EmailQuoteActionTests(unittest.TestCase):
         state = json.loads(email_actions.ACTION_FILE.read_text(encoding="utf-8"))
         draft = next(iter(state["drafts"].values()))
         self.assertEqual(draft["body"], "正文\n\n专属签名")
+
+    def test_markdown_signature_marker_renders_as_compact_rich_signature(self):
+        signature = "---\n\n吴金宏\n\n中国科学技术大学\n\n火灾安全全国重点实验室\n\nTel: (+86)17305697595"
+        preview = email_actions._render_signature_preview("这里是验收正文。", signature)
+        self.assertEqual(
+            preview,
+            "这里是验收正文。\n\n---\n\n吴金宏\n中国科学技术大学\n火灾安全全国重点实验室\nTel: (+86)17305697595",
+        )
+        mml = email_actions._render_reply_mml("这里是验收正文。", signature)
+        self.assertIn("<#multipart type=alternative>", mml)
+        self.assertIn("──────────────\n吴金宏\n中国科学技术大学", mml)
+        self.assertIn('border-top:1px solid #9ca3af;width:140px', mml)
+        self.assertNotIn("---\n\n吴金宏", mml)
+        self.assertNotIn("吴金宏\n\n中国科学技术大学", mml)
+
+    def test_rich_reply_escapes_html_and_rejects_mml_directives(self):
+        mml = email_actions._render_reply_mml("<b>原样文本</b>\n下一行", "签名")
+        self.assertIn("&lt;b&gt;原样文本&lt;/b&gt;<br>", mml)
+        with self.assertRaisesRegex(RuntimeError, "MML"):
+            email_actions._render_reply_mml("正文 <#part>", "签名")
 
     def test_no_reply_sender_is_blocked(self):
         data = json.loads(email_actions.OUTBOX_FILE.read_text(encoding="utf-8"))
@@ -159,6 +181,27 @@ class EmailQuoteActionTests(unittest.TestCase):
         self.assertEqual(sent_template.split("\n\n", 1)[1], "原样正文\n")
         self.assertNotIn("quoted original", sent_template)
         self.assertNotIn("原样正文", " ".join(run.call_args_list[1].args[0]))
+
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"outbound_enabled": True}})
+    @patch("email_actions.subprocess.run")
+    def test_confirmed_rich_reply_sends_multipart_template_via_stdin(self, run, _config):
+        config = Path(self.temp.name) / "himalaya.toml"
+        config.write_text("[accounts.test]\n", encoding="utf-8")
+        run.side_effect = [
+            SimpleNamespace(returncode=0, stdout="From: a@example.test\nTo: b@example.test\nSubject: Re: 测试\n\nimplicit", stderr=""),
+            SimpleNamespace(returncode=0, stdout="sent", stderr=""),
+        ]
+        email_actions._send_himalaya_reply({
+            "body": "legacy preview",
+            "user_body": "这里是验收正文。",
+            "signature": "---\n\n吴金宏\n\n中国科学技术大学",
+            "mail": {"account_type": "himalaya", "himalaya_config": str(config), "message_id": "42", "himalaya_account": "test"},
+        })
+        sent = run.call_args_list[1]
+        self.assertEqual(sent.args[0][-2:], ["template", "send"])
+        self.assertIn("<#multipart type=alternative>", sent.kwargs["input"])
+        self.assertIn("border-top:1px solid #9ca3af;width:140px", sent.kwargs["input"])
+        self.assertNotIn("这里是验收正文。", " ".join(sent.args[0]))
 
     def test_reply_template_rejects_missing_recipient_headers(self):
         with self.assertRaises(RuntimeError):

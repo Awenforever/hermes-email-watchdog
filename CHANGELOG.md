@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.2 - 2026-10-08
+
+- Render confirmed replies as safe `multipart/alternative` messages with both
+  plain-text and HTML representations for consistent Gmail/Outlook layout.
+- Interpret a leading dash-only signature line as a semantic divider instead
+  of sending literal `---`; render a compact fixed-width HTML rule and remove
+  authoring-only blank lines between signature fields.
+- Preserve user-authored reply text while HTML-escaping it, and fail closed on
+  the reserved MML directive prefix rather than allowing template injection.
+- Keep draft previews faithful to the final compact signature layout.
+
 ## 0.12.1 - 2026-10-08
 
 - Resolve per-mailbox signatures case-insensitively so backend display labels

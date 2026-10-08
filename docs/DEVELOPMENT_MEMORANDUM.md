@@ -160,7 +160,7 @@ and must be consumed with a safe “quote required” explanation. Never infer t
 latest email. WeChat Enhance remains business-neutral: it only publishes the
 generic event after Context Token refresh/FIFO handling.
 
-# 2026-10-08 — Real transport contracts and mailbox identity
+## 2026-10-08 — Real transport contracts and mailbox identity
 
 Unit mocks must not define a third-party CLI contract. Himalaya accepts simple
 one-line templates as positional values, but complete multi-line MML reply and
@@ -178,3 +178,19 @@ For production acceptance, creating a draft is insufficient. A newly created
 draft must visibly contain the configured account signature, and an explicit
 confirmation must traverse the real configured mail client successfully. A
 failed or uncertain attempt must never be retried automatically.
+
+## 2026-10-08 — Signature authoring is not wire formatting
+
+Do not send a configured Markdown separator or authoring whitespace directly
+as an email body. A leading dash-only line in a mailbox signature represents a
+semantic divider: remove it from content, compact the signature fields below
+it, and render it as a fixed-width HTML rule. The plain-text alternative uses a
+Unicode rule rather than three literal dashes.
+
+Confirmed replies are `multipart/alternative`: the text part remains usable in
+plain clients, while the HTML part provides deterministic spacing and signature
+layout in Gmail and Outlook. User-authored reply text remains unchanged in the
+plain part and is HTML-escaped in the rich part. Because MML directives are
+active inside template text, reject the reserved `<#` prefix rather than
+silently rewriting it or permitting template injection. Draft previews must use
+the same signature-layout semantics as the eventual wire message.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import ntpath
 import os
@@ -195,6 +196,87 @@ def _signature(action: dict) -> str:
     return str(value or "").replace("\r\n", "\n").strip()
 
 
+def _signature_layout(value: str) -> tuple[bool, str]:
+    """Interpret a signature separator without leaking Markdown into email.
+
+    A leading line made only of dashes is authoring metadata: chat Markdown may
+    render it as a rule, but a plain email client prints three literal dashes.
+    Treat it as a semantic divider and compact the deliberately line-separated
+    signature fields beneath it. Signatures without that marker retain a
+    single intentional blank line between groups.
+    """
+    lines = str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    divider = bool(lines and re.fullmatch(r"[-—─_]{3,}", lines[0].strip()))
+    if divider:
+        lines = [line for line in lines[1:] if line.strip()]
+    else:
+        compact = []
+        blank = False
+        for line in lines:
+            if not line.strip():
+                if compact and not blank:
+                    compact.append("")
+                blank = True
+            else:
+                compact.append(line)
+                blank = False
+        while compact and compact[-1] == "":
+            compact.pop()
+        lines = compact
+    return divider, "\n".join(lines)
+
+
+def _render_signature_preview(body: str, signature: str) -> str:
+    divider, content = _signature_layout(signature)
+    if not content:
+        return body
+    separator = "\n\n---\n\n" if divider else "\n\n"
+    return body + separator + content
+
+
+def _render_reply_mml(body: str, signature: str) -> str:
+    """Build safe text/plain + HTML alternatives for a confirmed reply."""
+    normalized_body = str(body or "").replace("\r\n", "\n").replace("\r", "\n")
+    divider, signature_text = _signature_layout(signature)
+    # MML directives are active even inside the text alternative. Refuse the
+    # directive prefix instead of altering user-authored reply text silently.
+    if "<#" in normalized_body or "<#" in signature_text:
+        raise RuntimeError("邮件正文或签名包含保留的 MML 指令前缀 `<#`，已阻止发送")
+    plain = normalized_body
+    if signature_text:
+        plain += ("\n\n──────────────\n" if divider else "\n\n") + signature_text
+
+    body_html = html.escape(normalized_body, quote=False).replace("\n", "<br>\n")
+    signature_lines = [
+        f'<div style="margin:0;">{html.escape(line, quote=False)}</div>'
+        for line in signature_text.split("\n") if line
+    ]
+    signature_html = ""
+    if signature_lines:
+        rule = (
+            '<div style="border-top:1px solid #9ca3af;width:140px;'
+            'margin:22px 0 8px 0;"></div>'
+            if divider else '<div style="height:18px;"></div>'
+        )
+        signature_html = rule + '<div style="line-height:1.2;font-weight:600;">' + "".join(signature_lines) + "</div>"
+    rich = (
+        '<!doctype html><html><body style="margin:0;font-family:Arial,\'Microsoft YaHei\',sans-serif;'
+        'font-size:14px;line-height:1.6;color:#111827;">'
+        f'<div style="white-space:normal;">{body_html}</div>{signature_html}</body></html>'
+    )
+    return (
+        "<#multipart type=alternative>\n"
+        + plain
+        + "\n<#part type=text/html>\n"
+        + rich
+        + "\n<#/multipart>"
+    )
+
+
 def _reply_block_reason(action: dict) -> str:
     sender = str(action.get("from_addr") or "").strip()
     if not sender or _NO_REPLY_RE.search(sender):
@@ -305,7 +387,11 @@ def _send_himalaya_reply(draft: dict) -> None:
     generated = subprocess.run(reply_cmd, capture_output=True, text=True, timeout=45, cwd=cwd)
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成回复模板").strip()[:500])
-    final_template = _replace_template_body(generated.stdout, draft["body"])
+    if "user_body" in draft or "signature" in draft:
+        rendered_body = _render_reply_mml(draft.get("user_body", ""), draft.get("signature", ""))
+    else:
+        rendered_body = draft["body"]
+    final_template = _replace_template_body(generated.stdout, rendered_body)
     # Himalaya accepts a short one-line template as an argv value, but its MML
     # parser cannot reliably parse a complete multi-line template that way.
     # Its non-interactive contract is to read the template from stdin.  This
@@ -471,10 +557,10 @@ def _handle_inbound_locked(context: dict):
         if reason:
             return _handled(reason, _receipt_key(context, "reply-blocked"))
         signature = _signature(action)
-        final_body = body + (("\n\n" + signature) if signature else "")
+        final_body = _render_signature_preview(body, signature)
         draft_key = hashlib.sha256((str(context.get("message_id")) + _fingerprint(reference_text)).encode()).hexdigest()[:24]
         preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `Re: {action.get('subject')}`\n\n**正文**\n\n{final_body}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
-        state["drafts"][draft_key] = {"kind": "reply", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
+        state["drafts"][draft_key] = {"kind": "reply", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "user_body": body, "signature": signature, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-draft-{draft_key}")
 
