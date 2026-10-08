@@ -136,6 +136,13 @@ DEFAULT_CONFIG = {
             "chat_type": "",
         },
     },
+    "reply": {
+        "outbound_enabled": False,
+        "default_signature": "",
+        "signatures": {},
+        "confirmation_phrase": "确认发送",
+        "cancel_phrase": "取消",
+    },
     # Immutable release safety boundary. User config cannot override these.
     "safety": {
         "mailbox_read_only": True,

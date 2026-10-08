@@ -22,12 +22,22 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 HERMES_HOME = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
-SKILL_DIR = Path(
-    os.getenv(
-        "HERMES_EMAIL_WATCHDOG_SKILL_DIR",
-        str(HERMES_HOME / "plugins" / "hermes-email-watchdog"),
-    )
-)
+
+
+def _resolve_skill_dir() -> Path:
+    explicit = os.getenv("HERMES_EMAIL_WATCHDOG_SKILL_DIR", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    for candidate in (
+        HERMES_HOME / "plugins" / "hermes-email-watchdog",
+        HERMES_HOME / "skills" / "hermes-email-watchdog",
+    ):
+        if candidate.is_dir():
+            return candidate
+    return HERMES_HOME / "skills" / "hermes-email-watchdog"
+
+
+SKILL_DIR = _resolve_skill_dir()
 SCRIPTS_DIR = SKILL_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -57,6 +67,7 @@ OUTBOX_DEFAULT_TTL_SECONDS = int(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_TTL_SEC
 
 _task: asyncio.Task | None = None
 _once_lock = asyncio.Lock()
+_LAST_WATCHDOG_ITEMS = []
 _LAST_WATCHDOG_METADATA: dict = {
     "model_name": "hermes", "model_generated": False, "attachments": [],
 }
@@ -115,6 +126,8 @@ def _atomic_write_json_file(path: Path, data: dict) -> None:
 
 async def handle(event_type: str, context: dict):
     global _task
+    if event_type == "message:inbound":
+        return await _handle_inbound_action(context or {})
     if event_type == "agent:start":
         _capture_onboarding_target(context or {})
         return
@@ -134,6 +147,16 @@ async def handle(event_type: str, context: dict):
     _task.add_done_callback(_task_done)
     _write_status({"state": "starting", "started_at": _now()})
     logger.warning("Hermes Email Watchdog: readonly scheduler task created")
+
+
+async def _handle_inbound_action(context: dict):
+    try:
+        import email_actions
+
+        return await asyncio.to_thread(email_actions.handle_inbound, context)
+    except Exception:
+        logger.exception("Hermes Email Watchdog: inbound mail action failed")
+        return None
 
 
 # EMAIL_WATCHDOG_ONBOARDING_CONTEXT_CAPTURE_V1
@@ -394,6 +417,18 @@ def _outbox_delivery_id(text_hash: str) -> str:
     return f"hermes-email-watchdog-{text_hash[:32]}"
 
 
+def _outbox_identity_hash(text: str, metadata: dict | None = None) -> str:
+    """Keep byte-identical emails distinct without changing legacy retries."""
+    metadata = metadata if isinstance(metadata, dict) else {}
+    actions = [item for item in (metadata.get("mail_actions") or []) if isinstance(item, dict)]
+    if len(actions) == 1:
+        action = actions[0]
+        identity = f"{action.get('account') or ''}|{action.get('message_id') or ''}"
+        if identity != "|":
+            return hashlib.sha256((text + "\0" + identity).encode("utf-8", errors="replace")).hexdigest()
+    return _outbox_text_hash(text)
+
+
 def _notification_ttl_seconds(text: str, metadata: dict | None = None) -> int:
     metadata = metadata if isinstance(metadata, dict) else {}
     try:
@@ -439,7 +474,7 @@ def _outbox_prepare(text: str, metadata: dict | None = None) -> dict:
     # Persist before calling adapter.send so success=false/exception can be retried safely.
     text = _sanitize_notification(text)
     text_hash = _outbox_text_hash(text)
-    delivery_id = _outbox_delivery_id(text_hash)
+    delivery_id = _outbox_delivery_id(_outbox_identity_hash(text, metadata))
     with _state_file_lock(OUTBOX_FILE):
         data = _outbox_load()
         entries = data.setdefault("entries", {})
@@ -674,6 +709,8 @@ def _outbox_mark_part_done(delivery_id: str, part_id: str, result: object) -> No
             "message_id_present": bool(message_id),
             "adapter_state": "queued" if queued else "sent",
         }
+        if message_id:
+            parts[part_id]["adapter_message_id"] = message_id
         entry["updated_at"] = now
         _outbox_save(data)
 
@@ -769,29 +806,34 @@ async def _run_once():
 
         if output:
             try:
-                entry = _outbox_prepare(output, _LAST_WATCHDOG_METADATA)
+                items = list(_LAST_WATCHDOG_ITEMS) or [(output, dict(_LAST_WATCHDOG_METADATA))]
+                entries = [_outbox_prepare(text, metadata) for text, metadata in items if text]
             except Exception:
                 _restore_seen_snapshot(seen_snapshot)
                 raise
-
-            try:
-                _outbox_mark_attempt(entry)
-                result = await _send_weixin(entry["text"], delivery_id=entry["delivery_id"])
-            except Exception as exc:
-                # Mailbox processing has completed and the exact notification is durable in the outbox.
-                # Defer delivery with bounded backoff; do not suppress future mailbox polling.
-                _outbox_mark_failed(entry, exc)
-                delivery_error = _safe_error_text(exc)
-                status["state"] = "degraded"
-                status["last_delivery_id"] = entry["delivery_id"]
-                status["last_delivery_pending_at"] = _now()
-                status["last_delivery_error"] = delivery_error
-            else:
-                _outbox_mark_delivered(entry, result)
-                status["last_sent_at"] = _now()
-                status["last_sent_chars"] = len(output)
-                status["last_delivery_id"] = entry["delivery_id"]
-                status["last_delivery_error"] = ""
+            sent_chars = 0
+            for entry in entries:
+                try:
+                    _outbox_mark_attempt(entry)
+                    result = await _send_weixin(
+                        entry["text"], delivery_id=entry["delivery_id"],
+                        attribution=entry.get("metadata") or {},
+                    )
+                except Exception as exc:
+                    # Every physical notification is already durable before the first send.
+                    _outbox_mark_failed(entry, exc)
+                    delivery_error = _safe_error_text(exc)
+                    status["state"] = "degraded"
+                    status["last_delivery_id"] = entry["delivery_id"]
+                    status["last_delivery_pending_at"] = _now()
+                    status["last_delivery_error"] = delivery_error
+                else:
+                    _outbox_mark_delivered(entry, result)
+                    sent_chars += len(entry.get("text") or "")
+                    status["last_sent_at"] = _now()
+                    status["last_sent_chars"] = sent_chars
+                    status["last_delivery_id"] = entry["delivery_id"]
+                    status["last_delivery_error"] = ""
 
         pending_state = _outbox_pending_state()
         status.update(pending_state)
@@ -804,7 +846,7 @@ async def _run_once():
         _write_status(status)
 
 def _call_watchdog() -> str:
-    global _LAST_WATCHDOG_METADATA
+    global _LAST_WATCHDOG_METADATA, _LAST_WATCHDOG_ITEMS
     # EMAIL_WATCHDOG_RELOAD_MODULES_EACH_RUN_V1
     if str(SCRIPTS_DIR) not in sys.path:
         sys.path.insert(0, str(SCRIPTS_DIR))
@@ -832,7 +874,29 @@ def _call_watchdog() -> str:
         "model_name": model_name if model_generated else "hermes",
         "model_generated": model_generated,
         "attachments": list(metadata.get("attachments") or [])[:12],
+        "mail_actions": list(metadata.get("mail_actions") or [])[:20],
     }
+    notifications = [str(item) for item in (metadata.get("notifications") or []) if str(item).strip()]
+    actions = [item for item in (metadata.get("mail_actions") or []) if isinstance(item, dict)]
+    unused = list(actions)
+    items = []
+    for notification in notifications:
+        match = next((item for item in unused if str(item.get("notification_text") or "") == notification), None)
+        if match is not None:
+            unused.remove(match)
+            item_metadata = {
+                "model_name": str(match.get("model_name") or "hermes"),
+                "model_generated": bool(match.get("model_generated")),
+                "attachments": list(match.get("attachments") or [])[:12],
+                "mail_actions": [match],
+            }
+        else:
+            item_metadata = {
+                "model_name": "hermes", "model_generated": False,
+                "attachments": [], "mail_actions": [],
+            }
+        items.append((notification, item_metadata))
+    _LAST_WATCHDOG_ITEMS = items
     return result or ""
 def _runner_ref():
     try:

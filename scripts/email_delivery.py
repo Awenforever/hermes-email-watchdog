@@ -47,6 +47,7 @@ def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict)
     schedule = upsert_schedule(email, analysis)
     cron_entries = install_reminder_cron(schedule)
     text = format_notification(email, analysis, attachments, schedule)
+    text = append_interaction_guidance(text, schedule)
     _persist_delivery(email, analysis, text, "pushed")
     return {
         "notification_text": text,
@@ -55,6 +56,22 @@ def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict)
         "cron_entries": cron_entries,
         "status": "pushed",
     }
+
+
+def append_interaction_guidance(text: str, schedule: list) -> str:
+    """Offer user-controlled actions; never create reminders merely from mail content."""
+    lines = []
+    candidates = [item for item in (schedule or []) if isinstance(item, dict) and item.get("deadline")]
+    if len(candidates) == 1:
+        lines.append('如需添加提醒，请引用本消息回复 `提醒我`。')
+    elif len(candidates) > 1:
+        lines.append("**可选截止时间**")
+        for index, item in enumerate(candidates, start=1):
+            label = str(item.get("title") or "邮件待办").strip().replace("\n", " ")[:100]
+            lines.append(f"{index}. `{item.get('deadline')}` · {label}")
+        lines.append('如需添加提醒，请引用本消息回复编号（可多选，如 `1,3`）。')
+    lines.append('如需回复邮件，请引用本消息，发送 `回复` 后换行输入正文。')
+    return (str(text or "").rstrip() + "\n\n---\n\n" + "\n\n".join(lines)).strip()
 
 
 def format_notification(email: dict, analysis: dict, attachments: list, schedule: list) -> str:
@@ -768,7 +785,7 @@ def _attachment_forward_policy(path: str, settings: dict | None = None) -> tuple
 
 
 def upsert_schedule(email: dict, analysis: dict) -> list:
-    """Persist deadlines/reminders in schedule store and email_store actions."""
+    """Build inert reminder candidates. Activation requires an authorized quote action."""
     if not email_store:
         return []
     settings = email_config.get_delivery_settings() if email_config else {}
@@ -783,9 +800,10 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
     msg_id = email.get("id") or email.get("msg_id")
     sched_id = f"{msg_id}:main"
     action = analysis.get("action_needed") or {}
+    timezone_name = _effective_timezone_name(deadline.get("timezone") or settings.get("timezone", "auto"))
     deadline_value = deadline.get("datetime") or deadline.get("date_text") or ""
-    deadline_value = _resolve_deadline_value(deadline_value, email.get("date_sent") or email.get("date"))
-    resolved_deadline = _parse_datetime(deadline_value, deadline.get("timezone") or settings.get("timezone", "Asia/Shanghai"))
+    deadline_value = _resolve_deadline_value(deadline_value, email.get("date_sent") or email.get("date"), timezone_name)
+    resolved_deadline = _parse_datetime(deadline_value, timezone_name)
     if resolved_deadline is None or resolved_deadline <= datetime.now(resolved_deadline.tzinfo):
         # Never create active calendar/reminder state for an ambiguous or
         # already expired historical deadline.
@@ -802,12 +820,11 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
         "title": analysis.get("formatted_summary") or email.get("subject", ""),
         "action_needed": action.get("description") or action.get("next_step") or "",
         "deadline": deadline_value,
-        "timezone": deadline.get("timezone") or settings.get("timezone", "Asia/Shanghai"),
+        "timezone": timezone_name,
         "status": "active",
         "reminder_json": json.dumps(reminders, ensure_ascii=False),
     }
-    email_store.upsert_schedule(item)
-    _sync_calendar_ics()
+    item["status"] = "offered"
     return [{**item, "reminders": reminders}]
 
 
@@ -816,6 +833,8 @@ def install_reminder_cron(schedule_items: list) -> list:
     settings = email_config.get_delivery_settings() if email_config else {}
     entries = []
     for item in schedule_items:
+        if str(item.get("status") or "") != "active":
+            continue
         for reminder in item.get("reminders", []):
             entries.append({
                 "schedule_id": item.get("id"),
@@ -836,18 +855,35 @@ def _parse_datetime(value, tz_name="Asia/Shanghai"):
         return None
     if dt.tzinfo is None:
         try:
-            dt = dt.replace(tzinfo=ZoneInfo(tz_name if tz_name != "auto" else "Asia/Shanghai"))
+            dt = dt.replace(tzinfo=ZoneInfo(_effective_timezone_name(tz_name)))
         except Exception:
             dt = dt.replace(tzinfo=timezone(timedelta(hours=8)))
     return dt
 
 
-def _resolve_deadline_value(value, message_date=""):
+def _effective_timezone_name(value="auto"):
+    requested = str(value or "auto").strip()
+    if requested and requested.lower() != "auto":
+        return requested
+    try:
+        from hermes_time import get_timezone_name
+        profile = str(get_timezone_name() or "").strip()
+        if profile:
+            return profile
+    except Exception:
+        pass
+    profile = str(os.getenv("HERMES_TIMEZONE") or os.getenv("TZ") or "").strip()
+    return profile or "Asia/Shanghai"
+
+
+def _resolve_deadline_value(value, message_date="", tz_name="auto"):
     """Resolve common Chinese/ISO deadline text using the message year."""
     raw = str(value or "").strip()
     if not raw:
         return ""
-    if _parse_datetime(raw) is not None:
+    # A bare ISO date parses successfully in Python, but our user contract
+    # assigns it 09:00 rather than silently treating midnight as the deadline.
+    if _parse_datetime(raw) is not None and re.search(r"[T\s]\d{1,2}(?::|点|时)", raw):
         return raw
     relative = re.fullmatch(
         r"(?i)\s*(?:有效期(?:为)?\s*)?"
@@ -874,7 +910,7 @@ def _resolve_deadline_value(value, message_date=""):
                 sent = None
         if amount > 0 and sent is not None:
             if sent.tzinfo is None:
-                sent = sent.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+                sent = sent.replace(tzinfo=ZoneInfo(_effective_timezone_name(tz_name)))
             unit = relative.group(2).casefold()
             if unit in {"小时", "hour", "hours"}:
                 delta = timedelta(hours=amount)
@@ -897,9 +933,11 @@ def _resolve_deadline_value(value, message_date=""):
             iso = re.search(r"(20\d{2})", str(message_date))
             year = int(iso.group(1)) if iso else datetime.now().year
     month, day = int(match.group(2)), int(match.group(3))
-    hour, minute = int(match.group(4) or 23), int(match.group(5) or (59 if not match.group(4) else 0))
+    # A date-only deadline is an action day, not the end of that day.  The
+    # interaction contract uses 09:00 in the active Hermes profile timezone.
+    hour, minute = int(match.group(4) or 9), int(match.group(5) or 0)
     try:
-        return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("Asia/Shanghai")).isoformat(timespec="minutes")
+        return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo(_effective_timezone_name(tz_name))).isoformat(timespec="minutes")
     except Exception:
         return raw
 
@@ -2024,6 +2062,8 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
             text = str(renderer_meta.get("text") or "").strip()
             if not renderer_meta.get("ok") or not text:
                 raise RuntimeError("semantic renderers returned empty or invalid text")
+            text = append_interaction_guidance(text, schedule)
+            renderer_meta["text"] = text
 
             try:
                 _persist_delivery(email or {}, prod_analysis, text, "pushed")

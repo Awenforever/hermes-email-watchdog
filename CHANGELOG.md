@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.0 - 2026-10-07
+
+- Add quote-driven reminder creation: detected deadlines are inert candidates
+  until an authorized user explicitly selects them; date-only deadlines use
+  09:00 in the active Hermes profile timezone.
+- Add quote-driven reply drafts with verbatim bodies, per-mailbox signatures,
+  sender/risk blocking, and a second explicit confirmation before transport.
+- Consume the platform-neutral `message:inbound` reference contract while
+  remaining independently installable from channel enhancement plugins.
+- Preserve action receipts and drafts in profile-owned state for restart-safe,
+  idempotent handling.
+- Deliver each discovered email as an independent durable notification so a
+  quoted bubble always resolves to one message, one attachment set, and one
+  model attribution; serialize concurrent action transitions across processes.
+
 ## 0.10.1 - 2026-10-05
 
 - Enter an inherited Hermes model route through the `auto` provider boundary,

@@ -11,12 +11,13 @@ required=[
  "hooks/hermes-email-watchdog/HOOK.yaml","hooks/hermes-email-watchdog/handler.py",
  "scripts/email_onboarding.py","scripts/email_notification_renderer.py",
  "scripts/email_assistant_composer.py",
+ "scripts/email_actions.py",
  "tests/test_email_onboarding_matrix.py","tests/test_email_state_concurrency_recovery_matrix.py",
  "tests/test_email_outbox_nonblocking_backoff_matrix.py",
 ]
 errors=[f"missing required file: {p}" for p in required if not (root/p).is_file()]
 forbidden_modules=[
- "scripts/email_actions.py","scripts/email_commands.py","scripts/email_reply.py",
+ "scripts/email_commands.py","scripts/email_reply.py",
  "scripts/email_pending_processor.py",
 ]
 errors += [f"mailbox-write module included: {p}" for p in forbidden_modules if (root/p).exists()]
@@ -65,10 +66,12 @@ finally:
 checks={
  "handler_nonblocking":"EMAIL_WATCHDOG_OUTBOX_NONBLOCKING_BACKOFF_V1" in handler,
  "handler_onboarding":"EMAIL_WATCHDOG_ONBOARDING_CONTEXT_CAPTURE_V1" in handler,
+ "handler_portable_skill_resolution":"def _resolve_skill_dir(" in handler and 'HERMES_HOME / "skills" / "hermes-email-watchdog"' in handler,
  "handler_state_transaction_lock":"EMAIL_WATCHDOG_STATE_TRANSACTION_LOCK_V1" in handler,
  "onboarding_transaction_lock":"EMAIL_WATCHDOG_ONBOARDING_TRANSACTION_LOCK_V1" in onboarding,
  "handler_generic_delivery":"def _send_channel(" in handler and "configured Hermes delivery target" in handler,
  "hook_agent_start":"agent:start" in hook_yaml and "gateway:startup" in hook_yaml,
+ "hook_structured_inbound":"message:inbound" in hook_yaml and "email_actions.handle_inbound" in handler,
  "renderer_v1g":"EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G" in renderer and "adaptive_v1g" in renderer,
  "evidence_bound_composer_v5":"EMAIL_WATCHDOG_EVIDENCE_BOUND_COMPOSER_V5" in composer and "intelligent_v5.0" in composer,
  "protocol_v1x":"readable_grounded_core_v1x" in config_text,

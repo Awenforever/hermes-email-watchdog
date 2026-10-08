@@ -99,6 +99,13 @@
       "chat_type": ""
     }
   },
+  "reply": {
+    "outbound_enabled": false,
+    "default_signature": "",
+    "signatures": {},
+    "confirmation_phrase": "确认发送",
+    "cancel_phrase": "取消"
+  },
   "safety": {
     "mailbox_read_only": true,
     "outbound_email_enabled": false,

@@ -80,10 +80,14 @@ else:
 # the Email Watchdog hook; it never changes mailbox state or transport routing.
 _LAST_OUTPUT_MODELS = set()
 _LAST_OUTPUT_ATTACHMENTS = []
+_LAST_OUTPUT_ACTIONS = []
+_LAST_OUTPUT_NOTIFICATIONS = []
 
 def _reset_output_metadata():
     _LAST_OUTPUT_MODELS.clear()
     _LAST_OUTPUT_ATTACHMENTS.clear()
+    _LAST_OUTPUT_ACTIONS.clear()
+    _LAST_OUTPUT_NOTIFICATIONS.clear()
 
 def _record_output_model(model):
     value = str(model or "").strip()
@@ -119,7 +123,54 @@ def get_last_output_metadata():
     else:
         result = {"model_name": "mixed-model", "model_generated": True}
     result["attachments"] = list(_LAST_OUTPUT_ATTACHMENTS)
+    result["mail_actions"] = list(_LAST_OUTPUT_ACTIONS)
+    result["notifications"] = list(_LAST_OUTPUT_NOTIFICATIONS)
     return result
+
+
+def _record_output_action(email, account, analysis, delivery, notification_text):
+    if not notification_text:
+        return
+    deadline_items = []
+    for item in (delivery or {}).get("schedule") or []:
+        if isinstance(item, dict) and item.get("deadline"):
+            deadline_items.append(dict(item))
+    semantic = (delivery or {}).get("semantic") if isinstance((delivery or {}).get("semantic"), dict) else {}
+    risk = semantic.get("risk") if isinstance(semantic.get("risk"), dict) else {}
+    decision = semantic.get("decision") if isinstance(semantic.get("decision"), dict) else {}
+    classification = decision.get("classification") if isinstance(decision.get("classification"), dict) else {}
+    editorial = (delivery or {}).get("editorial") if isinstance((delivery or {}).get("editorial"), dict) else {}
+    semantic_model = semantic.get("model") if isinstance(semantic, dict) else ""
+    model_name = str(editorial.get("model") if editorial.get("ok") else semantic_model or "hermes").strip() or "hermes"
+    action_attachments = []
+    for item in (delivery or {}).get("attachments") or []:
+        if not isinstance(item, dict) or not item.get("send_to_weixin"):
+            continue
+        path = str(item.get("local_path") or "").strip()
+        if path and os.path.isfile(path):
+            action_attachments.append({
+                "filename": str(item.get("filename") or os.path.basename(path))[:240],
+                "local_path": path,
+                "size_bytes": int(item.get("size_bytes") or os.path.getsize(path)),
+                "download_status": str(item.get("download_status") or "downloaded")[:40],
+            })
+    _LAST_OUTPUT_ACTIONS.append({
+        "notification_text": str(notification_text),
+        "message_id": str((email or {}).get("id") or (email or {}).get("msg_id") or ""),
+        "account": str((email or {}).get("account") or (account or {}).get("id") or ""),
+        "account_type": str((account or {}).get("type") or ""),
+        "himalaya_config": str((account or {}).get("himalaya_config") or (account or {}).get("config") or ""),
+        "himalaya_account": str((account or {}).get("himalaya_account") or ""),
+        "from_addr": str((email or {}).get("from_addr") or (email or {}).get("from_email") or ""),
+        "from_name": str((email or {}).get("from_name") or ""),
+        "subject": str((email or {}).get("subject") or ""),
+        "risk_label": str(risk.get("level") or ""),
+        "category": str(classification.get("category") or (email or {}).get("rule_category") or ""),
+        "deadlines": deadline_items,
+        "attachments": action_attachments,
+        "model_name": model_name,
+        "model_generated": model_name.lower() != "hermes",
+    })
 
 
 # ── Email Content Cache ──────────────────────────────────────
@@ -1311,6 +1362,7 @@ def check_account(acct, pushed_count=None):
         if alert:
             if HAS_V3:
                 _record_output_attachments(delivery.get("attachments") or [])
+                _record_output_action(email_data, acct, analysis, delivery, alert)
             if (
                 delivery.get("route_lane") == "fast"
                 or analysis.get("user_relevance") == "urgent"
@@ -1333,6 +1385,7 @@ def main():
         except Exception:
             due_alerts = []
     if is_sleep_time():
+        _LAST_OUTPUT_NOTIFICATIONS.extend(str(item) for item in due_alerts if item)
         return "\n\n---\n\n".join(due_alerts)
 
     all_alerts = list(due_alerts)
@@ -1354,6 +1407,7 @@ def main():
 
     # Each message retains its own category, mailbox and timestamps. Batching
     # is a transport detail and must not replace them with the replay time.
+    _LAST_OUTPUT_NOTIFICATIONS.extend(str(item) for item in all_alerts if item)
     return "\n\n---\n\n".join(all_alerts)
 
 

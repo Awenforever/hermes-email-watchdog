@@ -3,6 +3,47 @@
 This document records non-negotiable engineering invariants and regression
 history. It is intentionally separate from the product README.
 
+## 2026-10-07 — Quoted-message actions are structured events
+
+- Never infer Weixin quote order or parse a display string. The current user
+  text is `text_item.text`; the quoted bubble is `ref_msg.message_item`.
+- Channel integration must publish a platform-neutral `message:inbound` event
+  only after refreshing the inbound Context Token and resuming durable FIFO.
+- Email Watchdog consumes that optional event but channel plugins must not
+  import, require, or special-case Email Watchdog.
+- An email deadline is evidence, not authorization. Store an inert candidate;
+  create active reminders only after exact user intent (`提醒我` or selected
+  numbers). Date-only deadlines mean 09:00 in the Hermes profile timezone.
+- A reply is a two-phase operation. Preserve all text after the first `回复`
+  newline byte-for-byte (apart from newline normalization), append only the
+  configured mailbox signature, render a draft, then require `确认发送` quoted
+  against that draft.
+- Reply only to the sender. Block no-reply/automated/high-risk destinations.
+  Every action is paired-user gated, restart-safe, and idempotent.
+- One visible notification bubble must correspond to exactly one email action.
+  Polling may discover many messages, but each is stored, retried, attributed,
+  and sent as a separate outbox entry with only its own attachments and model
+  provenance. Never ask the user to disambiguate a batch bubble that the system
+  itself created.
+- Serialize action-state transitions with a cross-thread and cross-process
+  lock. Duplicate or concurrent inbound delivery must produce one reminder
+  activation or one confirmation transition, not repeated side effects.
+- Consumers must require the channel contract's explicit `authorized: true`;
+  a syntactically valid Hook event is not authorization.
+- `safety.outbound_email_enabled` must describe the real configured transport
+  capability. Its default is false; when confirmed replies are enabled it is
+  true, while `mailbox_read_only` and `mailbox_mutation_enabled=false` continue
+  to describe monitoring and mailbox-state behavior. Never publish a config
+  whose safety flags contradict what runtime code can do.
+- Himalaya's generated reply template may inject its own signature and quoted
+  original. Keep its addressing/thread headers, but replace the entire body
+  with the already reviewed Watchdog draft before `template send`; otherwise
+  “verbatim body plus one configured signature” is not true in production.
+- Before transport, persist a draft as `transmitting`. If a send times out or
+  the process dies after handoff, fail closed as `delivery_uncertain` and never
+  retry automatically; the user must inspect Sent mail. Avoiding duplicate
+  external email is more important than pretending an ambiguous timeout failed.
+
 ## 2026-10-05 — Evidence-bound actions and real model fallback
 
 ### Incident
