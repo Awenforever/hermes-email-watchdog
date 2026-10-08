@@ -327,15 +327,11 @@ def render_lossless_fallback(
     label = _text(account.get("label") or account.get("name") or email.get("account"), 80) or "Email"
     subject = _text(email.get("subject"), 400).replace("`", "′") or "无主题"
     sender = _sender(email).replace("`", "′")
-    lines = [
-        f"### 📬 新邮件｜{label}",
-        "",
-        "`智能分析暂不可用` · `原始信息保全`",
-        "",
-    ]
     received = _received(email)
+    meta = "`智能分析暂不可用` · `原始信息保全`"
     if received:
-        lines.extend([f"**收到** `{received.replace('`', '′')}`", ""])
+        meta += f" · `{received.replace('`', '′')}`"
+    lines = [f"### 📬 新邮件｜{label}", "", meta, ""]
     lines.extend([f"**发件人** `{sender}`", "", f"**主题** `{subject}`"])
     excerpt = _excerpt(email)
     if excerpt:

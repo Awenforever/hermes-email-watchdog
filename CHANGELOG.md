@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.1 - 2026-10-08
+
+- Put priority, category, and mailbox receipt time on one compact metadata row;
+  remove the redundant sent-time row across semantic, evidence-only, and legacy
+  renderers.
+- Resolve native Weixin quotes from full or uniquely truncated previews for
+  reminders, reply drafts, cancellation, and confirmed sending.
+- Intercept explicit mail commands against old or expired Watchdog pushes and
+  fail closed instead of guessing a recipient or leaking the command into the
+  conversational agent.
+
 ## 0.11.0 - 2026-10-07
 
 - Add quote-driven reminder creation: detected deadlines are inert candidates

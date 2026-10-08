@@ -127,3 +127,20 @@ to access a literal dollar-prefixed directory. Every lifecycle entry point must
 apply the same portable path expansion contract. Upgrade acceptance must include
 disable → restart → enable with an existing non-empty seen index and must prove
 that no historical message is replayed.
+
+## 2026-10-08 — Receipt time and native-quote action ownership
+
+Notification chrome has one operational timestamp: mailbox receipt time. The
+priority, category, and receipt time belong on one metadata row. Do not show a
+second ``Date:``/sent timestamp or move either time into a separate prose row;
+when a provider lacks server receipt time, the source sent time is only a
+fallback for that single slot.
+
+Weixin native quotes are previews, not guaranteed full-message copies. Email
+actions must accept an exact durable-message match or one sufficiently long,
+unique normalized preview match. The same rule applies to reply-draft
+confirmation. Never use “most recent email” or a short fuzzy snippet. If a
+mail-shaped quote belongs to an old pre-action push or has fallen outside local
+retention, consume the explicit mail command and explain that the source cannot
+be safely restored; do not pass it to the conversational agent and never guess
+the recipient. Multiple matches always fail closed.

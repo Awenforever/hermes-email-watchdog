@@ -190,15 +190,16 @@ def _card_chrome(
     received = _format_time(
         email.get("date_received") or email.get("received_at") or email.get("internal_date")
     )
-    sent = _format_time(email.get("date_sent") or email.get("date") or email.get("sent_at"))
-    times = []
+    # The user needs one operational timestamp: when this mailbox received the
+    # message.  Showing both Date: and server receipt time added a second line,
+    # duplicated most mail, and made clock skew look like contradictory facts.
+    received = received or _format_time(
+        email.get("date_sent") or email.get("date") or email.get("sent_at")
+    )
+    meta = f"`{priority}` · `{label}`"
     if received:
-        times.append(f"**收到** {_code(received)}")
-    if sent:
-        times.append(f"**发出** {_code(sent)}")
-    lines = [f"### {icon} {title}｜{account_label}", "", f"`{priority}` · `{label}`"]
-    if times:
-        lines.extend(["", " · ".join(times)])
+        meta += f" · {_code(received)}"
+    lines = [f"### {icon} {title}｜{account_label}", "", meta]
     return lines
 
 

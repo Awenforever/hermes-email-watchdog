@@ -86,8 +86,43 @@ def _fingerprint(text: object) -> str:
     return hashlib.sha256(_normalized(text).encode("utf-8", errors="replace")).hexdigest()
 
 
-def _outbox_actions(reference_text: str, reference_message_id: str = "") -> list[dict]:
-    wanted = _fingerprint(reference_text)
+def _matchable_preview(text: object) -> str:
+    """Canonical text for an iLink quote preview, which may be truncated."""
+    value = _normalized(text)
+    heading = value.find("###")
+    if heading >= 0:
+        value = value[heading:]
+    value = re.sub(r"[`*_#\\]", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value.rstrip(" .…")
+
+
+def _preview_matches(reference: object, full_text: object) -> bool:
+    reference_normal = _matchable_preview(reference)
+    full_normal = _matchable_preview(full_text)
+    if not reference_normal or not full_normal:
+        return False
+    if reference_normal == full_normal:
+        return True
+    # iLink's title is a display preview, not a stable full-message field.  A
+    # sufficiently long unique prefix is safe; short snippets are not.
+    return len(reference_normal) >= 32 and (
+        full_normal.startswith(reference_normal) or reference_normal.startswith(full_normal)
+    )
+
+
+def _reference_values(reference_text: str, reference_title: str = "") -> list[str]:
+    values = []
+    for value in (reference_text, reference_title):
+        value = str(value or "").strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _outbox_actions(reference_text: str, reference_message_id: str = "", reference_title: str = "") -> list[dict]:
+    wanted_values = _reference_values(reference_text, reference_title)
+    wanted = {_fingerprint(value) for value in wanted_values}
     wanted_id = str(reference_message_id or "").strip()
     with _file_lock(OUTBOX_FILE):
         data = _load(OUTBOX_FILE, {"entries": {}})
@@ -100,16 +135,30 @@ def _outbox_actions(reference_text: str, reference_message_id: str = "") -> list
         actions = [item for item in (metadata.get("mail_actions") or []) if isinstance(item, dict)]
         if not actions:
             continue
-        entry_match = _fingerprint(entry.get("text")) == wanted
+        entry_text = entry.get("text")
+        entry_match = _fingerprint(entry_text) in wanted or any(
+            _preview_matches(value, entry_text) for value in wanted_values
+        )
         text_part = (entry.get("parts") or {}).get("text") if isinstance(entry.get("parts"), dict) else {}
         adapter_message_id = str((text_part or {}).get("adapter_message_id") or entry.get("adapter_message_id") or "").strip()
         for action in actions:
             if wanted_id and adapter_message_id and adapter_message_id == wanted_id:
                 id_matches.append(dict(action))
                 continue
-            if entry_match or _fingerprint(action.get("notification_text")) == wanted:
+            action_text = action.get("notification_text")
+            if entry_match or _fingerprint(action_text) in wanted or any(
+                _preview_matches(value, action_text) for value in wanted_values
+            ):
                 matches.append(dict(action))
     return id_matches or matches
+
+
+def _looks_like_watchdog_reference(reference_text: str, reference_title: str = "") -> bool:
+    for value in _reference_values(reference_text, reference_title):
+        normalized = _matchable_preview(value)
+        if re.search(r"(?:新邮件|账户确认|账户状态|研究简报|学术快讯|订阅更新|活动与日程|待办与截止时间|学校通知).*｜", normalized):
+            return True
+    return False
 
 
 def _state() -> dict:
@@ -221,11 +270,19 @@ def _send_himalaya_reply(draft: dict) -> None:
         raise RuntimeError((sent.stderr or "邮件发送失败").strip()[:500])
 
 
-def _find_draft(reference_text: str, state: dict) -> tuple[str, dict] | tuple[None, None]:
-    wanted = _fingerprint(reference_text)
+def _find_draft(reference_text: str, reference_title: str, state: dict) -> tuple[str, dict] | tuple[None, None]:
+    wanted_values = _reference_values(reference_text, reference_title)
+    wanted = {_fingerprint(value) for value in wanted_values}
+    matches = []
     for key, draft in state.get("drafts", {}).items():
-        if isinstance(draft, dict) and draft.get("status") in {"pending", "transmitting", "delivery_uncertain"} and draft.get("preview_fingerprint") == wanted:
-            return key, draft
+        if not isinstance(draft, dict) or draft.get("status") not in {"pending", "transmitting", "delivery_uncertain"}:
+            continue
+        if draft.get("preview_fingerprint") in wanted or any(
+            _preview_matches(value, draft.get("preview_text")) for value in wanted_values
+        ):
+            matches.append((key, draft))
+    if len(matches) == 1:
+        return matches[0]
     return None, None
 
 
@@ -238,9 +295,10 @@ def _handle_inbound_locked(context: dict):
     raw_typed = str(context.get("message") or "").replace("\r\n", "\n").replace("\r", "\n")
     typed = raw_typed.strip()
     reference_text = str(reference.get("text") or "")
+    reference_title = str(reference.get("title") or "")
     state = _state()
 
-    draft_key, draft = _find_draft(reference_text, state)
+    draft_key, draft = _find_draft(reference_text, reference_title, state)
     if draft is not None and typed in {"确认发送", "取消"}:
         receipt = _receipt_key(context, f"draft:{draft_key}:{typed}")
         if receipt in state["receipts"]:
@@ -271,9 +329,25 @@ def _handle_inbound_locked(context: dict):
         _atomic(ACTION_FILE, state)
         return _handled(response, receipt)
 
-    actions = _outbox_actions(reference_text, str(reference.get("message_id") or ""))
+    actions = _outbox_actions(
+        reference_text,
+        str(reference.get("message_id") or ""),
+        reference_title,
+    )
     if len(actions) != 1:
-        return None if not actions else _handled("该气泡包含多封邮件，无法安全确定操作对象；请引用单封邮件的推送。", _receipt_key(context, "ambiguous"))
+        if actions:
+            return _handled("该气泡包含多封邮件，无法安全确定操作对象；请引用单封邮件的推送。", _receipt_key(context, "ambiguous"))
+        mail_command = (
+            typed in {"提醒我", "回复", "确认发送", "取消"}
+            or raw_typed.startswith("回复\n")
+            or bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
+        )
+        if mail_command and _looks_like_watchdog_reference(reference_text, reference_title):
+            return _handled(
+                "这是一条旧版或已超出本地保留范围的邮件推送，当前无法安全还原收件人和原邮件，已阻止误发。请引用升级后新收到的邮件推送重试。",
+                _receipt_key(context, "unresolved-mail-reference"),
+            )
+        return None
     action = actions[0]
 
     if typed == "提醒我" or re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed):
@@ -303,7 +377,7 @@ def _handle_inbound_locked(context: dict):
         final_body = body + (("\n\n" + signature) if signature else "")
         draft_key = hashlib.sha256((str(context.get("message_id")) + _fingerprint(reference_text)).encode()).hexdigest()[:24]
         preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `Re: {action.get('subject')}`\n\n**正文**\n\n{final_body}\n\n---\n\n确认无误后，请引用本草稿回复 `确认发送`；回复 `取消` 可放弃。"
-        state["drafts"][draft_key] = {"status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "mail": action, "preview_fingerprint": _fingerprint(preview)}
+        state["drafts"][draft_key] = {"status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-draft-{draft_key}")
     return None

@@ -20,7 +20,10 @@ class EmailQuoteActionTests(unittest.TestCase):
         root = Path(self.temp.name)
         email_actions.OUTBOX_FILE = root / "outbox.json"
         email_actions.ACTION_FILE = root / "actions.json"
-        self.notification = "### 📬 新邮件｜USTC\n\n**主题** `测试`"
+        self.notification = (
+            "### 📬 新邮件｜USTC\n\n`普通` · `账户状态` · `2026-10-08 10:24`\n\n"
+            "**发件人** `person@example.com`\n\n**主题** `测试`"
+        )
         metadata = {"mail_actions": [{
             "notification_text": self.notification,
             "message_id": "42", "account": "USTC", "account_type": "himalaya",
@@ -90,6 +93,31 @@ class EmailQuoteActionTests(unittest.TestCase):
         context["reference"]["message_id"] = "bubble-b"
         result = email_actions.handle_inbound(context)
         self.assertIn("另一个测试", result["message"])
+
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "", "signatures": {}}})
+    def test_truncated_ilink_title_uniquely_matches_notification(self, _config):
+        reference = "庄奕：" + self.notification[:70] + "…"
+        context = self.context("回复\n正文", reference="", mid="preview-ref")
+        context["reference"]["title"] = reference
+        result = email_actions.handle_inbound(context)
+        self.assertEqual(result["decision"], "handled")
+        self.assertIn("回复草稿", result["message"])
+
+    def test_old_watchdog_push_is_intercepted_and_fails_closed(self):
+        email_actions.OUTBOX_FILE.write_text(json.dumps({"entries": {}}), encoding="utf-8")
+        context = self.context("回复\n正文", reference="", mid="old-ref")
+        context["reference"]["title"] = "庄奕：### 📚 研究简报｜USTC `低优先级` · `学术报告摘要` · `2026-09-16 16:28`…"
+        result = email_actions.handle_inbound(context)
+        self.assertEqual(result["decision"], "handled")
+        self.assertIn("已阻止误发", result["message"])
+
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "", "signatures": {}}})
+    def test_truncated_draft_title_can_confirm_uniquely(self, _config):
+        created = email_actions.handle_inbound(self.context("回复\n正文", mid="draft-preview-source"))
+        context = self.context("取消", reference="", mid="draft-preview-cancel")
+        context["reference"]["title"] = "停云：" + created["message"][:80] + "…"
+        result = email_actions.handle_inbound(context)
+        self.assertIn("已取消", result["message"])
 
     @patch.dict("os.environ", {"HERMES_TIMEZONE": "Europe/Berlin"}, clear=False)
     def test_date_only_deadline_uses_nine_in_profile_timezone(self):

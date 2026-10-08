@@ -1568,12 +1568,15 @@ def _ew_v4_format_structured(email, analysis, attachments, schedule):
     weekly = _ew_v4_is_weekly(email, body)
     level = _ew_v4_level(analysis.get("user_relevance") or email.get("importance") or "medium")
     category_label = _ew_v4_category(analysis.get("semantic_category") or analysis.get("final_category") or email.get("rule_category") or "email", weekly=weekly)
-    date_sent = _ew_v4_time(email.get("date_sent"))
+    received = _ew_v4_time(
+        email.get("date_received") or email.get("received_at")
+        or email.get("internal_date") or email.get("date_sent")
+    )
     icon = "🚨" if level == "紧急" else ("📌" if level == "重要" else ("📰" if weekly else "📬"))
     title = "学术周报" if weekly else "新邮件"
     meta = f"`{level}` · `{category_label}`"
-    if date_sent:
-        meta += f" · `{date_sent}`"
+    if received:
+        meta += f" · `{received}`"
     lines = [f"### {icon} {title}｜{account}", "", meta, "", "**发件人**", sender, "", "**主题**", subject]
 
     if summary_raw:

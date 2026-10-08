@@ -612,8 +612,10 @@ Best regards""",
             email, decision,
         )
         self.assertTrue(text.startswith("### 📌 账户状态更新｜USTC"))
-        self.assertIn("**收到** `2026-09-23 20:12`", text)
-        self.assertIn("**发出** `2026-09-23 20:11`", text)
+        self.assertIn("`重要` · `账户状态` · `2026-09-23 20:12`", text)
+        self.assertIn(" · `2026-09-23 20:12`", text)
+        self.assertNotIn("**收到**", text)
+        self.assertNotIn("**发出**", text)
         self.assertNotIn("cached", text.lower())
 
     def test_runtime_chrome_replaces_old_generic_header_without_duplication(self):
