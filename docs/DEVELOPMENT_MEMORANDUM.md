@@ -194,3 +194,30 @@ plain part and is HTML-escaped in the rich part. Because MML directives are
 active inside template text, reject the reserved `<#` prefix rather than
 silently rewriting it or permitting template injection. Draft previews must use
 the same signature-layout semantics as the eventual wire message.
+
+## 2026-10-08 — Terminal drafts, one signature path, and truthful recall
+
+A draft remains an Email Watchdog object after it reaches a terminal state.
+Quoting a sent or cancelled draft with ``@确认发送`` or ``@取消`` must produce an
+idempotent state explanation; it must never fall through to Hermes and must
+never repeat delivery. Delivery-uncertain drafts remain fail-closed. Success
+notifications are durable addressable objects too, with recipient and subject,
+so a quoted ``@召回`` can resolve the exact sent draft rather than a recent
+message heuristic.
+
+Reply and forward are different transports but not different identities. Any
+outgoing message that has a user-authored body uses the same per-account
+signature resolver and semantic signature renderer. A bodyless forward adds no
+signature. Subject prefixing is idempotent: an existing ``Fwd:``/``Fw:`` or
+``Re:`` must not be duplicated.
+
+Recall is a provider capability, not an IMAP deletion. Never report success
+unless the provider returns a verifiable recall result. Coremail recall is only
+eligible for unread recipients in the same Coremail system and may require a
+Webmail-only operation. External recipients and transports without a recall
+adapter receive the truthful capability result and safe next action. Repeated
+recall commands record and return their result without inventing state.
+
+User-facing failures must describe the current action only. Do not expose
+development-history wording such as “the system will not guess the latest
+mail”, internal match fields, or adapter debugging advice.

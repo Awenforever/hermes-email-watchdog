@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.0 - 2026-10-08
+
+- Keep sent and cancelled drafts addressable, so repeated confirmation or
+  cancellation is intercepted idempotently instead of falling into Hermes.
+- Resolve reply and forward signatures through one account-aware semantic
+  renderer; bodyless forwards remain unsigned, and existing subject prefixes
+  are no longer duplicated.
+- Add quote-driven `@召回` handling for exact send-success notifications, with
+  truthful provider capability results and no fake recall via local deletion.
+- Replace development-history and adapter diagnostics with concise user-facing
+  recovery guidance.
+
 ## 0.12.2 - 2026-10-08
 
 - Render confirmed replies as safe `multipart/alternative` messages with both

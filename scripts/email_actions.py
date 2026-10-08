@@ -238,8 +238,7 @@ def _render_signature_preview(body: str, signature: str) -> str:
     return body + separator + content
 
 
-def _render_reply_mml(body: str, signature: str) -> str:
-    """Build safe text/plain + HTML alternatives for a confirmed reply."""
+def _render_plain_body(body: str, signature: str) -> str:
     normalized_body = str(body or "").replace("\r\n", "\n").replace("\r", "\n")
     divider, signature_text = _signature_layout(signature)
     # MML directives are active even inside the text alternative. Refuse the
@@ -249,6 +248,14 @@ def _render_reply_mml(body: str, signature: str) -> str:
     plain = normalized_body
     if signature_text:
         plain += ("\n\n──────────────\n" if divider else "\n\n") + signature_text
+    return plain
+
+
+def _render_reply_mml(body: str, signature: str) -> str:
+    """Build safe text/plain + HTML alternatives for a confirmed reply."""
+    normalized_body = str(body or "").replace("\r\n", "\n").replace("\r", "\n")
+    divider, signature_text = _signature_layout(signature)
+    plain = _render_plain_body(normalized_body, signature)
 
     body_html = html.escape(normalized_body, quote=False).replace("\n", "<br>\n")
     signature_lines = [
@@ -374,7 +381,23 @@ def _himalaya_context(action: dict) -> tuple[list[str], str | None, str]:
     return [_himalaya_binary(), "-c", config_arg], cwd, str(action.get("himalaya_account") or "").strip()
 
 
-def _send_himalaya_reply(draft: dict) -> None:
+def _transport_result(sent) -> dict:
+    output = str(getattr(sent, "stdout", "") or "").strip()
+    # Himalaya output varies by release and backend. Preserve a bounded audit
+    # receipt, but never invent a provider message id from prose.
+    message_id = ""
+    for pattern in (
+        r"(?im)^(?:message[-_ ]?id|id)\s*[:=]\s*<?([^>\s]+)>?\s*$",
+        r"(?i)message[-_ ]?id[=:\s]+<?([^>\s]+)>?",
+    ):
+        match = re.search(pattern, output)
+        if match:
+            message_id = match.group(1)
+            break
+    return {"provider_message_id": message_id, "transport_receipt": output[:500]}
+
+
+def _send_himalaya_reply(draft: dict) -> dict:
     reply_settings = email_config.load_config().get("reply") or {}
     if not isinstance(reply_settings, dict) or not reply_settings.get("outbound_enabled", False):
         raise RuntimeError("该邮箱尚未启用经确认的邮件回复功能")
@@ -402,9 +425,10 @@ def _send_himalaya_reply(draft: dict) -> None:
     )
     if sent.returncode != 0:
         raise RuntimeError((sent.stderr or "邮件发送失败").strip()[:500])
+    return _transport_result(sent)
 
 
-def _send_himalaya_forward(draft: dict) -> None:
+def _send_himalaya_forward(draft: dict) -> dict:
     reply_settings = email_config.load_config().get("reply") or {}
     if not isinstance(reply_settings, dict) or not reply_settings.get("outbound_enabled", False):
         raise RuntimeError("该邮箱尚未启用经确认的邮件发送功能")
@@ -420,20 +444,24 @@ def _send_himalaya_forward(draft: dict) -> None:
     generated = subprocess.run(command, capture_output=True, text=True, timeout=45, cwd=cwd)
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成转发模板").strip()[:500])
-    final_template = _replace_forward_template_body(generated.stdout, draft.get("body", ""), recipient)
+    if "user_body" in draft or "signature" in draft:
+        rendered_body = _render_plain_body(draft.get("user_body", ""), draft.get("signature", ""))
+    else:
+        rendered_body = draft.get("body", "")
+    final_template = _replace_forward_template_body(generated.stdout, rendered_body, recipient)
     sent = subprocess.run(
         common + ["template", "send"], input=final_template,
         capture_output=True, text=True, timeout=60, cwd=cwd,
     )
     if sent.returncode != 0:
         raise RuntimeError((sent.stderr or "邮件发送失败").strip()[:500])
+    return _transport_result(sent)
 
 
-def _send_himalaya_draft(draft: dict) -> None:
+def _send_himalaya_draft(draft: dict) -> dict:
     if draft.get("kind") == "forward":
-        _send_himalaya_forward(draft)
-    else:
-        _send_himalaya_reply(draft)
+        return _send_himalaya_forward(draft)
+    return _send_himalaya_reply(draft)
 
 
 def _find_draft(reference_text: str, reference_title: str, state: dict) -> tuple[str, dict] | tuple[None, None]:
@@ -441,7 +469,7 @@ def _find_draft(reference_text: str, reference_title: str, state: dict) -> tuple
     wanted = {_fingerprint(value) for value in wanted_values}
     matches = []
     for key, draft in state.get("drafts", {}).items():
-        if not isinstance(draft, dict) or draft.get("status") not in {"pending", "transmitting", "delivery_uncertain"}:
+        if not isinstance(draft, dict):
             continue
         if draft.get("preview_fingerprint") in wanted or any(
             _preview_matches(value, draft.get("preview_text")) for value in wanted_values
@@ -452,13 +480,67 @@ def _find_draft(reference_text: str, reference_title: str, state: dict) -> tuple
     return None, None
 
 
+def _subject_with_prefix(subject: object, prefix: str) -> str:
+    value = str(subject or "").strip()
+    if prefix.casefold() == "fwd" and re.match(r"(?i)^fw(?:d)?\s*:", value):
+        return value
+    if prefix.casefold() == "re" and re.match(r"(?i)^re\s*:", value):
+        return value
+    return f"{prefix}: {value}" if value else f"{prefix}:"
+
+
+def _delivery_notice(draft: dict) -> str:
+    action = draft.get("mail") if isinstance(draft.get("mail"), dict) else {}
+    recipient = draft.get("recipient") if draft.get("kind") == "forward" else action.get("from_addr")
+    verb = "转发" if draft.get("kind") == "forward" else "回复"
+    subject = _subject_with_prefix(action.get("subject"), "Fwd" if verb == "转发" else "Re")
+    return (
+        f"✅ 邮件已{verb}\n\n"
+        f"**收件人** `{recipient}`\n\n"
+        f"**主题** `{subject}`\n\n"
+        "> 如需尝试召回，请引用本消息发送 `@召回`。"
+    )
+
+
+def _delivery_notice_values(draft: dict) -> list[str]:
+    values = [str(draft.get("delivery_notice_text") or ""), _delivery_notice(draft)]
+    action = draft.get("mail") if isinstance(draft.get("mail"), dict) else {}
+    recipient = draft.get("recipient") if draft.get("kind") == "forward" else action.get("from_addr")
+    verb = "转发" if draft.get("kind") == "forward" else "回复"
+    values.append(f"✅ 邮件已{verb}给 `{recipient}`。")
+    return [value for value in values if value]
+
+
+def _find_delivery_notice(reference_text: str, reference_title: str, state: dict):
+    wanted_values = _reference_values(reference_text, reference_title)
+    matches = []
+    for key, draft in state.get("drafts", {}).items():
+        if not isinstance(draft, dict) or draft.get("status") != "sent":
+            continue
+        candidates = _delivery_notice_values(draft)
+        if any(
+            _fingerprint(wanted) == _fingerprint(candidate) or _preview_matches(wanted, candidate)
+            for wanted in wanted_values for candidate in candidates
+        ):
+            matches.append((key, draft))
+    return matches[0] if len(matches) == 1 else (None, None)
+
+
+def _recall_result(draft: dict) -> str:
+    # The standard client contract used here is SMTP/IMAP. Neither protocol
+    # defines recall, and deleting a Sent copy only changes the sender's
+    # mailbox. Provider-specific recall adapters can be added only when they
+    # expose an authenticated, documented result that can be verified.
+    return (
+        "⚠️ 当前邮箱通道是 SMTP/IMAP，未提供可验证的服务端召回能力。请立即到"
+        "邮箱 Web 页面打开“已发送”中的这封邮件，检查服务商是否提供召回；"
+        "删除本地副本不会撤回收件人已收到的邮件。"
+    )
+
+
 def _explicit_mail_command(raw_typed: str) -> bool:
     typed = str(raw_typed or "").strip()
-    return bool(
-        typed in {"@回复", "@确认发送", "@取消"}
-        or raw_typed.startswith("@回复\n")
-        or re.match(r"^@转发(?:\s|$)", raw_typed)
-    )
+    return bool(re.match(r"^@(?:回复|转发|确认发送|取消|召回)(?:\s|$)", typed))
 
 
 def _handle_inbound_locked(context: dict):
@@ -470,7 +552,7 @@ def _handle_inbound_locked(context: dict):
     if not reference.get("present"):
         if _explicit_mail_command(raw_typed):
             return _handled(
-                "没有收到可验证的微信引用，无法安全确定原邮件。请长按目标邮件推送选择“引用”，再发送该命令；系统不会猜测最近一封邮件。",
+                "未识别到所引用的邮件或草稿。请长按目标消息选择“引用”后重试。",
                 _receipt_key(context, "missing-mail-reference"),
             )
         return None
@@ -478,12 +560,40 @@ def _handle_inbound_locked(context: dict):
     reference_title = str(reference.get("title") or "")
     state = _state()
 
+    if typed == "@召回":
+        notice_key, notice_draft = _find_delivery_notice(reference_text, reference_title, state)
+        receipt = _receipt_key(context, f"recall:{notice_key or 'unresolved'}")
+        if receipt in state["receipts"]:
+            return _handled(state["receipts"][receipt], receipt)
+        if notice_draft is None:
+            response = "未识别到对应的发送成功通知。请引用“邮件已回复”或“邮件已转发”的成功通知后重试。"
+        else:
+            response = _recall_result(notice_draft)
+            notice_draft.setdefault("recall_attempts", []).append({
+                "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "result": response,
+            })
+        state["receipts"][receipt] = response
+        _atomic(ACTION_FILE, state)
+        return _handled(response, receipt)
+
     draft_key, draft = _find_draft(reference_text, reference_title, state)
     if draft is not None and typed in {"确认发送", "取消", "@确认发送", "@取消"}:
         receipt = _receipt_key(context, f"draft:{draft_key}:{typed}")
         if receipt in state["receipts"]:
             return _handled(state["receipts"][receipt], receipt)
-        if draft.get("status") in {"transmitting", "delivery_uncertain"}:
+        status = str(draft.get("status") or "pending")
+        if status == "sent":
+            if typed in {"取消", "@取消"}:
+                response = "该邮件已经发送，无法再取消。如需尝试召回，请引用发送成功通知并发送 `@召回`。"
+            else:
+                response = "该草稿已经发送成功，无需重复确认。"
+        elif status == "cancelled":
+            if typed in {"取消", "@取消"}:
+                response = "该草稿已经取消，无需重复操作。"
+            else:
+                response = "该草稿已经取消，不会发送。请引用原邮件推送重新创建草稿。"
+        elif status in {"transmitting", "delivery_uncertain"}:
             response = "该草稿已进入发送流程，但尚无法安全确认最终投递结果。为避免重复发信，系统不会自动重试；请先检查邮箱“已发送”目录。"
         elif typed in {"取消", "@取消"}:
             draft["status"] = "cancelled"
@@ -493,13 +603,13 @@ def _handle_inbound_locked(context: dict):
             draft["transmitting_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
             _atomic(ACTION_FILE, state)
             try:
-                _send_himalaya_draft(draft)
+                transport = _send_himalaya_draft(draft)
                 draft["status"] = "sent"
                 draft["sent_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
-                if draft.get("kind") == "forward":
-                    response = f"✅ 邮件已转发给 `{draft.get('recipient')}`。"
-                else:
-                    response = f"✅ 邮件已回复给 `{draft['mail'].get('from_addr')}`。"
+                draft["transport"] = transport if isinstance(transport, dict) else {}
+                response = _delivery_notice(draft)
+                draft["delivery_notice_text"] = response
+                draft["delivery_notice_fingerprint"] = _fingerprint(response)
             except subprocess.TimeoutExpired:
                 draft["status"] = "delivery_uncertain"
                 draft["last_error"] = "transport timeout"
@@ -521,14 +631,19 @@ def _handle_inbound_locked(context: dict):
         if actions:
             return _handled("该气泡包含多封邮件，无法安全确定操作对象；请引用单封邮件的推送。", _receipt_key(context, "ambiguous"))
         mail_command = (
-            typed in {"提醒我", "确认发送", "取消", "@确认发送", "@取消"}
+            typed in {"提醒我", "确认发送", "取消", "@确认发送", "@取消", "@召回"}
             or _explicit_mail_command(raw_typed)
             or bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
         )
         if mail_command and _looks_like_watchdog_reference(reference_text, reference_title):
             return _handled(
-                "这是一条旧版或已超出本地保留范围的邮件推送，当前无法安全还原收件人和原邮件，已阻止误发。请引用升级后新收到的邮件推送重试。",
+                "这条邮件推送已无法还原对应邮件，请引用升级后收到的新推送重试。",
                 _receipt_key(context, "unresolved-mail-reference"),
+            )
+        if _explicit_mail_command(raw_typed):
+            return _handled(
+                "未识别到所引用的邮件或草稿，请引用对应的邮件推送、草稿或发送成功通知后重试。",
+                _receipt_key(context, "unresolved-mail-command"),
             )
         return None
     action = actions[0]
@@ -559,7 +674,8 @@ def _handle_inbound_locked(context: dict):
         signature = _signature(action)
         final_body = _render_signature_preview(body, signature)
         draft_key = hashlib.sha256((str(context.get("message_id")) + _fingerprint(reference_text)).encode()).hexdigest()[:24]
-        preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `Re: {action.get('subject')}`\n\n**正文**\n\n{final_body}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
+        reply_subject = _subject_with_prefix(action.get("subject"), "Re")
+        preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `{reply_subject}`\n\n**正文**\n\n{final_body}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
         state["drafts"][draft_key] = {"kind": "reply", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "user_body": body, "signature": signature, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-draft-{draft_key}")
@@ -573,18 +689,19 @@ def _handle_inbound_locked(context: dict):
             return _handled("该邮箱当前没有可验证的转发通道。", _receipt_key(context, "forward-unavailable"))
         body = forward.group(2) or ""
         signature = _signature(action) if body.strip() else ""
-        final_body = body + (("\n\n" + signature) if signature else "")
+        final_body = _render_signature_preview(body, signature)
         draft_key = hashlib.sha256((str(context.get("message_id")) + recipient + _fingerprint(reference_text)).encode()).hexdigest()[:24]
         body_preview = final_body if final_body else "_无附言，将直接转发原邮件及其附件。_"
         subject = str(action.get("subject") or "")
-        preview = f"### ✉️ 转发草稿\n\n**收件人** `{recipient}`\n\n**主题** `Fwd: {subject}`\n\n**附言**\n\n{body_preview}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
-        state["drafts"][draft_key] = {"kind": "forward", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "recipient": recipient, "body": final_body, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
+        forward_subject = _subject_with_prefix(subject, "Fwd")
+        preview = f"### ✉️ 转发草稿\n\n**收件人** `{recipient}`\n\n**主题** `{forward_subject}`\n\n**附言**\n\n{body_preview}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
+        state["drafts"][draft_key] = {"kind": "forward", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "recipient": recipient, "body": final_body, "user_body": body, "signature": signature, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-forward-draft-{draft_key}")
 
-    if typed.startswith("@回复") or typed.startswith("@转发"):
+    if any(typed.startswith(command) for command in ("@回复", "@转发", "@确认发送", "@取消", "@召回")):
         return _handled(
-            "命令格式无效。回复邮件请使用 `@回复` 后换行输入正文；转发请使用 `@转发 收件邮箱`，下一行可选填附言。",
+            "命令格式无效。回复请使用 `@回复` 后换行输入正文；转发请使用 `@转发 收件邮箱`，下一行可选填附言；确认、取消和召回须分别单独发送 `@确认发送`、`@取消`、`@召回`。",
             _receipt_key(context, "mail-command-invalid"),
         )
     return None

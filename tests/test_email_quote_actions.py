@@ -139,7 +139,7 @@ class EmailQuoteActionTests(unittest.TestCase):
         context["reference"]["title"] = "庄奕：### 📚 研究简报｜USTC `低优先级` · `学术报告摘要` · `2026-09-16 16:28`…"
         result = email_actions.handle_inbound(context)
         self.assertEqual(result["decision"], "handled")
-        self.assertIn("已阻止误发", result["message"])
+        self.assertIn("无法还原对应邮件", result["message"])
 
     @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "", "signatures": {}}})
     def test_truncated_draft_title_can_confirm_uniquely(self, _config):
@@ -226,7 +226,8 @@ class EmailQuoteActionTests(unittest.TestCase):
         context["reference"] = {"present": False, "text": ""}
         result = email_actions.handle_inbound(context)
         self.assertEqual(result["decision"], "handled")
-        self.assertIn("不会猜测", result["message"])
+        self.assertIn("未识别到所引用", result["message"])
+        self.assertNotIn("猜测", result["message"])
 
     @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "签名", "signatures": {}}})
     def test_forward_draft_optional_body_gets_signature(self, _config):
@@ -237,6 +238,24 @@ class EmailQuoteActionTests(unittest.TestCase):
         self.assertEqual(draft["kind"], "forward")
         self.assertEqual(draft["recipient"], "friend@example.com")
         self.assertEqual(draft["body"], "请查收\n\n签名")
+        self.assertEqual(draft["user_body"], "请查收")
+        self.assertEqual(draft["signature"], "签名")
+
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "---\n\n新签名\n\n机构", "signatures": {}}})
+    def test_forward_uses_same_semantic_signature_renderer_as_reply(self, _config):
+        result = email_actions.handle_inbound(self.context("@转发 friend@example.com\n请查收", mid="forward-signature"))
+        self.assertIn("请查收\n\n---\n\n新签名\n机构", result["message"])
+        state = json.loads(email_actions.ACTION_FILE.read_text(encoding="utf-8"))
+        draft = next(iter(state["drafts"].values()))
+        self.assertEqual(draft["body"], "请查收\n\n---\n\n新签名\n机构")
+
+    def test_forward_does_not_duplicate_existing_prefix(self):
+        data = json.loads(email_actions.OUTBOX_FILE.read_text(encoding="utf-8"))
+        data["entries"]["x"]["metadata"]["mail_actions"][0]["subject"] = "Fwd: 测试"
+        email_actions.OUTBOX_FILE.write_text(json.dumps(data), encoding="utf-8")
+        result = email_actions.handle_inbound(self.context("@转发 friend@example.com", mid="forward-prefix"))
+        self.assertIn("**主题** `Fwd: 测试`", result["message"])
+        self.assertNotIn("Fwd: Fwd:", result["message"])
 
     def test_direct_forward_has_no_implicit_signature(self):
         result = email_actions.handle_inbound(self.context("@转发 friend@example.com", mid="forward-2"))
@@ -264,6 +283,47 @@ class EmailQuoteActionTests(unittest.TestCase):
         self.assertIn("<#!part type=application/pdf", sent_template)
         self.assertNotIn("old signature", sent_template)
         self.assertNotIn("附言", " ".join(run.call_args_list[1].args[0]))
+
+    @patch("email_actions._send_himalaya_draft", return_value={"provider_message_id": "m-1", "transport_receipt": "sent"})
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "签名", "signatures": {}}})
+    def test_sent_and_cancelled_drafts_remain_interceptable(self, _config, send):
+        created = email_actions.handle_inbound(self.context("@回复\n正文", mid="terminal-source"))
+        sent = email_actions.handle_inbound(self.context("@确认发送", reference=created["message"], mid="terminal-send"))
+        self.assertIn("邮件已回复", sent["message"])
+        again = email_actions.handle_inbound(self.context("@确认发送", reference=created["message"], mid="terminal-send-again"))
+        self.assertIn("已经发送成功", again["message"])
+        cancel_after_send = email_actions.handle_inbound(self.context("@取消", reference=created["message"], mid="terminal-cancel-after-send"))
+        self.assertIn("无法再取消", cancel_after_send["message"])
+        send.assert_called_once()
+
+        cancelled = email_actions.handle_inbound(self.context("@回复\n另一个", mid="cancel-source"))
+        email_actions.handle_inbound(self.context("@取消", reference=cancelled["message"], mid="cancel-first"))
+        repeat = email_actions.handle_inbound(self.context("@取消", reference=cancelled["message"], mid="cancel-repeat"))
+        confirm = email_actions.handle_inbound(self.context("@确认发送", reference=cancelled["message"], mid="cancel-confirm"))
+        self.assertIn("已经取消", repeat["message"])
+        self.assertIn("已经取消", confirm["message"])
+        send.assert_called_once()
+
+    @patch("email_actions._send_himalaya_draft", return_value={})
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "", "signatures": {}}})
+    def test_success_notice_can_be_quoted_for_truthful_recall_capability_result(self, _config, _send):
+        created = email_actions.handle_inbound(self.context("@回复\n正文", mid="recall-source"))
+        sent = email_actions.handle_inbound(self.context("@确认发送", reference=created["message"], mid="recall-send"))
+        recall = email_actions.handle_inbound(self.context("@召回", reference=sent["message"], mid="recall-command"))
+        self.assertEqual(recall["decision"], "handled")
+        self.assertIn("SMTP/IMAP", recall["message"])
+        self.assertIn("Web", recall["message"])
+        self.assertNotIn("成功", recall["message"])
+
+    def test_recall_without_success_notice_is_still_intercepted(self):
+        result = email_actions.handle_inbound(self.context("@召回", reference="普通消息", mid="recall-unresolved"))
+        self.assertEqual(result["decision"], "handled")
+        self.assertIn("发送成功通知", result["message"])
+
+    def test_malformed_recall_command_never_leaks_to_hermes(self):
+        result = email_actions.handle_inbound(self.context("@召回 这封", mid="recall-malformed"))
+        self.assertEqual(result["decision"], "handled")
+        self.assertIn("命令格式无效", result["message"])
 
 
 if __name__ == "__main__":
