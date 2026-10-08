@@ -144,3 +144,18 @@ mail-shaped quote belongs to an old pre-action push or has fallen outside local
 retention, consume the explicit mail command and explain that the source cannot
 be safely restored; do not pass it to the conversational agent and never guess
 the recipient. Multiple matches always fail closed.
+
+The command namespace is exact: ``@回复`` starts a verbatim reply body on the
+next line, and ``@转发 address@example.com`` starts a single-recipient forward
+with an optional verbatim body on later lines. Both produce a durable draft and
+require a separately quoted ``@确认发送``; ``@取消`` discards it. Forwarding must
+use the mail client's native forward template so the original MIME/MML body and
+attachments survive. Remove the client's implicit preface/signature, then add
+only the user's explicit body and configured mailbox signature. With no body,
+forward directly and add nothing.
+
+Channel plugins may drop native quote metadata, so a leading ``@`` mail command
+can arrive without a reference. It still belongs to Email Watchdog's namespace
+and must be consumed with a safe “quote required” explanation. Never infer the
+latest email. WeChat Enhance remains business-neutral: it only publishes the
+generic event after Context Token refresh/FIFO handling.

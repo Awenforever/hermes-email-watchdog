@@ -66,7 +66,7 @@ class EmailQuoteActionTests(unittest.TestCase):
 
     @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "祝好\n测试者", "signatures": {}}})
     def test_reply_body_is_verbatim_and_signature_is_appended(self, _config):
-        result = email_actions.handle_inbound(self.context("回复\n第一行\n第二行  ", mid="in-2"))
+        result = email_actions.handle_inbound(self.context("@回复\n第一行\n第二行  ", mid="in-2"))
         self.assertIn("第一行\n第二行  \n\n祝好\n测试者", result["message"])
         state = json.loads(email_actions.ACTION_FILE.read_text(encoding="utf-8"))
         draft = next(iter(state["drafts"].values()))
@@ -76,7 +76,7 @@ class EmailQuoteActionTests(unittest.TestCase):
         data = json.loads(email_actions.OUTBOX_FILE.read_text(encoding="utf-8"))
         data["entries"]["x"]["metadata"]["mail_actions"][0]["from_addr"] = "no-reply@example.com"
         email_actions.OUTBOX_FILE.write_text(json.dumps(data), encoding="utf-8")
-        result = email_actions.handle_inbound(self.context("回复\n正文", mid="in-3"))
+        result = email_actions.handle_inbound(self.context("@回复\n正文", mid="in-3"))
         self.assertIn("已阻止", result["message"])
 
     def test_reference_message_id_disambiguates_identical_bubbles(self):
@@ -89,7 +89,7 @@ class EmailQuoteActionTests(unittest.TestCase):
         second["metadata"]["mail_actions"][0]["subject"] = "另一个测试"
         data["entries"]["y"] = second
         email_actions.OUTBOX_FILE.write_text(json.dumps(data), encoding="utf-8")
-        context = self.context("回复\n正文", mid="in-ref")
+        context = self.context("@回复\n正文", mid="in-ref")
         context["reference"]["message_id"] = "bubble-b"
         result = email_actions.handle_inbound(context)
         self.assertIn("另一个测试", result["message"])
@@ -97,7 +97,7 @@ class EmailQuoteActionTests(unittest.TestCase):
     @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "", "signatures": {}}})
     def test_truncated_ilink_title_uniquely_matches_notification(self, _config):
         reference = "庄奕：" + self.notification[:70] + "…"
-        context = self.context("回复\n正文", reference="", mid="preview-ref")
+        context = self.context("@回复\n正文", reference="", mid="preview-ref")
         context["reference"]["title"] = reference
         result = email_actions.handle_inbound(context)
         self.assertEqual(result["decision"], "handled")
@@ -105,7 +105,7 @@ class EmailQuoteActionTests(unittest.TestCase):
 
     def test_old_watchdog_push_is_intercepted_and_fails_closed(self):
         email_actions.OUTBOX_FILE.write_text(json.dumps({"entries": {}}), encoding="utf-8")
-        context = self.context("回复\n正文", reference="", mid="old-ref")
+        context = self.context("@回复\n正文", reference="", mid="old-ref")
         context["reference"]["title"] = "庄奕：### 📚 研究简报｜USTC `低优先级` · `学术报告摘要` · `2026-09-16 16:28`…"
         result = email_actions.handle_inbound(context)
         self.assertEqual(result["decision"], "handled")
@@ -113,8 +113,8 @@ class EmailQuoteActionTests(unittest.TestCase):
 
     @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "", "signatures": {}}})
     def test_truncated_draft_title_can_confirm_uniquely(self, _config):
-        created = email_actions.handle_inbound(self.context("回复\n正文", mid="draft-preview-source"))
-        context = self.context("取消", reference="", mid="draft-preview-cancel")
+        created = email_actions.handle_inbound(self.context("@回复\n正文", mid="draft-preview-source"))
+        context = self.context("@取消", reference="", mid="draft-preview-cancel")
         context["reference"]["title"] = "停云：" + created["message"][:80] + "…"
         result = email_actions.handle_inbound(context)
         self.assertIn("已取消", result["message"])
@@ -124,6 +124,12 @@ class EmailQuoteActionTests(unittest.TestCase):
         value = email_delivery._resolve_deadline_value("2030-03-04", "2029-01-01", "auto")
         self.assertIn("2030-03-04T09:00", value)
         self.assertIn("+01:00", value)
+
+    def test_interaction_guidance_is_one_quote_block_without_divider(self):
+        rendered = email_delivery.append_interaction_guidance("正文", [])
+        self.assertIn("> 如需回复邮件，请引用本消息，发送 `@回复` 后换行输入正文。", rendered)
+        self.assertIn("> 如需转发邮件，请引用本消息，发送 `@转发 收件邮箱`", rendered)
+        self.assertNotIn("\n---\n", rendered)
 
     @patch("email_actions.email_config.load_config", return_value={"reply": {"outbound_enabled": True}})
     @patch("email_actions.subprocess.run")
@@ -150,14 +156,59 @@ class EmailQuoteActionTests(unittest.TestCase):
 
     @patch("email_actions._send_himalaya_reply", side_effect=subprocess.TimeoutExpired("himalaya", 60))
     def test_uncertain_send_is_never_automatically_retried(self, send):
-        created = email_actions.handle_inbound(self.context("回复\n正文", mid="draft-source"))
-        confirm = self.context("确认发送", reference=created["message"], mid="confirm-1")
+        created = email_actions.handle_inbound(self.context("@回复\n正文", mid="draft-source"))
+        confirm = self.context("@确认发送", reference=created["message"], mid="confirm-1")
         first = email_actions.handle_inbound(confirm)
         confirm["message_id"] = "confirm-2"
         second = email_actions.handle_inbound(confirm)
         self.assertIn("投递结果不确定", first["message"])
         self.assertIn("不会自动重试", second["message"])
         send.assert_called_once()
+
+    def test_plain_reply_word_is_not_claimed(self):
+        self.assertIsNone(email_actions.handle_inbound(self.context("回复\n这只是普通对话")))
+
+    def test_at_command_without_quote_fails_closed(self):
+        context = self.context("@回复\n正文")
+        context["reference"] = {"present": False, "text": ""}
+        result = email_actions.handle_inbound(context)
+        self.assertEqual(result["decision"], "handled")
+        self.assertIn("不会猜测", result["message"])
+
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"default_signature": "签名", "signatures": {}}})
+    def test_forward_draft_optional_body_gets_signature(self, _config):
+        result = email_actions.handle_inbound(self.context("@转发 friend@example.com\n请查收", mid="forward-1"))
+        self.assertIn("转发草稿", result["message"])
+        state = json.loads(email_actions.ACTION_FILE.read_text(encoding="utf-8"))
+        draft = next(iter(state["drafts"].values()))
+        self.assertEqual(draft["kind"], "forward")
+        self.assertEqual(draft["recipient"], "friend@example.com")
+        self.assertEqual(draft["body"], "请查收\n\n签名")
+
+    def test_direct_forward_has_no_implicit_signature(self):
+        result = email_actions.handle_inbound(self.context("@转发 friend@example.com", mid="forward-2"))
+        self.assertIn("直接转发原邮件", result["message"])
+        state = json.loads(email_actions.ACTION_FILE.read_text(encoding="utf-8"))
+        draft = next(iter(state["drafts"].values()))
+        self.assertEqual(draft["body"], "")
+
+    @patch("email_actions.email_config.load_config", return_value={"reply": {"outbound_enabled": True}})
+    @patch("email_actions.subprocess.run")
+    def test_forward_transport_preserves_original_and_attachment_directive(self, run, _config):
+        config = Path(self.temp.name) / "himalaya.toml"
+        config.write_text("[accounts.test]\n", encoding="utf-8")
+        original = "-------- Forwarded Message --------\nFrom: original@example.test\n\n原文\n<#!part type=application/pdf filename=\"/tmp/a.pdf\"><#!/part>"
+        run.side_effect = [
+            SimpleNamespace(returncode=0, stdout=f"From: me@example.test\nTo: friend@example.com\nSubject: Fwd: 测试\n\nold signature\n\n{original}", stderr=""),
+            SimpleNamespace(returncode=0, stdout="sent", stderr=""),
+        ]
+        email_actions._send_himalaya_forward({"kind": "forward", "recipient": "friend@example.com", "body": "附言\n\n签名", "mail": {"account_type": "himalaya", "himalaya_config": str(config), "message_id": "42", "himalaya_account": "test"}})
+        self.assertIn("forward", run.call_args_list[0].args[0])
+        self.assertNotIn("附言", run.call_args_list[0].args[0])
+        sent_template = run.call_args_list[1].args[0][-1]
+        self.assertIn("附言\n\n签名\n\n-------- Forwarded Message --------", sent_template)
+        self.assertIn("<#!part type=application/pdf", sent_template)
+        self.assertNotIn("old signature", sent_template)
 
 
 if __name__ == "__main__":

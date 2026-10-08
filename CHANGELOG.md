@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0 - 2026-10-08
+
+- Use exact `@回复` and `@转发 收件邮箱` commands, with a draft and explicit
+  confirmation before either operation can send mail.
+- Forward the original Himalaya message template and attachment directives;
+  optional user text remains verbatim and receives the mailbox signature,
+  while direct forwarding adds no invented preface.
+- Consume missing-reference `@` mail commands safely instead of leaking them
+  into Hermes or guessing the latest message.
+- Present reply, forward, and reminder guidance as one compact Markdown quote
+  block without an extra divider.
+
 ## 0.11.1 - 2026-10-08
 
 - Put priority, category, and mailbox receipt time on one compact metadata row;

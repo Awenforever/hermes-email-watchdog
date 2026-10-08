@@ -13,6 +13,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime
+from email.utils import parseaddr
 from pathlib import Path
 
 import email_config
@@ -203,6 +204,16 @@ def _reply_block_reason(action: dict) -> str:
     return ""
 
 
+def _valid_single_recipient(value: str) -> str:
+    candidate = str(value or "").strip()
+    if not candidate or any(char in candidate for char in ",;\r\n"):
+        return ""
+    display, address = parseaddr(candidate)
+    if display or address != candidate or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", address):
+        return ""
+    return address
+
+
 def _activate_reminders(action: dict, selected: list[int]) -> str:
     candidates = [item for item in (action.get("deadlines") or []) if isinstance(item, dict) and item.get("deadline")]
     if not candidates:
@@ -241,22 +252,45 @@ def _replace_template_body(template: str, body: str) -> str:
     return headers.rstrip() + "\n\n" + str(body).replace("\r\n", "\n").replace("\r", "\n") + "\n"
 
 
-def _send_himalaya_reply(draft: dict) -> None:
-    reply_settings = email_config.load_config().get("reply") or {}
-    if not isinstance(reply_settings, dict) or not reply_settings.get("outbound_enabled", False):
-        raise RuntimeError("该邮箱尚未启用经确认的邮件回复功能")
-    action = draft["mail"]
+def _replace_forward_template_body(template: str, body: str, recipient: str) -> str:
+    """Keep Himalaya's original-message/MML block and add only explicit text."""
+    value = str(template or "").replace("\r\n", "\n").replace("\r", "\n")
+    if "\n\n" not in value:
+        raise RuntimeError("Himalaya 转发模板缺少正文分隔符")
+    headers, implicit_body = value.split("\n\n", 1)
+    if not re.search(r"(?im)^subject:\s*\S", headers):
+        raise RuntimeError("Himalaya 转发模板缺少主题")
+    if re.search(r"(?im)^to:", headers):
+        headers = re.sub(r"(?im)^to:.*$", f"To: {recipient}", headers, count=1)
+    else:
+        headers += f"\nTo: {recipient}"
+    marker = re.search(r"(?im)^-{2,}\s*Forwarded Message\s*-{2,}\s*$", implicit_body)
+    if marker is None:
+        raise RuntimeError("Himalaya 转发模板缺少原邮件边界")
+    forwarded = implicit_body[marker.start():].lstrip()
+    prefix = str(body or "").replace("\r\n", "\n").replace("\r", "\n")
+    content = (prefix.rstrip() + "\n\n" if prefix else "") + forwarded.rstrip() + "\n"
+    return headers.rstrip() + "\n\n" + content
+
+
+def _himalaya_context(action: dict) -> tuple[list[str], str | None, str]:
     config = str(action.get("himalaya_config") or "").strip()
     if not config or not Path(config).expanduser().is_file():
         raise RuntimeError("Himalaya 配置文件不可用")
-    binary = _himalaya_binary()
     expanded = str(Path(config).expanduser())
     if os.name == "nt":
         config_arg, cwd = ntpath.basename(expanded), ntpath.dirname(expanded) or "."
     else:
         config_arg, cwd = expanded, None
-    common = [binary, "-c", config_arg]
-    account = str(action.get("himalaya_account") or "").strip()
+    return [_himalaya_binary(), "-c", config_arg], cwd, str(action.get("himalaya_account") or "").strip()
+
+
+def _send_himalaya_reply(draft: dict) -> None:
+    reply_settings = email_config.load_config().get("reply") or {}
+    if not isinstance(reply_settings, dict) or not reply_settings.get("outbound_enabled", False):
+        raise RuntimeError("该邮箱尚未启用经确认的邮件回复功能")
+    action = draft["mail"]
+    common, cwd, account = _himalaya_context(action)
     # Do not expose user-authored body text in the process argument list. The
     # generated template is used only for reply/thread headers; its body is
     # replaced below before being passed through stdin-like template content.
@@ -268,6 +302,35 @@ def _send_himalaya_reply(draft: dict) -> None:
     sent = subprocess.run(common + ["template", "send", final_template], capture_output=True, text=True, timeout=60, cwd=cwd)
     if sent.returncode != 0:
         raise RuntimeError((sent.stderr or "邮件发送失败").strip()[:500])
+
+
+def _send_himalaya_forward(draft: dict) -> None:
+    reply_settings = email_config.load_config().get("reply") or {}
+    if not isinstance(reply_settings, dict) or not reply_settings.get("outbound_enabled", False):
+        raise RuntimeError("该邮箱尚未启用经确认的邮件发送功能")
+    action = draft["mail"]
+    recipient = _valid_single_recipient(draft.get("recipient", ""))
+    if not recipient:
+        raise RuntimeError("转发收件邮箱无效")
+    common, cwd, account = _himalaya_context(action)
+    command = common + ["template", "forward", "-H", f"To:{recipient}"]
+    if account:
+        command += ["-a", account]
+    command += [str(action.get("message_id"))]
+    generated = subprocess.run(command, capture_output=True, text=True, timeout=45, cwd=cwd)
+    if generated.returncode != 0 or not generated.stdout.strip():
+        raise RuntimeError((generated.stderr or "无法生成转发模板").strip()[:500])
+    final_template = _replace_forward_template_body(generated.stdout, draft.get("body", ""), recipient)
+    sent = subprocess.run(common + ["template", "send", final_template], capture_output=True, text=True, timeout=60, cwd=cwd)
+    if sent.returncode != 0:
+        raise RuntimeError((sent.stderr or "邮件发送失败").strip()[:500])
+
+
+def _send_himalaya_draft(draft: dict) -> None:
+    if draft.get("kind") == "forward":
+        _send_himalaya_forward(draft)
+    else:
+        _send_himalaya_reply(draft)
 
 
 def _find_draft(reference_text: str, reference_title: str, state: dict) -> tuple[str, dict] | tuple[None, None]:
@@ -286,26 +349,40 @@ def _find_draft(reference_text: str, reference_title: str, state: dict) -> tuple
     return None, None
 
 
+def _explicit_mail_command(raw_typed: str) -> bool:
+    typed = str(raw_typed or "").strip()
+    return bool(
+        typed in {"@回复", "@确认发送", "@取消"}
+        or raw_typed.startswith("@回复\n")
+        or re.match(r"^@转发(?:\s|$)", raw_typed)
+    )
+
+
 def _handle_inbound_locked(context: dict):
     if context.get("authorized") is not True:
         return None
-    reference = context.get("reference") if isinstance(context.get("reference"), dict) else {}
-    if not reference.get("present"):
-        return None
     raw_typed = str(context.get("message") or "").replace("\r\n", "\n").replace("\r", "\n")
     typed = raw_typed.strip()
+    reference = context.get("reference") if isinstance(context.get("reference"), dict) else {}
+    if not reference.get("present"):
+        if _explicit_mail_command(raw_typed):
+            return _handled(
+                "没有收到可验证的微信引用，无法安全确定原邮件。请长按目标邮件推送选择“引用”，再发送该命令；系统不会猜测最近一封邮件。",
+                _receipt_key(context, "missing-mail-reference"),
+            )
+        return None
     reference_text = str(reference.get("text") or "")
     reference_title = str(reference.get("title") or "")
     state = _state()
 
     draft_key, draft = _find_draft(reference_text, reference_title, state)
-    if draft is not None and typed in {"确认发送", "取消"}:
+    if draft is not None and typed in {"确认发送", "取消", "@确认发送", "@取消"}:
         receipt = _receipt_key(context, f"draft:{draft_key}:{typed}")
         if receipt in state["receipts"]:
             return _handled(state["receipts"][receipt], receipt)
         if draft.get("status") in {"transmitting", "delivery_uncertain"}:
             response = "该草稿已进入发送流程，但尚无法安全确认最终投递结果。为避免重复发信，系统不会自动重试；请先检查邮箱“已发送”目录。"
-        elif typed == "取消":
+        elif typed in {"取消", "@取消"}:
             draft["status"] = "cancelled"
             response = "已取消，本次邮件草稿不会发送。"
         else:
@@ -313,10 +390,13 @@ def _handle_inbound_locked(context: dict):
             draft["transmitting_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
             _atomic(ACTION_FILE, state)
             try:
-                _send_himalaya_reply(draft)
+                _send_himalaya_draft(draft)
                 draft["status"] = "sent"
                 draft["sent_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
-                response = f"✅ 邮件已回复给 `{draft['mail'].get('from_addr')}`。"
+                if draft.get("kind") == "forward":
+                    response = f"✅ 邮件已转发给 `{draft.get('recipient')}`。"
+                else:
+                    response = f"✅ 邮件已回复给 `{draft['mail'].get('from_addr')}`。"
             except subprocess.TimeoutExpired:
                 draft["status"] = "delivery_uncertain"
                 draft["last_error"] = "transport timeout"
@@ -338,8 +418,8 @@ def _handle_inbound_locked(context: dict):
         if actions:
             return _handled("该气泡包含多封邮件，无法安全确定操作对象；请引用单封邮件的推送。", _receipt_key(context, "ambiguous"))
         mail_command = (
-            typed in {"提醒我", "回复", "确认发送", "取消"}
-            or raw_typed.startswith("回复\n")
+            typed in {"提醒我", "确认发送", "取消", "@确认发送", "@取消"}
+            or _explicit_mail_command(raw_typed)
             or bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
         )
         if mail_command and _looks_like_watchdog_reference(reference_text, reference_title):
@@ -366,20 +446,44 @@ def _handle_inbound_locked(context: dict):
         _atomic(ACTION_FILE, state)
         return _handled(response, receipt)
 
-    if typed == "回复" or raw_typed.startswith("回复\n"):
-        body = raw_typed.split("\n", 1)[1] if raw_typed.startswith("回复\n") else ""
+    if typed == "@回复" or raw_typed.startswith("@回复\n"):
+        body = raw_typed.split("\n", 1)[1] if raw_typed.startswith("@回复\n") else ""
         if not body.strip():
-            return _handled("请在 `回复` 后换行输入邮件正文。", _receipt_key(context, "reply-empty"))
+            return _handled("请在 `@回复` 后换行输入邮件正文。", _receipt_key(context, "reply-empty"))
         reason = _reply_block_reason(action)
         if reason:
             return _handled(reason, _receipt_key(context, "reply-blocked"))
         signature = _signature(action)
         final_body = body + (("\n\n" + signature) if signature else "")
         draft_key = hashlib.sha256((str(context.get("message_id")) + _fingerprint(reference_text)).encode()).hexdigest()[:24]
-        preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `Re: {action.get('subject')}`\n\n**正文**\n\n{final_body}\n\n---\n\n确认无误后，请引用本草稿回复 `确认发送`；回复 `取消` 可放弃。"
-        state["drafts"][draft_key] = {"status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
+        preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `Re: {action.get('subject')}`\n\n**正文**\n\n{final_body}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
+        state["drafts"][draft_key] = {"kind": "reply", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-draft-{draft_key}")
+
+    forward = re.match(r"^@转发[ \t]+([^\s]+)[ \t]*(?:\n([\s\S]*))?$", raw_typed)
+    if forward:
+        recipient = _valid_single_recipient(forward.group(1))
+        if not recipient:
+            return _handled("转发收件邮箱格式无效；一次只能填写一个完整邮箱地址。", _receipt_key(context, "forward-recipient-invalid"))
+        if str(action.get("account_type") or "").lower() != "himalaya":
+            return _handled("该邮箱当前没有可验证的转发通道。", _receipt_key(context, "forward-unavailable"))
+        body = forward.group(2) or ""
+        signature = _signature(action) if body.strip() else ""
+        final_body = body + (("\n\n" + signature) if signature else "")
+        draft_key = hashlib.sha256((str(context.get("message_id")) + recipient + _fingerprint(reference_text)).encode()).hexdigest()[:24]
+        body_preview = final_body if final_body else "_无附言，将直接转发原邮件及其附件。_"
+        subject = str(action.get("subject") or "")
+        preview = f"### ✉️ 转发草稿\n\n**收件人** `{recipient}`\n\n**主题** `Fwd: {subject}`\n\n**附言**\n\n{body_preview}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
+        state["drafts"][draft_key] = {"kind": "forward", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "recipient": recipient, "body": final_body, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
+        _atomic(ACTION_FILE, state)
+        return _handled(preview, f"email-forward-draft-{draft_key}")
+
+    if typed.startswith("@回复") or typed.startswith("@转发"):
+        return _handled(
+            "命令格式无效。回复邮件请使用 `@回复` 后换行输入正文；转发请使用 `@转发 收件邮箱`，下一行可选填附言。",
+            _receipt_key(context, "mail-command-invalid"),
+        )
     return None
 
 
