@@ -172,6 +172,14 @@ FORBIDDEN_SECRET_KEYS = {
     "token_value",
     "app_password",
 }
+SECRET_COMMAND_KEYS = {
+    "secret_command",
+    "smtp_secret_command",
+    "password_command",
+    "password_cmd",
+    "secret_cmd",
+    "token_command",
+}
 
 
 class OnboardingError(RuntimeError):
@@ -596,6 +604,30 @@ def _inspect_forbidden_secret_values(value: Any, path: str = "") -> list[str]:
     return errors
 
 
+def _inspect_secret_commands(value: Any, path: str = "") -> list[str]:
+    """Validate every user-supplied secret command, even unknown fields.
+
+    Account normalization intentionally drops fields it does not own. Security
+    validation must happen before that normalization so an unsafe command can
+    never be hidden merely because a particular setup route ignores it.
+    """
+    errors: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key).lower().replace("-", "_")
+            child_path = f"{path}.{key}" if path else str(key)
+            if key_text in SECRET_COMMAND_KEYS and str(child or "").strip():
+                try:
+                    _validate_secret_command(str(child))
+                except OnboardingError as exc:
+                    errors.append(f"unsafe secret command at {child_path}: {exc}")
+            errors.extend(_inspect_secret_commands(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            errors.extend(_inspect_secret_commands(child, f"{path}[{index}]"))
+    return errors
+
+
 def _validate_secret_command(command: str) -> str:
     text = str(command or "").strip()
     if not text:
@@ -852,6 +884,41 @@ def _himalaya_has_send_backend(path: str | Path) -> bool:
     return False
 
 
+def _audit_himalaya_secret_commands(path: str | Path) -> dict[str, Any]:
+    """Audit credential commands in an existing Himalaya config without executing them."""
+    config_path = Path(path).expanduser()
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise OnboardingError(f"cannot audit Himalaya credential policy: {config_path.name}") from exc
+    accounts = data.get("accounts") if isinstance(data, dict) else {}
+    if not isinstance(accounts, dict) or not accounts:
+        raise OnboardingError(f"Himalaya config has no auditable accounts: {config_path.name}")
+    checked = 0
+    for account_name, account in accounts.items():
+        if not isinstance(account, dict):
+            continue
+        backend = account.get("backend") if isinstance(account.get("backend"), dict) else {}
+        auth = backend.get("auth") if isinstance(backend.get("auth"), dict) else {}
+        command = str(auth.get("cmd") or "").strip()
+        if str(auth.get("type") or "").lower() == "password":
+            if not command:
+                raise OnboardingError(f"missing external credential command for Himalaya account {account_name}")
+            _validate_secret_command(command)
+            checked += 1
+        message = account.get("message") if isinstance(account.get("message"), dict) else {}
+        send = message.get("send") if isinstance(message.get("send"), dict) else {}
+        send_backend = send.get("backend") if isinstance(send.get("backend"), dict) else {}
+        send_auth = send_backend.get("auth") if isinstance(send_backend.get("auth"), dict) else {}
+        send_command = str(send_auth.get("cmd") or "").strip()
+        if str(send_auth.get("type") or "").lower() == "password":
+            if not send_command:
+                raise OnboardingError(f"missing external SMTP credential command for Himalaya account {account_name}")
+            _validate_secret_command(send_command)
+            checked += 1
+    return {"config": _path_summary(config_path), "commands_checked": checked, "passed": True}
+
+
 def _candidate_himalaya_paths() -> list[Path]:
     candidates: list[Path] = []
     env_path = os.environ.get("HIMALAYA_CONFIG", "").strip()
@@ -968,12 +1035,26 @@ def _resolve_accounts(
 
 
 def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
-    secret_errors = _inspect_forbidden_secret_values(input_data)
+    secret_errors = _inspect_forbidden_secret_values(input_data) + _inspect_secret_commands(input_data)
     if secret_errors:
         raise OnboardingError("; ".join(secret_errors))
     current_raw = _load_json(CONFIG_PATH, {})
     current = _sanitize_existing_config(current_raw if isinstance(current_raw, dict) else {})
     accounts, account_source, generated, unresolved = _resolve_accounts(input_data, current)
+    credential_policy: list[dict[str, Any]] = []
+    if generated is None:
+        audited_paths: set[str] = set()
+        for account in accounts:
+            config_path = str(account.get("himalaya_config") or account.get("config") or "").strip()
+            if not config_path:
+                continue
+            resolved = str(Path(config_path).expanduser().resolve())
+            if resolved in audited_paths:
+                continue
+            credential_policy.append(_audit_himalaya_secret_commands(config_path))
+            audited_paths.add(resolved)
+    else:
+        credential_policy.append({"config": _path_summary(generated.path), "commands_checked": 1 + int("message.send.backend.auth.cmd" in generated.content), "passed": True})
     target, target_source = _resolve_target(input_data, current)
     if not target.get("chat_id"):
         unresolved.append("delivery_target")
@@ -1058,6 +1139,7 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
         "target_source": target_source,
         "generated_himalaya": generated,
         "enable_requested": bool(input_data.get("enable", False)),
+        "credential_policy": credential_policy,
     }
 
 
@@ -1093,6 +1175,7 @@ def plan(input_data: dict[str, Any]) -> dict[str, Any]:
         "enable_requested": internal["enable_requested"],
         "mailbox_read_only": True,
         "confirmed_reply_enabled": bool(internal["config"].get("reply", {}).get("outbound_enabled")),
+        "credential_policy": internal["credential_policy"],
     }
 
 

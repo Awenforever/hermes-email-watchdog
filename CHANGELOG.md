@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.1 - 2026-10-08
+
+- Apply one credential-command policy to generated, explicit, existing, and
+  auto-detected Himalaya accounts before configuration is accepted.
+- Audit existing IMAP and SMTP password commands without executing them, and
+  reject literal or inline secrets even when an unknown input field would
+  otherwise be discarded during normalization.
+- Report only redacted credential-policy receipts in onboarding plans.
+- Make the onboarding matrix independent of the deployment-specific
+  `HERMES_HOME` path.
+
 ## 0.13.0 - 2026-10-08
 
 - Keep sent and cancelled drafts addressable, so repeated confirmation or

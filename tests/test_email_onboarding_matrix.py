@@ -308,6 +308,34 @@ def main() -> None:
         bad["new_himalaya"]["secret_command"] = "echo 'literal-password'"
         result, _ = run_setup(env_for(root / "case-bad-command", fake), "plan", "--input-json", json.dumps(bad), expect=2)
         ok("forbidden" in result["error"], "echo secret rejected")
+        bad_explicit = {
+            "accounts": [dict(account, secret_command="printf literal-password")],
+            "delivery_target": {"platform": "weixin", "chat_id": "x"},
+        }
+        result, _ = run_setup(
+            env_for(root / "case-bad-explicit-command", fake),
+            "plan", "--input-json", json.dumps(bad_explicit), expect=2,
+        )
+        ok("unsafe secret command" in result["error"], "ignored explicit secret command cannot bypass plan audit")
+
+        unsafe_existing = root / "unsafe-existing.toml"
+        write_existing_himalaya(unsafe_existing)
+        unsafe_existing.write_text(
+            unsafe_existing.read_text(encoding="utf-8").replace(
+                'backend.auth.cmd = "pass show mail/example"',
+                'backend.auth.cmd = "echo literal-password"',
+            ),
+            encoding="utf-8",
+        )
+        unsafe_payload = {
+            "accounts": [explicit_account(unsafe_existing)],
+            "delivery_target": {"platform": "weixin", "chat_id": "x"},
+        }
+        result, _ = run_setup(
+            env_for(root / "case-bad-existing-config", fake),
+            "plan", "--input-json", json.dumps(unsafe_payload), expect=2,
+        )
+        ok("echo/printf" in result["error"], "unsafe existing Himalaya command rejected without execution")
         bad2 = {"password": "literal", "accounts": [account], "delivery_target": {"platform": "weixin", "chat_id": "x"}}
         result, _ = run_setup(env_for(root / "case-bad-value", fake), "plan", "--input-json", json.dumps(bad2), expect=2)
         ok("literal secret value" in result["error"], "secret value rejected")
@@ -340,8 +368,17 @@ def main() -> None:
         ok(not (Path(env["HERMES_EMAIL_WATCHDOG_STATE_ROOT"]) / "email_watchdog_himalaya/gmail.toml").exists(), "generated file rollback")
 
         # Runtime default and distributable template match exactly.
-        template = json.loads((ROOT / "references/email_watchdog_config.template.json").read_text(encoding="utf-8"))
-        ok(email_config.DEFAULT_CONFIG == template, "runtime/template parity")
+        template_text = (ROOT / "references/email_watchdog_config.template.json").read_text(encoding="utf-8")
+        template_text = template_text.replace(
+            "~/.hermes", os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+        )
+        template = json.loads(template_text)
+        parity_delta = {
+            key: {"runtime": email_config.DEFAULT_CONFIG.get(key), "template": template.get(key)}
+            for key in sorted(set(email_config.DEFAULT_CONFIG) | set(template))
+            if email_config.DEFAULT_CONFIG.get(key) != template.get(key)
+        }
+        ok(email_config.DEFAULT_CONFIG == template, f"runtime/template parity: {parity_delta}")
         ok(email_config.DEFAULT_CONFIG["delivery"]["create_reminders"] is True, "persistent reminder default")
         ok(email_config.DEFAULT_CONFIG["delivery"]["managed_cron"] is True, "managed reminder scheduler default")
         ok(email_config.DEFAULT_CONFIG["safety"]["mailbox_read_only"] is True, "safety default")
