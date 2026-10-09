@@ -18,10 +18,10 @@ import email_notification_renderer as renderer
 class EmailIdentityTests(unittest.TestCase):
     def test_address_is_not_dropped_when_display_name_matches_local_part(self):
         message = {
-            "from_name": '" augenstern "',
-            "from_addr": "augenstern@agent.qq.com",
+            "from_name": '" notifier "',
+            "from_addr": "notifier@mailer.example",
         }
-        expected = "augenstern <augenstern@agent.qq.com>"
+        expected = "notifier <notifier@mailer.example>"
         self.assertEqual(expected, email_identity.canonical_sender(message))
         self.assertEqual(expected, composer._sender(message))
         self.assertEqual(expected, renderer._sender(message))

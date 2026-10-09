@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.3 - 2026-10-09
+
+- Anonymize the sender-identity regression fixture so the public package passes
+  the repository privacy contract during a real install or upgrade.
+- Retain the 0.13.2 canonical sender-address fix unchanged.
+
 ## 0.13.2 - 2026-10-09
 
 - Preserve the sender email address in every notification renderer even when
