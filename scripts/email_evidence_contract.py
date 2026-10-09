@@ -12,6 +12,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Mapping
 from urllib.parse import parse_qsl, unquote, urlparse, urlunparse
 
+import email_identity
+
 MARKER = "EMAIL_WATCHDOG_EVIDENCE_CONTRACT_V1"
 
 
@@ -275,11 +277,7 @@ def render_evidence_complete_draft(
 
 
 def _sender(email: Mapping[str, Any]) -> str:
-    name = _text(email.get("from_name") or email.get("sender_name"), 160).strip('" ')
-    address = _text(email.get("from_addr") or email.get("from_email") or email.get("sender"), 240)
-    if name and address and name.casefold() != address.casefold():
-        return f"{name} <{address}>"
-    return address or name or "未知发件人"
+    return email_identity.canonical_sender(email)
 
 
 def _received(email: Mapping[str, Any]) -> str:

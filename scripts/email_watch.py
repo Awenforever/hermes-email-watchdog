@@ -32,6 +32,7 @@ try:
     import email_trust
     import email_risk
     import email_delivery
+    import email_identity
     import email_llm
     # EMAIL_WATCHDOG_DEPENDENCY_RELOAD_LEARNING_SHADOW_V1
     email_delivery = importlib.reload(email_delivery)
@@ -1175,8 +1176,8 @@ def check_account(acct, pushed_count=None):
 
         if acct["type"] == "himalaya":
             body = _extract_message_body(msg)
-            from_addr = env.get("from", {}).get("addr", "")
-            from_name = env.get("from", {}).get("name", "")
+            from_addr = email_identity.address_from(env.get("from"))
+            from_name = email_identity.name_from(env.get("from"))
             subject = env.get("subject", "")
             has_attachments = bool(
                 env.get("has_attachment", False)
@@ -1194,8 +1195,8 @@ def check_account(acct, pushed_count=None):
             links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
         else:
             body = msg.get("body", "") if isinstance(msg, dict) else ""
-            from_addr = env.get("from", {}).get("email", "")
-            from_name = env.get("from", {}).get("name", "")
+            from_addr = email_identity.address_from(env.get("from"))
+            from_name = email_identity.name_from(env.get("from"))
             subject = env.get("subject", "")
             has_attachments = env.get("has_attachments", False)
             to_list = env.get("to") or [{}]

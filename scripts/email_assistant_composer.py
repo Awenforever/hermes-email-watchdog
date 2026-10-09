@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 import email_evidence_contract
+import email_identity
 
 
 COMPOSER_VERSION = "intelligent_v5.0"
@@ -123,11 +124,7 @@ def _format_time(value: Any) -> str:
 
 
 def _sender(email: Mapping[str, Any]) -> str:
-    name = re.sub(r"\s+", " ", _text(email.get("from_name"), 120).strip().strip('"').strip())
-    address = _text(email.get("from_addr") or email.get("from_email") or email.get("sender"), 200)
-    if name and address and name.casefold() not in address.casefold():
-        return f"{name} <{address}>"
-    return name or address or "未知发件人"
+    return email_identity.canonical_sender(email)
 
 
 def _category(decision: Mapping[str, Any]) -> Tuple[str, str]:

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.2 - 2026-10-09
+
+- Preserve the sender email address in every notification renderer even when
+  the display name matches the address local part.
+- Normalize mapping-shaped Himalaya and Agently sender identities through one
+  runtime-owned formatter before semantic processing or rendering.
+- Cover intelligent, evidence-degraded and legacy paths with the same immutable
+  sender identity contract.
+
 ## 0.13.1 - 2026-10-08
 
 - Apply one credential-command policy to generated, explicit, existing, and

@@ -25,6 +25,7 @@ try:
     import email_config
 except Exception:  # pragma: no cover - defensive import for isolated tests
     email_config = None
+import email_identity
 
 MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G"
 RENDERER_VERSION = "adaptive_v1g"
@@ -254,11 +255,7 @@ def _format_time(value: Any) -> str:
 
 
 def _sender(email: Mapping[str, Any]) -> str:
-    name = _text(email.get("from_name"), 100).strip('"')
-    address = _text(email.get("from_addr") or email.get("from_email") or email.get("sender"), 180)
-    if name and address and name.casefold() not in address.casefold():
-        return f"{name} <{address}>"
-    return name or address or "未知发件人"
+    return email_identity.canonical_sender(email)
 
 
 def _account(email: Mapping[str, Any], account: Mapping[str, Any] | None) -> str:

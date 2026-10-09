@@ -27,9 +27,11 @@ sys.path.insert(0, SCRIPT_DIR)
 
 try:
     import email_config
+    import email_identity
     import email_store
 except ImportError:
     email_config = None
+    email_identity = None
     email_store = None
 
 TRUST_DOWNLOAD_TLDS = (".edu.cn", ".ac.cn", ".gov.cn", ".com", ".org", ".net", ".cn")
@@ -223,11 +225,9 @@ def format_notification(email: dict, analysis: dict, attachments: list, schedule
         return "\n\n".join("> " + p for p in paras)
 
     def sender_text():
-        name = inline(email.get("from_name"), limit=100).strip().strip('"').strip()
-        addr = inline(email.get("from_addr") or email.get("from_email"), limit=160)
-        if name and addr and name.lower() not in addr.lower():
-            return f"{name} <{addr}>"
-        return name or addr or inline(_sender_display(email), "未知发件人", 220)
+        if email_identity is not None:
+            return email_identity.canonical_sender(email)
+        return inline(_sender_display(email), "未知发件人", 220)
 
     def level_text(value):
         value = inline(value, "medium", 60).lower()
@@ -1305,9 +1305,9 @@ def _extract_code(text):
 
 
 def _sender_display(email):
-    name = (email.get("from_name") or "").strip('"\' ')
-    addr = email.get("from_addr") or email.get("from_email") or ""
-    return f"{name} <{addr}>" if name and addr and name != addr else (name or addr or "?")
+    if email_identity is not None:
+        return email_identity.canonical_sender(email, unknown="?")
+    return email.get("from_addr") or email.get("from_email") or email.get("from_name") or "?"
 
 
 def _domain(addr):
@@ -1541,11 +1541,9 @@ def _ew_v4_time(value):
 
 
 def _ew_v4_sender(email):
-    name = _ew_v4_inline((email or {}).get("from_name"), limit=100).strip().strip('"').strip()
-    addr = _ew_v4_inline((email or {}).get("from_addr") or (email or {}).get("from_email"), limit=160)
-    if name and addr and name.lower() not in addr.lower():
-        return f"{name} <{addr}>"
-    return name or addr or "未知发件人"
+    if email_identity is not None:
+        return email_identity.canonical_sender(email or {})
+    return _ew_v4_inline((email or {}).get("from_addr") or (email or {}).get("from_email"), "未知发件人", 160)
 
 
 def _ew_v4_attachment_name(att):

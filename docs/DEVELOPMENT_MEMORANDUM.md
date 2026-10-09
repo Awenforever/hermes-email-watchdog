@@ -136,6 +136,14 @@ second ``Date:``/sent timestamp or move either time into a separate prose row;
 when a provider lacks server receipt time, the source sent time is only a
 fallback for that single slot.
 
+An available sender email address is equally immutable notification chrome.
+A display name may be shown as `Name <address>`, but it can never replace the
+address merely because the name equals or appears inside the address local
+part. Envelope adapters normalize `addr`, `email`, `address` and mapping-shaped
+sender fields through one identity module; intelligent, degraded and legacy
+renderers must all use that canonical formatter. Models do not own sender
+identity and may not abbreviate it.
+
 Weixin native quotes are previews, not guaranteed full-message copies. Email
 actions must accept an exact durable-message match or one sufficiently long,
 unique normalized preview match. The same rule applies to reply-draft
