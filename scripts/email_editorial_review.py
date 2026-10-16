@@ -883,9 +883,11 @@ def finalize_markdown(
             continue
         due = _text(item.get("deadline") or item.get("time"), 120)
         if due:
-            schedule_lines.append(f"- 已记录提醒：`{due.replace('`', '′')}`（如已完成请忽略）")
+            # The schedule is only *offered* here; a reminder does not exist until
+            # the user quotes the card and replies `提醒我`. Say so explicitly.
+            schedule_lines.append(f"- 日程：`{due.replace('`', '′')}`（默认**不提醒**）")
     if schedule_lines:
-        text += "\n\n**提醒**\n" + "\n".join(schedule_lines)
+        text += "\n\n**日程**\n" + "\n".join(schedule_lines)
     if email is not None:
         text = email_assistant_composer.ensure_card_chrome(text, email, decision, account)
     return {

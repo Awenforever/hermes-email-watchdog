@@ -784,6 +784,53 @@ def _attachment_forward_policy(path: str, settings: dict | None = None) -> tuple
     return True, "safe_bounded_attachment", size
 
 
+def _concise_label(value, limit: int = 42) -> str:
+    """Collapse multi-line/bullet text into one concise, boundary-aware line.
+
+    Schedule titles default to the full ``formatted_summary`` (a multi-bullet
+    block) that renders poorly in a table cell and, when hard-cut, reads as a
+    dangling fragment. Cut at a sentence/clause boundary so the label stays
+    meaningful instead of truncated mid-word.
+    """
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    text = text.lstrip("-*•·").strip()
+    if not text:
+        return ""
+    sentence_end = re.search(r"[。；;！!？?]", text)
+    if sentence_end and sentence_end.end() <= limit:
+        return text[:sentence_end.end()].rstrip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    for sep in ("，", ",", "、", " "):
+        idx = head.rfind(sep)
+        if idx >= int(limit * 0.6):
+            return head[:idx].rstrip("，,、 ") + "…"
+    return head.rstrip() + "…"
+
+
+def _concise_schedule_title(analysis: dict, email: dict) -> str:
+    """Accurate one-line label for a schedule, summarized at creation time.
+
+    Prefer the specific action, then the core summary sentence, then the subject,
+    so the active-schedule table and the reminder header read cleanly instead of
+    dumping the whole multi-bullet summary.
+    """
+    action = analysis.get("action_needed") if isinstance(analysis.get("action_needed"), dict) else {}
+    for raw in (
+        action.get("description"),
+        action.get("next_step"),
+        analysis.get("formatted_summary"),
+        (email or {}).get("subject"),
+    ):
+        label = _concise_label(raw)
+        if label:
+            return label
+    return "邮件待办"
+
+
 def upsert_schedule(email: dict, analysis: dict) -> list:
     """Build inert reminder candidates. Activation requires an authorized quote action."""
     if not email_store:
@@ -808,16 +855,13 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
         # Never create active calendar/reminder state for an ambiguous or
         # already expired historical deadline.
         return []
+    schedule_title = _concise_schedule_title(analysis, email)
     if not reminders and deadline_value:
-        reminders = _default_reminders(
-            deadline_value,
-            analysis.get("formatted_summary") or email.get("subject", ""),
-            settings,
-        )
+        reminders = _default_reminders(deadline_value, schedule_title, settings)
     item = {
         "id": sched_id,
         "message_id": msg_id,
-        "title": analysis.get("formatted_summary") or email.get("subject", ""),
+        "title": schedule_title,
         "action_needed": action.get("description") or action.get("next_step") or "",
         "deadline": deadline_value,
         "timezone": timezone_name,
@@ -1031,8 +1075,10 @@ def collect_due_reminder_notifications(now=None):
             key = f"{reminder.get('time','')}|{reminder.get('kind','')}"
             if when is None or key in sent or current.astimezone(when.tzinfo) < when:
                 continue
-            title = str(item.get("title") or "邮件待办").strip()
-            action = str(item.get("action_needed") or reminder.get("message") or "请及时处理").strip()
+            title = _concise_label(item.get("title") or "邮件待办", 42)
+            action = _concise_label(
+                item.get("action_needed") or reminder.get("message") or "请及时处理", 60
+            )
             deadline_text = deadline.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") if deadline else str(item.get("deadline") or "")
             alerts.append(
                 "### ⏰ 邮件待办提醒\n\n"

@@ -88,6 +88,49 @@ class ReminderTableTests(unittest.TestCase):
         second = email_actions.handle_inbound(self.context("提醒我", mid="same"))
         self.assertEqual(first["message"], second["message"])
 
+    @patch("email_actions.email_delivery._sync_calendar_ics")
+    @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
+    @patch("email_actions.email_store.get_schedules", return_value=[
+        {"deadline": "2030-01-02T09:00:00+08:00", "account": "USTC",
+         "title": "- 这是一封关于研究生学期注册的重要通知，要求在规定时间内完成注册手续。\n- 第二点说明。"},
+    ])
+    @patch("email_actions.email_store.update_schedule")
+    @patch("email_actions.email_store.upsert_schedule")
+    def test_long_title_is_summarized_not_midword_truncated(self, upsert, update, get_sched, _settings, _sync):
+        import re as _re
+        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        self.assertIn("**当前活跃日程**", message)
+        self.assertNotIn("- 这是一封关于研究生学期注册的重要通知，要求在规定时间内完成注册手续。", message)
+        match = _re.search(r"\| 2030-01-02 09:00 \| (.+?) \| USTC \|", message)
+        self.assertIsNotNone(match)
+        cell = match.group(1)
+        self.assertLessEqual(len(cell), 37)
+        self.assertFalse(cell.startswith("-"))
+        self.assertTrue(cell.endswith("…") or cell[-1] in "。；;！!？?")
+
+    @patch("email_actions.email_delivery._sync_calendar_ics")
+    @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
+    @patch("email_actions.email_store.get_schedules", return_value=[
+        {"deadline": "2030-01-02T09:00:00+08:00", "title": "提交材料",
+         "message_id": "USTC:1599727883", "id": "1599727883:main"},
+    ])
+    @patch("email_actions.email_store.update_schedule")
+    @patch("email_actions.email_store.upsert_schedule")
+    def test_legacy_row_account_recovered_from_scoped_message_id(self, upsert, update, get_sched, _settings, _sync):
+        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        self.assertIn("| 2030-01-02 09:00 | 提交材料 | USTC |", message)
+
+    @patch("email_actions.email_delivery._sync_calendar_ics")
+    @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
+    @patch("email_actions.email_store.get_schedules", return_value=[
+        {"deadline": "2030-01-02T09:00:00+08:00", "title": "提交材料", "id": "main"},
+    ])
+    @patch("email_actions.email_store.update_schedule")
+    @patch("email_actions.email_store.upsert_schedule")
+    def test_unknown_account_renders_dash_not_blank(self, upsert, update, get_sched, _settings, _sync):
+        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        self.assertIn("| 2030-01-02 09:00 | 提交材料 | — |", message)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -349,9 +349,16 @@ def _active_schedule_table(limit: int = 8) -> str:
     lines = ["| 截止 | 事项 | 账户 |", "| --- | --- | --- |"]
     for row in rows[:limit]:
         when = str(row.get("deadline") or "").replace("T", " ")[:16]
-        title = str(row.get("title") or "邮件待办").replace("\n", " ").replace("|", "／").strip()[:24]
-        account = str(row.get("account") or "").replace("|", "／").strip()[:12]
-        lines.append(f"| {when} | {title} | {account} |")
+        title = email_delivery._concise_label(row.get("title") or "邮件待办", 36).replace("|", "／")
+        account = str(row.get("account") or "").strip()
+        if not account:
+            # Legacy schedules predate the account column; recover it from the
+            # account-scoped storage key (e.g. message_id "USTC:1599727883").
+            scoped = str(row.get("message_id") or row.get("id") or "")
+            if ":" in scoped:
+                account = scoped.split(":", 1)[0]
+        account = account.replace("|", "／").strip()[:12] or "—"
+        lines.append(f"| {when} | {title or '—'} | {account} |")
     extra = len(rows) - limit
     if extra > 0:
         lines.append(f"| … | 另有 {extra} 项 | |")
