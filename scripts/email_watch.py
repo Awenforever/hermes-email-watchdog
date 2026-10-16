@@ -1423,14 +1423,27 @@ def check_account(acct, pushed_count=None):
         save_seen(seen)
     return alerts
 
+def _due_reminder_alerts() -> list:
+    """Due reminders for this poll; a collection failure must stay visible.
+
+    Swallowing this exception silently (the previous bare ``except``) stopped
+    every reminder forever with zero trace in the logs.
+    """
+    if not (HAS_V3 and hasattr(email_delivery, "collect_due_reminder_notifications")):
+        return []
+    try:
+        return list(email_delivery.collect_due_reminder_notifications() or [])
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "due-reminder collection failed; no due alerts this poll: %r", exc
+        )
+        return []
+
+
 def main():
     _reset_output_metadata()
-    due_alerts = []
-    if HAS_V3 and hasattr(email_delivery, "collect_due_reminder_notifications"):
-        try:
-            due_alerts = list(email_delivery.collect_due_reminder_notifications() or [])
-        except Exception:
-            due_alerts = []
+    due_alerts = _due_reminder_alerts()
     if is_sleep_time():
         _LAST_OUTPUT_NOTIFICATIONS.extend(str(item) for item in due_alerts if item)
         return "\n\n---\n\n".join(due_alerts)

@@ -830,38 +830,40 @@ def _is_meta_summary(text) -> bool:
 
 
 def _schedule_action_text(analysis: dict) -> str:
-    """The imperative task for a schedule, or "" when none is actionable.
+    """The imperative task for a schedule, or "" when the model gave nothing.
 
     ``next_step`` is the model's "do this" phrasing; ``description`` is often
-    meta-commentary about the email, so it is kept only when it reads as an
-    actual instruction. Returning the full text (no truncation) is intentional —
-    the user asked to see the whole task, not a cut fragment.
+    meta-commentary about the email, so non-meta text wins. Meta text is kept
+    as a last resort: an imperfect task line beats an empty one, which would
+    leave the user guessing what the schedule actually demands.
     """
     action = analysis.get("action_needed") if isinstance(analysis.get("action_needed"), dict) else {}
+    meta_fallback = ""
     for raw in (action.get("next_step"), action.get("description")):
         text = " ".join(str(raw or "").split()).strip()
-        if text and not _is_meta_summary(text):
+        if not text:
+            continue
+        if not _is_meta_summary(text):
             return text
-    return ""
+        meta_fallback = meta_fallback or text
+    return meta_fallback
 
 
 def _concise_schedule_title(analysis: dict, email: dict) -> str:
     """Recognizable one-line label for a schedule.
 
     Lead with the email subject — it is what the user recognizes in their inbox
-    — and only fall back to the actionable task or summary when no subject is
-    available. Kept essentially full (generous cap) so the active-schedule list
-    and reminder header read cleanly instead of truncated mid-phrase.
+    — and show it in full: the user asked for complete text, and a subject is
+    bounded by the mail itself. Only the model's multi-bullet summary fallback
+    gets the boundary-aware cut, since that blob has no natural end.
     """
-    for raw in (
-        (email or {}).get("subject"),
-        _schedule_action_text(analysis),
-        analysis.get("formatted_summary"),
-    ):
-        label = _concise_label(raw, 160)
-        if label:
-            return label
-    return "邮件待办"
+    subject = " ".join(str((email or {}).get("subject") or "").split())
+    if subject:
+        return subject
+    action = _schedule_action_text(analysis)
+    if action:
+        return action
+    return _concise_label(analysis.get("formatted_summary"), 160) or "邮件待办"
 
 
 def upsert_schedule(email: dict, analysis: dict) -> list:
@@ -1108,9 +1110,9 @@ def collect_due_reminder_notifications(now=None):
             key = f"{reminder.get('time','')}|{reminder.get('kind','')}"
             if when is None or key in sent or current.astimezone(when.tzinfo) < when:
                 continue
-            title = _concise_label(item.get("title") or "邮件待办", 80)
-            action = _concise_label(
-                item.get("action_needed") or reminder.get("message") or "请及时处理", 120
+            title = " ".join(str(item.get("title") or "邮件待办").split())
+            action = " ".join(
+                str(item.get("action_needed") or reminder.get("message") or "请及时处理").split()
             )
             deadline_text = deadline.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") if deadline else str(item.get("deadline") or "")
             alerts.append(

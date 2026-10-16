@@ -20,6 +20,12 @@ LONG_SUMMARY = (
     "- 邮件还附带了注册流程的详细步骤说明。"
 )
 
+LONG_SUBJECT = (
+    "Call for Paper: [Remote Sensing] Special Issue on Advanced Robust Satellite "
+    "Techniques (RST) for Natural Hazard Monitoring, including seismic, volcanic and "
+    "hydrological extremes; extended abstracts welcome, submission deadline 2027-02-28"
+)
+
 
 class ConciseLabelTests(unittest.TestCase):
     def test_long_multibullet_summary_is_cut_at_a_meaningful_boundary(self):
@@ -64,15 +70,35 @@ class ConciseScheduleTitleTests(unittest.TestCase):
         )
         self.assertEqual(email_delivery._concise_schedule_title({}, {}), "邮件待办")
 
+    def test_long_subject_is_kept_in_full_not_capped(self):
+        # The user asked for complete text; a subject is bounded by the mail
+        # itself, so it must survive verbatim instead of ending in "…".
+        self.assertEqual(
+            email_delivery._concise_schedule_title({}, {"subject": LONG_SUBJECT}), LONG_SUBJECT
+        )
+        self.assertGreater(len(LONG_SUBJECT), 160)
+
+    def test_summary_fallback_still_gets_boundary_cut(self):
+        # Only the model's multi-bullet blob is capped: it has no natural end.
+        label = email_delivery._concise_schedule_title({"formatted_summary": LONG_SUMMARY}, {})
+        self.assertLessEqual(len(label), 161)
+        self.assertNotIn("\n", label)
+
 
 class ScheduleActionTextTests(unittest.TestCase):
     def test_next_step_is_preferred_over_description(self):
         analysis = {"action_needed": {"next_step": "立即查看原邮件并完成要求", "description": "该事项存在明确的临近处理要求"}}
         self.assertEqual(email_delivery._schedule_action_text(analysis), "立即查看原邮件并完成要求")
 
-    def test_meta_summary_description_is_rejected(self):
-        analysis = {"action_needed": {"description": "该邮件是关于《Remote Sensing》期刊的一则特刊投稿提醒"}}
-        self.assertEqual(email_delivery._schedule_action_text(analysis), "")
+    def test_meta_summary_description_is_last_resort_fallback(self):
+        # Meta commentary is a poor task line, but an empty one is worse: the
+        # user would see a schedule with no clue what it demands.
+        meta = "该邮件是关于《Remote Sensing》期刊的一则特刊投稿提醒"
+        self.assertEqual(email_delivery._schedule_action_text({"action_needed": {"description": meta}}), meta)
+
+    def test_meta_next_step_beats_meta_description(self):
+        analysis = {"action_needed": {"next_step": "该邮件要求回复确认", "description": "本邮件主题为投稿提醒"}}
+        self.assertEqual(email_delivery._schedule_action_text(analysis), "该邮件要求回复确认")
 
     def test_real_task_description_is_kept_when_no_next_step(self):
         analysis = {"action_needed": {"description": "在微信卡片中引用回复并确认发送以验证回信路由"}}
@@ -119,23 +145,23 @@ class UpsertScheduleTitleTests(unittest.TestCase):
 
 
 class ReminderCardRenderingTests(unittest.TestCase):
-    def test_legacy_long_title_card_is_summarized_not_dumped(self):
-        # A schedule created before the concise-title fix still holds the full
-        # multi-bullet summary; the reminder card renderer must summarize it.
-        legacy = {
+    def test_stored_title_and_task_render_in_full(self):
+        # The renderer no longer caps: the user asked for complete text. Data
+        # cleanup (full subjects, real tasks) is owned by the title migration.
+        row = {
             "id": "USTC:999:main",
-            "title": LONG_SUMMARY,
-            "action_needed": "",
+            "title": LONG_SUBJECT,
+            "action_needed": "在 2027-02-28 前向投稿系统提交扩展摘要并抄送合作者",
             "deadline": "2030-01-02T09:00:00+08:00",
             "timezone": "Asia/Shanghai",
             "status": "active",
             "reminder_json": __import__("json").dumps(
-                [{"time": "2020-01-01T00:00:00+08:00", "kind": "提前1小时", "message": LONG_SUMMARY}]
+                [{"time": "2020-01-01T00:00:00+08:00", "kind": "提前1小时", "message": "x"}]
             ),
             "reminders_sent_json": "[]",
         }
         store = mock.Mock()
-        store.get_schedules.return_value = [legacy]
+        store.get_schedules.return_value = [row]
         with mock.patch.object(email_delivery, "email_store", store), mock.patch.object(
             email_delivery.email_config, "get_delivery_settings", return_value=SETTINGS
         ), mock.patch.object(email_delivery, "_sync_calendar_ics", return_value=""):
@@ -143,12 +169,31 @@ class ReminderCardRenderingTests(unittest.TestCase):
         self.assertEqual(len(alerts), 1)
         card = alerts[0]
         self.assertIn("### ⏰ 邮件待办提醒", card)
-        # The 2nd/3rd bullets of the raw dump must not survive into the card;
-        # only a single concise line is rendered for the title and the 待办.
-        self.assertNotIn("邮件说明未按时注册将影响学籍状态", card)
-        self.assertNotIn("详细步骤说明", card)
-        for line in card.splitlines():
-            self.assertLessEqual(len(line), 80)
+        self.assertIn(LONG_SUBJECT, card)
+        self.assertIn("在 2027-02-28 前向投稿系统提交扩展摘要并抄送合作者", card)
+        self.assertNotIn("…", card)
+
+    def test_multiline_stored_text_is_flattened_to_single_lines(self):
+        row = {
+            "id": "USTC:998:main",
+            "title": "第一行\n第二行",
+            "action_needed": "任务一\n任务二",
+            "deadline": "2030-01-02T09:00:00+08:00",
+            "timezone": "Asia/Shanghai",
+            "status": "active",
+            "reminder_json": __import__("json").dumps(
+                [{"time": "2020-01-01T00:00:00+08:00", "kind": "提前1小时", "message": "x"}]
+            ),
+            "reminders_sent_json": "[]",
+        }
+        store = mock.Mock()
+        store.get_schedules.return_value = [row]
+        with mock.patch.object(email_delivery, "email_store", store), mock.patch.object(
+            email_delivery.email_config, "get_delivery_settings", return_value=SETTINGS
+        ), mock.patch.object(email_delivery, "_sync_calendar_ics", return_value=""):
+            card = email_delivery.collect_due_reminder_notifications()[0]
+        self.assertIn("**第一行 第二行**", card)
+        self.assertIn("- 待办：任务一 任务二", card)
 
 
 if __name__ == "__main__":
