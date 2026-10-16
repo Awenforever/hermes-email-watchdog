@@ -325,6 +325,7 @@ def _ensure_schedule_message_row(schedule: dict, action: dict) -> None:
         return
     email_store.upsert_message({
         "id": msg_id,
+        "uid": _transport_uid(action),
         "account": str(action.get("account") or schedule.get("account") or ""),
         "subject": str(action.get("subject") or schedule.get("title") or ""),
         "from_email": str(action.get("from_addr") or ""),
@@ -474,6 +475,24 @@ def _transport_result(sent) -> dict:
     return {"provider_message_id": message_id, "transport_receipt": output[:500]}
 
 
+def _transport_uid(action: dict) -> str:
+    """Raw Himalaya message id used to address a message on the wire.
+
+    Storage keys are account-scoped (``account:uid``) to guarantee cross-account
+    uniqueness, but Himalaya addresses a message by its raw per-mailbox UID within
+    the ``-a <alias>``/``-c <config>`` account context. Prefer the explicit ``uid``
+    carried on the action; otherwise strip a leading ``account:`` namespace. A bare
+    legacy id (no colon) is already a raw UID and passes through unchanged.
+    """
+    raw = str((action or {}).get("uid") or "").strip()
+    if raw:
+        return raw
+    message_id = str((action or {}).get("message_id") or "").strip()
+    if ":" in message_id:
+        return message_id.split(":", 1)[1]
+    return message_id
+
+
 def _send_himalaya_reply(draft: dict) -> dict:
     reply_settings = email_config.load_config().get("reply") or {}
     if not isinstance(reply_settings, dict) or not reply_settings.get("outbound_enabled", False):
@@ -483,7 +502,7 @@ def _send_himalaya_reply(draft: dict) -> dict:
     # Do not expose user-authored body text in the process argument list. The
     # generated template is used only for reply/thread headers; its body is
     # replaced below before being passed through stdin-like template content.
-    reply_cmd = common + ["template", "reply"] + (["-a", account] if account else []) + [str(action.get("message_id"))]
+    reply_cmd = common + ["template", "reply"] + (["-a", account] if account else []) + [str(_transport_uid(action))]
     generated = subprocess.run(reply_cmd, capture_output=True, text=True, timeout=45, cwd=cwd)
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成回复模板").strip()[:500])
@@ -518,7 +537,7 @@ def _send_himalaya_forward(draft: dict) -> dict:
     command = common + ["template", "forward", "-H", f"To:{recipient}"]
     if account:
         command += ["-a", account]
-    command += [str(action.get("message_id"))]
+    command += [str(_transport_uid(action))]
     generated = subprocess.run(command, capture_output=True, text=True, timeout=45, cwd=cwd)
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成转发模板").strip()[:500])

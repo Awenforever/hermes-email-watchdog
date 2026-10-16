@@ -210,6 +210,7 @@ def _migrate_columns(conn):
         "analysis_json": "TEXT",
         "attachment_policy": "TEXT",
         "delivered_text_hash": "TEXT",
+        "uid": "TEXT",
     }
     for name, sql_type in wanted.items():
         if name not in columns:
@@ -219,6 +220,72 @@ def _migrate_columns(conn):
         if "account" not in sched_columns:
             conn.execute("ALTER TABLE schedules ADD COLUMN account TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_schedules_account ON schedules(account)")
+    migrate_message_storage_keys(conn)
+
+
+def migrate_message_storage_keys(conn) -> int:
+    """Namespace legacy ``messages.id`` values by account (Option B storage keys).
+
+    Himalaya envelope ids are per-mailbox UIDs with no cross-account uniqueness
+    guarantee, so two accounts can produce the same numeric id. Historically the
+    raw UID was used directly as the storage primary key, which would silently
+    overwrite the other account's row and cross-wire the FK children
+    (attachments/links/actions/schedules). New ingestion stores
+    ``id = "<account>:<uid>"`` and keeps the raw UID in the ``uid`` column.
+
+    This migrates a pre-existing database to that scheme. It is idempotent
+    (already-scoped rows are skipped), transactional, and fail-safe: if any
+    derived key would collide with an existing id the whole migration is rolled
+    back and nothing is changed. Returns the number of messages rescoped.
+    """
+    rows = conn.execute("SELECT id, account, uid FROM messages").fetchall()
+    existing_ids = {row[0] for row in rows}
+    remap = {}
+    for row in rows:
+        old_id = row[0]
+        account = str(row[1] or "").strip()
+        if not old_id or not account:
+            continue
+        scoped = f"{account}:{old_id}"
+        if old_id == scoped or old_id.startswith(f"{account}:"):
+            continue  # already namespaced
+        if scoped in existing_ids:
+            # A different row already occupies the target key; refuse to guess.
+            return 0
+        remap[old_id] = scoped
+    if not remap:
+        return 0
+    # PRAGMA foreign_keys is a no-op inside a transaction, and Python's sqlite3
+    # opens implicit transactions on DML, so drive this migration in manual
+    # (autocommit) mode with an explicit transaction we fully control.
+    conn.commit()
+    prior_isolation = conn.isolation_level
+    conn.isolation_level = None
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        for old_id, new_id in remap.items():
+            conn.execute(
+                "UPDATE messages SET uid=COALESCE(NULLIF(uid,''), ?), id=? WHERE id=?",
+                (old_id, new_id, old_id),
+            )
+            for child in ("attachments", "links", "actions", "schedules"):
+                conn.execute(
+                    f"UPDATE {child} SET message_id=? WHERE message_id=?",
+                    (new_id, old_id),
+                )
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_isolation
+    return len(remap)
+
 
 
 # ── Message CRUD ────────────────────────────────────────────────

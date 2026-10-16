@@ -165,6 +165,7 @@ def _record_output_action(email, account, analysis, delivery, notification_text)
     _LAST_OUTPUT_ACTIONS.append({
         "notification_text": str(notification_text),
         "message_id": str((email or {}).get("id") or (email or {}).get("msg_id") or ""),
+        "uid": str((email or {}).get("uid") or ""),
         "account": str((email or {}).get("account") or (account or {}).get("id") or ""),
         "account_type": str((account or {}).get("type") or ""),
         "himalaya_config": _hconfig,
@@ -1200,6 +1201,11 @@ def check_account(acct, pushed_count=None):
     for env in envelopes:
         msg_id = str(env.get("id") or env.get("message_id", ""))
         key = f"{prefix}{msg_id}"
+        # Account-scoped storage identity. Himalaya envelope ids are per-mailbox
+        # UIDs with no cross-account uniqueness guarantee, so the storage primary
+        # key (and every FK child) is namespaced by account. The raw UID is kept
+        # in ``msg_id``/``uid`` because Himalaya transport addresses messages by it.
+        storage_id = key
 
         if key in seen:
             continue
@@ -1256,7 +1262,7 @@ def check_account(acct, pushed_count=None):
         from_addr_lower = (from_addr or "").lower()
         from_domain = from_addr_lower.split("@", 1)[1] if "@" in from_addr_lower else ""
         email_data = {
-            "id": msg_id, "msg_id": msg_id, "account": acct_name,
+            "id": storage_id, "msg_id": storage_id, "uid": msg_id, "account": acct_name,
             "subject": subject, "from_addr": from_addr, "from_email": from_addr_lower,
             "from_domain": from_domain, "from_name": from_name,
             "body": body[:12000], "to_addr": to_addr,
@@ -1268,7 +1274,7 @@ def check_account(acct, pushed_count=None):
         }
 
         _cache_full_email(
-            acct_name, msg_id, subject, from_addr, from_name, body,
+            acct_name, storage_id, subject, from_addr, from_name, body,
             has_attachments, attachments=attachments, links=links,
             date_sent=date_sent, date_received=date_received, date_seen=scan_time,
         )
@@ -1290,7 +1296,7 @@ def check_account(acct, pushed_count=None):
                 trust_result,
             ) if trust_result.get("label") != "blocked" else {"score": 100, "label": "critical", "flags": ["trust_blocked"]}
             email_store.upsert_message({
-                "id": msg_id, "account": acct_name, "subject": subject, "from_name": from_name,
+                "id": storage_id, "uid": msg_id, "account": acct_name, "subject": subject, "from_name": from_name,
                 "from_email": from_addr_lower, "from_domain": from_domain,
                 "date_sent": date_sent, "date_received": date_received, "date_seen": scan_time,
                 "has_attachment": 1 if has_attachments else 0,
@@ -1303,8 +1309,8 @@ def check_account(acct, pushed_count=None):
                 if not isinstance(link, dict) or not link.get("url"):
                     continue
                 email_store.add_link({
-                    "id": hashlib.sha256(f"{msg_id}:{index}:{link['url']}".encode()).hexdigest()[:24],
-                    "message_id": msg_id,
+                    "id": hashlib.sha256(f"{storage_id}:{index}:{link['url']}".encode()).hexdigest()[:24],
+                    "message_id": storage_id,
                     "url": str(link.get("url"))[:4000],
                     "display_text": str(link.get("display_text") or "")[:500],
                     "domain": re.sub(r"^https?://", "", str(link.get("url")), flags=re.I).split("/", 1)[0][:255],
@@ -1327,7 +1333,7 @@ def check_account(acct, pushed_count=None):
             thread_id = email_thread_tracker.update_thread_on_reply(from_addr, subject, (body or "")[:200])
 
         if HAS_V3:
-            email_store.update_message_fields(msg_id, {
+            email_store.update_message_fields(storage_id, {
                 "rule_category": rule_result.get("category"),
                 "importance": rule_result.get("priority") if rule_result.get("priority") != "skip" else "low",
             })
@@ -1340,7 +1346,7 @@ def check_account(acct, pushed_count=None):
 
         if rule_result.get("action") == "skip" and not production_route_active:
             if HAS_V3:
-                email_store.update_message_fields(msg_id, {"push_status": "skipped"})
+                email_store.update_message_fields(storage_id, {"push_status": "skipped"})
                 try:
                     email_delivery.observe_shadow_only(
                         email_data, rule_result, acct, legacy_reason="legacy_rule_skip"
