@@ -240,9 +240,9 @@ def _interval_seconds() -> int:
         except Exception:
             raw = ""
     try:
-        value = int(raw or "60")
+        value = int(raw or "45")
     except Exception:
-        value = 60
+        value = 45
     return max(30, min(value, 3600))
 
 
@@ -404,8 +404,32 @@ def _sanitize_notification(text: str) -> str:
     max_chars = int(os.getenv("HERMES_EMAIL_WATCHDOG_MAX_NOTIFICATION_CHARS", "1800") or "1800")
     max_chars = max(400, min(max_chars, 4000))
     if len(value) > max_chars:
-        value = value[: max_chars - 18].rstrip() + "\n\n（原文过长，已截断）"
+        value = _truncate_preserving_guidance(value, max_chars)
     return value
+
+
+_GUIDANCE_OPENERS = ("> 如需", "> **可选截止时间**", "> 引用本消息")
+
+
+def _truncate_preserving_guidance(value: str, max_chars: int) -> str:
+    """Truncate a too-long notification without dropping the trailing hint.
+
+    The interaction guidance is appended at the very end of the notification, so
+    a naive tail cut removes exactly the operation hint on long emails. Split the
+    trailing guidance quote block off, truncate only the body, then re-append it.
+    """
+    suffix = "\n\n（原文过长，已截断）"
+    lines = value.split("\n")
+    idx = len(lines)
+    while idx > 0 and (lines[idx - 1].lstrip().startswith(">") or not lines[idx - 1].strip()):
+        idx -= 1
+    tail = [ln for ln in lines[idx:] if ln.strip()]
+    if tail and tail[0].lstrip().startswith(_GUIDANCE_OPENERS):
+        guidance = "\n".join(tail)
+        body = "\n".join(lines[:idx]).rstrip()
+        budget = max(0, max_chars - len(guidance) - len(suffix) - 2)
+        return (body[:budget].rstrip() + suffix + "\n\n" + guidance).strip()
+    return value[: max(0, max_chars - len(suffix))].rstrip() + suffix
 
 
 def _outbox_prepare(text: str, metadata: dict | None = None) -> dict:

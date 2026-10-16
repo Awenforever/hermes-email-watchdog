@@ -61,7 +61,8 @@ class ReminderActivationTests(unittest.TestCase):
         rows = email_store.get_schedules(status="active")
         self.assertEqual(len(rows), 1)
         row = rows[0]
-        self.assertEqual(row["id"], f"{msg_id}:main")
+        self.assertEqual(row["id"], f"USTC:{msg_id}:main")
+        self.assertEqual(row["account"], "USTC")
         self.assertEqual(row["message_id"], msg_id)
         self.assertNotIn("reminders", row)
 

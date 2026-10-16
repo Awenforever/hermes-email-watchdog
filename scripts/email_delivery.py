@@ -72,8 +72,7 @@ def append_interaction_guidance(text: str, schedule: list) -> str:
             label = str(item.get("title") or "邮件待办").strip().replace("\n", " ")[:100]
             lines.append(f"> {index}. `{item.get('deadline')}` · {label}")
         lines.append('> 如需添加提醒，请引用本消息回复编号（可多选，如 `1,3`）。')
-    lines.append('> 如需回复邮件，请引用本消息，发送 `@回复` 后换行输入正文。')
-    lines.append('> 如需转发邮件，请引用本消息，发送 `@转发 收件邮箱`；下一行可附加正文。')
+    lines.append('> 引用本消息操作：`@回复` 换行写正文 ｜ `@转发 收件邮箱` 可附言')
     return (str(text or "").rstrip() + "\n\n" + "\n".join(lines)).strip()
 
 

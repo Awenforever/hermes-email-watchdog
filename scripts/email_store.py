@@ -152,6 +152,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS schedules (
         id TEXT PRIMARY KEY,
         message_id TEXT NOT NULL,
+        account TEXT,
         title TEXT,
         action_needed TEXT,
         deadline TEXT,
@@ -213,6 +214,11 @@ def _migrate_columns(conn):
     for name, sql_type in wanted.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE messages ADD COLUMN {name} {sql_type}")
+    sched_columns = {row[1] for row in conn.execute("PRAGMA table_info(schedules)").fetchall()}
+    if sched_columns:
+        if "account" not in sched_columns:
+            conn.execute("ALTER TABLE schedules ADD COLUMN account TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_schedules_account ON schedules(account)")
 
 
 # ── Message CRUD ────────────────────────────────────────────────
