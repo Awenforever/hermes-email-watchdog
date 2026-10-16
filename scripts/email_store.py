@@ -221,17 +221,26 @@ def upsert_message(data: dict):
     """Insert or update a message. Returns message id."""
     conn = _get_conn()
     msg_id = data["id"]
+    # Persist only real columns; callers may pass transient keys that must not
+    # be mapped to phantom columns.
+    real_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    fields = {k: v for k, v in data.items() if k in real_cols}
+    fields["id"] = msg_id
     existing = conn.execute("SELECT id FROM messages WHERE id=?", (msg_id,)).fetchone()
-    
+
     if existing:
-        cols = ", ".join(f"{k}=?" for k in data if k != "id")
-        vals = [data[k] for k in data if k != "id"] + [msg_id]
-        conn.execute(f"UPDATE messages SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        set_cols = [k for k in fields if k != "id"]
+        if set_cols:
+            cols = ", ".join(f"{k}=?" for k in set_cols)
+            vals = [fields[k] for k in set_cols] + [msg_id]
+            conn.execute(f"UPDATE messages SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        else:
+            conn.execute("UPDATE messages SET updated_at=datetime('now') WHERE id=?", (msg_id,))
     else:
-        cols = ", ".join(data.keys())
-        placeholders = ", ".join("?" for _ in data)
-        conn.execute(f"INSERT INTO messages ({cols}) VALUES ({placeholders})", list(data.values()))
-    
+        cols = ", ".join(fields.keys())
+        placeholders = ", ".join("?" for _ in fields)
+        conn.execute(f"INSERT INTO messages ({cols}) VALUES ({placeholders})", list(fields.values()))
+
     conn.commit()
     return msg_id
 
@@ -318,15 +327,25 @@ def get_attachments(message_id: str) -> list:
 def upsert_schedule(data: dict):
     conn = _get_conn()
     sched_id = data["id"]
+    # Callers pass richer dicts than the table (e.g. a transient ``reminders``
+    # list). Persist only real columns so an extra key can never become a
+    # phantom-column INSERT/UPDATE error.
+    real_cols = {row[1] for row in conn.execute("PRAGMA table_info(schedules)").fetchall()}
+    fields = {k: v for k, v in data.items() if k in real_cols}
+    fields["id"] = sched_id
     existing = conn.execute("SELECT id FROM schedules WHERE id=?", (sched_id,)).fetchone()
     if existing:
-        cols = ", ".join(f"{k}=?" for k in data if k != "id")
-        vals = [data[k] for k in data if k != "id"] + [sched_id]
-        conn.execute(f"UPDATE schedules SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        set_cols = [k for k in fields if k != "id"]
+        if set_cols:
+            cols = ", ".join(f"{k}=?" for k in set_cols)
+            vals = [fields[k] for k in set_cols] + [sched_id]
+            conn.execute(f"UPDATE schedules SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        else:
+            conn.execute("UPDATE schedules SET updated_at=datetime('now') WHERE id=?", (sched_id,))
     else:
-        cols = ", ".join(data.keys())
-        placeholders = ", ".join("?" for _ in data)
-        conn.execute(f"INSERT INTO schedules ({cols}) VALUES ({placeholders})", list(data.values()))
+        cols = ", ".join(fields.keys())
+        placeholders = ", ".join("?" for _ in fields)
+        conn.execute(f"INSERT INTO schedules ({cols}) VALUES ({placeholders})", list(fields.values()))
     conn.commit()
     return sched_id
 

@@ -310,6 +310,28 @@ def _valid_single_recipient(value: str) -> str:
     return address
 
 
+def _ensure_schedule_message_row(schedule: dict, action: dict) -> None:
+    """Guarantee the schedules.message_id FK target exists before inserting.
+
+    A reminder can be activated long after the originating message row was
+    pruned; without this the NOT NULL + FOREIGN KEY constraint aborts the
+    insert and the activation is silently lost.
+    """
+    msg_id = str(schedule.get("message_id") or action.get("message_id") or "").strip()
+    if not msg_id:
+        return
+    schedule["message_id"] = msg_id
+    if email_store.get_message(msg_id):
+        return
+    email_store.upsert_message({
+        "id": msg_id,
+        "account": str(action.get("account") or schedule.get("account") or ""),
+        "subject": str(action.get("subject") or schedule.get("title") or ""),
+        "from_email": str(action.get("from_addr") or ""),
+        "from_name": str(action.get("from_name") or ""),
+    })
+
+
 def _activate_reminders(action: dict, selected: list[int]) -> str:
     candidates = [item for item in (action.get("deadlines") or []) if isinstance(item, dict) and item.get("deadline")]
     if not candidates:
@@ -325,6 +347,7 @@ def _activate_reminders(action: dict, selected: list[int]) -> str:
             active.get("deadline"), active.get("title"), email_config.get_delivery_settings()
         )
         active["reminder_json"] = json.dumps(active.get("reminders") or [], ensure_ascii=False)
+        _ensure_schedule_message_row(active, action)
         email_store.upsert_schedule(active)
         created.append(active)
     email_delivery._sync_calendar_ics()
@@ -659,7 +682,17 @@ def _handle_inbound_locked(context: dict):
         receipt = _receipt_key(context, "reminder:" + ",".join(map(str, selected)))
         if receipt in state["receipts"]:
             return _handled(state["receipts"][receipt], receipt)
-        response = _activate_reminders(action, selected)
+        try:
+            response = _activate_reminders(action, selected)
+        except Exception:
+            # Never swallow a recognized command: surface the failure and do not
+            # cache a receipt, so the user can retry.
+            try:
+                import logging
+                logging.getLogger("hermes-email-watchdog").exception("reminder activation failed")
+            except Exception:
+                pass
+            return _handled("创建提醒时出错，本次未保存；请稍后重试。", _receipt_key(context, "reminder-error"))
         state["receipts"][receipt] = response
         _atomic(ACTION_FILE, state)
         return _handled(response, receipt)
