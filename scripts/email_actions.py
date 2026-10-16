@@ -692,7 +692,7 @@ def _recall_result(draft: dict) -> str:
 
 def _explicit_mail_command(raw_typed: str) -> bool:
     typed = str(raw_typed or "").strip()
-    return bool(re.match(r"^@(?:回复|转发|确认发送|取消|召回)(?:\s|$)", typed))
+    return bool(re.match(r"^@(?:回复|转发|原文|确认发送|取消|召回)(?:\s|$)", typed))
 
 
 def _handle_inbound_locked(context: dict):
@@ -788,7 +788,7 @@ def _handle_inbound_locked(context: dict):
         if actions:
             return _handled("该气泡包含多封邮件，无法安全确定操作对象；请引用单封邮件的推送。", _receipt_key(context, "ambiguous"))
         mail_command = (
-            typed in {"提醒我", "确认发送", "取消", "@确认发送", "@取消", "@召回"}
+            typed in {"提醒我", "确认发送", "取消", "@确认发送", "@取消", "@召回", "@原文"}
             or _explicit_mail_command(raw_typed)
             or bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
         )
@@ -829,6 +829,21 @@ def _handle_inbound_locked(context: dict):
             return _handled("创建提醒时出错，本次未保存；请稍后重试。", _receipt_key(context, "reminder-error"))
         state["receipts"][receipt] = response
         _atomic(ACTION_FILE, state)
+        return _handled(response, receipt)
+
+    if typed == "@原文" or typed.startswith("@原文\n"):
+        receipt = _receipt_key(context, "original")
+        try:
+            import email_original
+            response = email_original.build_original_reply(action, _transport_uid(action))
+        except Exception:
+            # Read-only fetch; never cache a receipt so the user can retry.
+            try:
+                import logging
+                logging.getLogger("hermes-email-watchdog").exception("original-text fetch failed")
+            except Exception:
+                pass
+            return _handled("获取邮件原文失败，请稍后重试。", _receipt_key(context, "original-error"))
         return _handled(response, receipt)
 
     if typed == "@回复" or raw_typed.startswith("@回复\n"):
@@ -872,9 +887,9 @@ def _handle_inbound_locked(context: dict):
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-forward-draft-{draft_key}")
 
-    if any(typed.startswith(command) for command in ("@回复", "@转发", "@确认发送", "@取消", "@召回")):
+    if any(typed.startswith(command) for command in ("@回复", "@转发", "@原文", "@确认发送", "@取消", "@召回")):
         return _handled(
-            "命令格式无效。回复请使用 `@回复` 后换行输入正文；转发请使用 `@转发 收件邮箱`，下一行可选填附言；确认、取消和召回须分别单独发送 `@确认发送`、`@取消`、`@召回`。",
+            "命令格式无效。回复请使用 `@回复` 后换行输入正文；转发请使用 `@转发 收件邮箱`，下一行可选填附言；查看原文、确认、取消和召回须分别单独发送 `@原文`、`@确认发送`、`@取消`、`@召回`。",
             _receipt_key(context, "mail-command-invalid"),
         )
     return None
