@@ -13,7 +13,7 @@ import email_actions
 SETTINGS = {"timezone": "Asia/Shanghai", "reminder_offsets_minutes": [1440, 60]}
 
 
-class ReminderTableTests(unittest.TestCase):
+class ReminderListTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
@@ -51,20 +51,25 @@ class ReminderTableTests(unittest.TestCase):
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
     @patch("email_actions.email_store.get_schedules", return_value=[
-        {"deadline": "2030-01-02T09:00:00+08:00", "title": "提交材料", "account": "USTC"},
+        {"deadline": "2030-01-02T09:00:00+08:00", "title": "提交材料", "account": "USTC",
+         "action_needed": "登录系统完成学期注册"},
     ])
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
-    def test_reply_shows_offsets_and_active_table(self, upsert, update, get_sched, _settings, _sync):
+    def test_reply_shows_offsets_and_active_list(self, upsert, update, get_sched, _settings, _sync):
         result = email_actions.handle_inbound(self.context("提醒我"))
         message = result["message"]
         self.assertIn("已创建邮件提醒", message)
         # Offsets come from the generated reminders, not a hardcoded string.
         self.assertIn("提前1天、提前1小时", message)
         self.assertNotIn("提前 24 小时、1 小时", message)
-        self.assertIn("**当前活跃日程**", message)
-        self.assertIn("| 截止 | 事项 | 账户 |", message)
-        self.assertIn("| 2030-01-02 09:00 | 提交材料 | USTC |", message)
+        # The active-schedule block is a readable list, not a cramped table.
+        self.assertIn("**当前活跃日程**（共 1 项）", message)
+        self.assertNotIn("| 截止 | 事项 | 账户 |", message)
+        self.assertIn("**1. 提交材料**", message)
+        self.assertIn("截止：2030-01-02 09:00 · 账户：USTC", message)
+        # The task is shown in full so the user knows what to do.
+        self.assertIn("待办：登录系统完成学期注册", message)
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
@@ -83,7 +88,7 @@ class ReminderTableTests(unittest.TestCase):
     @patch("email_actions.email_store.get_schedules", return_value=[])
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
-    def test_reminder_activation_is_idempotent_with_table(self, upsert, _update, _get, _s, _sync):
+    def test_reminder_activation_is_idempotent_with_list(self, upsert, _update, _get, _s, _sync):
         first = email_actions.handle_inbound(self.context("提醒我", mid="same"))
         second = email_actions.handle_inbound(self.context("提醒我", mid="same"))
         self.assertEqual(first["message"], second["message"])
@@ -92,21 +97,16 @@ class ReminderTableTests(unittest.TestCase):
     @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
     @patch("email_actions.email_store.get_schedules", return_value=[
         {"deadline": "2030-01-02T09:00:00+08:00", "account": "USTC",
-         "title": "- 这是一封关于研究生学期注册的重要通知，要求在规定时间内完成注册手续。\n- 第二点说明。"},
+         "title": "Call for Paper: [Remote Sensing] (IF: 4.3, ISSN: 2072-4292) — Special Issue \"Advanced Robust Satellite Techniques\""},
     ])
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
-    def test_long_title_is_summarized_not_midword_truncated(self, upsert, update, get_sched, _settings, _sync):
-        import re as _re
+    def test_long_title_is_shown_in_full_not_truncated(self, upsert, update, get_sched, _settings, _sync):
         message = email_actions.handle_inbound(self.context("提醒我"))["message"]
         self.assertIn("**当前活跃日程**", message)
-        self.assertNotIn("- 这是一封关于研究生学期注册的重要通知，要求在规定时间内完成注册手续。", message)
-        match = _re.search(r"\| 2030-01-02 09:00 \| (.+?) \| USTC \|", message)
-        self.assertIsNotNone(match)
-        cell = match.group(1)
-        self.assertLessEqual(len(cell), 37)
-        self.assertFalse(cell.startswith("-"))
-        self.assertTrue(cell.endswith("…") or cell[-1] in "。；;！!？?")
+        # The whole subject survives verbatim: no 36-char cut, no ellipsis.
+        self.assertIn("Advanced Robust Satellite Techniques", message)
+        self.assertNotIn("…", message.split("**当前活跃日程**", 1)[1])
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
@@ -118,7 +118,7 @@ class ReminderTableTests(unittest.TestCase):
     @patch("email_actions.email_store.upsert_schedule")
     def test_legacy_row_account_recovered_from_scoped_message_id(self, upsert, update, get_sched, _settings, _sync):
         message = email_actions.handle_inbound(self.context("提醒我"))["message"]
-        self.assertIn("| 2030-01-02 09:00 | 提交材料 | USTC |", message)
+        self.assertIn("截止：2030-01-02 09:00 · 账户：USTC", message)
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
@@ -129,7 +129,18 @@ class ReminderTableTests(unittest.TestCase):
     @patch("email_actions.email_store.upsert_schedule")
     def test_unknown_account_renders_dash_not_blank(self, upsert, update, get_sched, _settings, _sync):
         message = email_actions.handle_inbound(self.context("提醒我"))["message"]
-        self.assertIn("| 2030-01-02 09:00 | 提交材料 | — |", message)
+        self.assertIn("账户：—", message)
+
+    @patch("email_actions.email_delivery._sync_calendar_ics")
+    @patch("email_actions.email_config.get_delivery_settings", return_value=SETTINGS)
+    @patch("email_actions.email_store.get_schedules", return_value=[
+        {"deadline": "", "title": "防范电信网络诈骗明白纸（四）", "id": "USTC:1:main"},
+    ])
+    @patch("email_actions.email_store.update_schedule")
+    @patch("email_actions.email_store.upsert_schedule")
+    def test_missing_deadline_renders_placeholder(self, upsert, update, get_sched, _settings, _sync):
+        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        self.assertIn("截止：无明确截止", message)
 
 
 if __name__ == "__main__":

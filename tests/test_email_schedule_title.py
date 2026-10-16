@@ -40,22 +40,67 @@ class ConciseLabelTests(unittest.TestCase):
 
 
 class ConciseScheduleTitleTests(unittest.TestCase):
-    def test_prefers_specific_action_description(self):
-        analysis = {"action_needed": {"description": "登录系统完成学期注册"}, "formatted_summary": LONG_SUMMARY}
-        self.assertEqual(email_delivery._concise_schedule_title(analysis, {"subject": "通知"}), "登录系统完成学期注册")
+    def test_title_prefers_recognizable_subject_over_meta_description(self):
+        # The model often fills description with commentary ABOUT the email
+        # ("邮件主题为《…》内容包括…"); the subject is what the user recognizes.
+        analysis = {
+            "action_needed": {"description": "邮件主题为《Call for Paper》内容包括投稿截止日期"},
+            "formatted_summary": LONG_SUMMARY,
+        }
+        self.assertEqual(
+            email_delivery._concise_schedule_title(analysis, {"subject": "Call for Paper: Remote Sensing"}),
+            "Call for Paper: Remote Sensing",
+        )
 
-    def test_falls_back_to_summary_then_subject_then_default(self):
-        self.assertTrue(email_delivery._concise_schedule_title({"formatted_summary": LONG_SUMMARY}, {"subject": "通知"}))
-        self.assertEqual(email_delivery._concise_schedule_title({}, {"subject": "会议提醒"}), "会议提醒")
+    def test_title_falls_back_to_task_then_summary_then_default(self):
+        # No subject -> use the actionable task; no task -> summary; none -> default.
+        self.assertEqual(
+            email_delivery._concise_schedule_title({"action_needed": {"next_step": "登录系统完成学期注册"}}, {}),
+            "登录系统完成学期注册",
+        )
+        self.assertEqual(
+            email_delivery._concise_schedule_title({"formatted_summary": "会议改期到周五"}, {}),
+            "会议改期到周五",
+        )
         self.assertEqual(email_delivery._concise_schedule_title({}, {}), "邮件待办")
 
 
+class ScheduleActionTextTests(unittest.TestCase):
+    def test_next_step_is_preferred_over_description(self):
+        analysis = {"action_needed": {"next_step": "立即查看原邮件并完成要求", "description": "该事项存在明确的临近处理要求"}}
+        self.assertEqual(email_delivery._schedule_action_text(analysis), "立即查看原邮件并完成要求")
+
+    def test_meta_summary_description_is_rejected(self):
+        analysis = {"action_needed": {"description": "该邮件是关于《Remote Sensing》期刊的一则特刊投稿提醒"}}
+        self.assertEqual(email_delivery._schedule_action_text(analysis), "")
+
+    def test_real_task_description_is_kept_when_no_next_step(self):
+        analysis = {"action_needed": {"description": "在微信卡片中引用回复并确认发送以验证回信路由"}}
+        self.assertEqual(
+            email_delivery._schedule_action_text(analysis),
+            "在微信卡片中引用回复并确认发送以验证回信路由",
+        )
+
+    def test_missing_action_is_empty(self):
+        self.assertEqual(email_delivery._schedule_action_text({}), "")
+
+
+class IsMetaSummaryTests(unittest.TestCase):
+    def test_meta_markers_detected(self):
+        for text in ("邮件主题为《X》", "该邮件是关于Y", "这符合学术报告的特点", "内容包括截止日期"):
+            self.assertTrue(email_delivery._is_meta_summary(text), text)
+
+    def test_actionable_text_not_flagged(self):
+        for text in ("立即查看原邮件并完成要求", "在微信卡片中引用回复并确认发送"):
+            self.assertFalse(email_delivery._is_meta_summary(text), text)
+
+
 class UpsertScheduleTitleTests(unittest.TestCase):
-    def test_offered_schedule_stores_concise_title_not_full_summary(self):
+    def test_offered_schedule_stores_subject_title_and_actionable_task(self):
         analysis = {
             "deadline": {"has_deadline": True, "datetime": "2030-01-02T09:00:00+08:00", "timezone": "Asia/Shanghai"},
             "reminder_schedule": [],
-            "action_needed": {"description": "完成学期注册"},
+            "action_needed": {"next_step": "完成学期注册", "description": "邮件主题为注册通知内容包括流程"},
             "formatted_summary": LONG_SUMMARY,
         }
         email = {"id": "USTC:999", "subject": "注册通知", "date_sent": "2030-01-01 08:00+08:00"}
@@ -65,8 +110,10 @@ class UpsertScheduleTitleTests(unittest.TestCase):
             out = email_delivery.upsert_schedule(email, analysis)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["status"], "offered")
-        self.assertEqual(out[0]["title"], "完成学期注册")
-        self.assertLessEqual(len(out[0]["title"]), 42)
+        # Title is the recognizable subject; the task is the imperative next_step,
+        # NOT the meta description ("邮件主题为…").
+        self.assertEqual(out[0]["title"], "注册通知")
+        self.assertEqual(out[0]["action_needed"], "完成学期注册")
         # The reminder message inherits the concise title, not the multi-bullet dump.
         self.assertTrue(all("这是一封关于" not in r.get("message", "") for r in out[0]["reminders"]))
 

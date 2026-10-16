@@ -811,21 +811,54 @@ def _concise_label(value, limit: int = 42) -> str:
     return head.rstrip() + "…"
 
 
-def _concise_schedule_title(analysis: dict, email: dict) -> str:
-    """Accurate one-line label for a schedule, summarized at creation time.
+_META_SUMMARY_MARKERS = (
+    "主题为", "是关于", "关于《", "内容包括", "内容明确", "正文内容",
+    "这符合", "的特点", "明确提到", "该事项存在", "该邮件", "这封邮件",
+    "本邮件", "邮件主题", "邮件称", "邮件要求", "邮件说明",
+)
 
-    Prefer the specific action, then the core summary sentence, then the subject,
-    so the active-schedule table and the reminder header read cleanly instead of
-    dumping the whole multi-bullet summary.
+
+def _is_meta_summary(text) -> bool:
+    """True when text describes the email itself rather than the user's task.
+
+    The model frequently fills ``action_needed.description`` with commentary
+    like "邮件主题为《…》内容包括…" or "该邮件是关于…的特点". That tells the
+    user nothing about what they must do, so it must not become the label.
+    """
+    t = str(text or "")
+    return any(marker in t for marker in _META_SUMMARY_MARKERS)
+
+
+def _schedule_action_text(analysis: dict) -> str:
+    """The imperative task for a schedule, or "" when none is actionable.
+
+    ``next_step`` is the model's "do this" phrasing; ``description`` is often
+    meta-commentary about the email, so it is kept only when it reads as an
+    actual instruction. Returning the full text (no truncation) is intentional —
+    the user asked to see the whole task, not a cut fragment.
     """
     action = analysis.get("action_needed") if isinstance(analysis.get("action_needed"), dict) else {}
+    for raw in (action.get("next_step"), action.get("description")):
+        text = " ".join(str(raw or "").split()).strip()
+        if text and not _is_meta_summary(text):
+            return text
+    return ""
+
+
+def _concise_schedule_title(analysis: dict, email: dict) -> str:
+    """Recognizable one-line label for a schedule.
+
+    Lead with the email subject — it is what the user recognizes in their inbox
+    — and only fall back to the actionable task or summary when no subject is
+    available. Kept essentially full (generous cap) so the active-schedule list
+    and reminder header read cleanly instead of truncated mid-phrase.
+    """
     for raw in (
-        action.get("description"),
-        action.get("next_step"),
-        analysis.get("formatted_summary"),
         (email or {}).get("subject"),
+        _schedule_action_text(analysis),
+        analysis.get("formatted_summary"),
     ):
-        label = _concise_label(raw)
+        label = _concise_label(raw, 160)
         if label:
             return label
     return "邮件待办"
@@ -862,7 +895,7 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
         "id": sched_id,
         "message_id": msg_id,
         "title": schedule_title,
-        "action_needed": action.get("description") or action.get("next_step") or "",
+        "action_needed": _schedule_action_text(analysis),
         "deadline": deadline_value,
         "timezone": timezone_name,
         "status": "active",
@@ -1075,9 +1108,9 @@ def collect_due_reminder_notifications(now=None):
             key = f"{reminder.get('time','')}|{reminder.get('kind','')}"
             if when is None or key in sent or current.astimezone(when.tzinfo) < when:
                 continue
-            title = _concise_label(item.get("title") or "邮件待办", 42)
+            title = _concise_label(item.get("title") or "邮件待办", 80)
             action = _concise_label(
-                item.get("action_needed") or reminder.get("message") or "请及时处理", 60
+                item.get("action_needed") or reminder.get("message") or "请及时处理", 120
             )
             deadline_text = deadline.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") if deadline else str(item.get("deadline") or "")
             alerts.append(

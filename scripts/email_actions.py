@@ -338,18 +338,24 @@ def _reminder_offsets_label(reminders) -> str:
     return "、".join(kinds)
 
 
-def _active_schedule_table(limit: int = 8) -> str:
-    """Concise markdown table of schedules still active/maintained."""
+def _active_schedule_list(limit: int = 8) -> str:
+    """Readable list of schedules still active, showing full title + task.
+
+    Rendered as bold-header + bullet blocks (the same shape as the reminder
+    card, which is proven to render in WeChat) rather than a cramped 3-column
+    table that forced a 36-char cut. Title and task are shown in full so the
+    user can tell at a glance what each schedule actually asks of them.
+    """
     try:
         rows = email_store.get_schedules("active", 200)
     except Exception:
         return ""
     if not rows:
         return ""
-    lines = ["| 截止 | 事项 | 账户 |", "| --- | --- | --- |"]
-    for row in rows[:limit]:
-        when = str(row.get("deadline") or "").replace("T", " ")[:16]
-        title = email_delivery._concise_label(row.get("title") or "邮件待办", 36).replace("|", "／")
+    total = len(rows)
+    blocks = [f"**当前活跃日程**（共 {total} 项）"]
+    for index, row in enumerate(rows[:limit], 1):
+        when = str(row.get("deadline") or "").replace("T", " ")[:16] or "无明确截止"
         account = str(row.get("account") or "").strip()
         if not account:
             # Legacy schedules predate the account column; recover it from the
@@ -357,12 +363,16 @@ def _active_schedule_table(limit: int = 8) -> str:
             scoped = str(row.get("message_id") or row.get("id") or "")
             if ":" in scoped:
                 account = scoped.split(":", 1)[0]
-        account = account.replace("|", "／").strip()[:12] or "—"
-        lines.append(f"| {when} | {title or '—'} | {account} |")
-    extra = len(rows) - limit
-    if extra > 0:
-        lines.append(f"| … | 另有 {extra} 项 | |")
-    return "**当前活跃日程**\n\n" + "\n".join(lines)
+        account = account.strip() or "—"
+        title = " ".join(str(row.get("title") or "邮件待办").split()) or "邮件待办"
+        task = " ".join(str(row.get("action_needed") or "").split())
+        block = f"**{index}. {title}**\n- 截止：{when} · 账户：{account}"
+        if task:
+            block += f"\n- 待办：{task}"
+        blocks.append(block)
+    if total - limit > 0:
+        blocks.append(f"…另有 {total - limit} 项未列出。")
+    return "\n\n".join(blocks)
 
 
 def _activate_reminders(action: dict, selected: list[int]) -> str:
@@ -399,13 +409,13 @@ def _activate_reminders(action: dict, selected: list[int]) -> str:
     details = []
     for index, item in enumerate(created):
         when = str(item.get("deadline") or "").replace("T", " ")[:16]
-        title = str(item.get("title") or "邮件待办").strip().replace("\n", " ")[:40]
+        title = " ".join(str(item.get("title") or "邮件待办").split())
         offsets = _reminder_offsets_label(item.get("reminders"))
         details.append(f"{index + 1}. `{when}` · {title}" + (f"（{offsets}）" if offsets else ""))
     reply = "✅ 已创建邮件提醒\n\n" + "\n".join(details)
-    table = _active_schedule_table()
-    if table:
-        reply += "\n\n" + table
+    schedule_list = _active_schedule_list()
+    if schedule_list:
+        reply += "\n\n" + schedule_list
     return reply + "\n\n如已完成可忽略后续提醒。"
 
 
