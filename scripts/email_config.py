@@ -4,6 +4,7 @@
 import copy
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -158,6 +159,66 @@ def _expand(value):
     return value
 
 
+def _himalaya_aliases(config_path):
+    """Parse a Himalaya TOML config for account aliases.
+
+    Returns (aliases, default_alias):
+      aliases        -- account names under [accounts.X], in file order.
+      default_alias  -- the alias flagged ``default = true``; if none is
+                        flagged but there is exactly one alias, that alias;
+                        otherwise "" (ambiguous -- caller must fail closed).
+
+    Uses tomllib when available and falls back to a line scan so it also works
+    on Python <3.11 or on TOML that tomllib rejects.
+    """
+    path = _expand(config_path) if isinstance(config_path, str) else config_path
+    if not path or not os.path.isfile(path):
+        return [], ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return [], ""
+
+    aliases, flagged = [], []
+    try:
+        import tomllib  # Python 3.11+
+
+        data = tomllib.loads(text)
+        accounts = data.get("accounts") if isinstance(data, dict) else None
+        if isinstance(accounts, dict):
+            aliases = [str(name) for name in accounts.keys()]
+            flagged = [
+                str(name)
+                for name, cfg in accounts.items()
+                if isinstance(cfg, dict) and cfg.get("default") is True
+            ]
+        else:
+            raise ValueError("no [accounts] table")
+    except Exception:
+        aliases, flagged = [], []
+        current = None
+        for line in text.splitlines():
+            m = re.match(r"^\s*\[accounts\.([A-Za-z0-9_.\-]+)\]\s*$", line)
+            if m:
+                current = m.group(1)
+                if current not in aliases:
+                    aliases.append(current)
+                continue
+            if re.match(r"^\s*\[", line):
+                current = None
+                continue
+            if current and re.match(r"^\s*default\s*=\s*true\b", line, re.IGNORECASE):
+                if current not in flagged:
+                    flagged.append(current)
+
+    if len(flagged) == 1:
+        return aliases, flagged[0]
+    if len(aliases) == 1:
+        return aliases, aliases[0]
+    return aliases, ""
+
+
 def _deep_merge(base, override):
     result = copy.deepcopy(base)
     for key, value in (override or {}).items():
@@ -181,6 +242,12 @@ def _normalize_account(account):
     for key in ("config", "himalaya_config"):
         if acct.get(key):
             acct[key] = _expand(acct[key])
+    if not str(acct.get("himalaya_account") or "").strip():
+        cfg = acct.get("himalaya_config") or acct.get("config")
+        if cfg:
+            _aliases, default_alias = _himalaya_aliases(cfg)
+            if default_alias:
+                acct["himalaya_account"] = default_alias
     acct.setdefault("display_name", acct.get("name") or acct.get("label") or acct.get("email", ""))
     return acct
 

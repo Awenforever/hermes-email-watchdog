@@ -155,13 +155,20 @@ def _record_output_action(email, account, analysis, delivery, notification_text)
                 "size_bytes": int(item.get("size_bytes") or os.path.getsize(path)),
                 "download_status": str(item.get("download_status") or "downloaded")[:40],
             })
+    _hconfig = str((account or {}).get("himalaya_config") or (account or {}).get("config") or "")
+    _halias = str((account or {}).get("himalaya_account") or "").strip()
+    if not _halias and _hconfig:
+        try:
+            _halias = email_config._himalaya_aliases(_hconfig)[1]
+        except Exception:
+            _halias = ""
     _LAST_OUTPUT_ACTIONS.append({
         "notification_text": str(notification_text),
         "message_id": str((email or {}).get("id") or (email or {}).get("msg_id") or ""),
         "account": str((email or {}).get("account") or (account or {}).get("id") or ""),
         "account_type": str((account or {}).get("type") or ""),
-        "himalaya_config": str((account or {}).get("himalaya_config") or (account or {}).get("config") or ""),
-        "himalaya_account": str((account or {}).get("himalaya_account") or ""),
+        "himalaya_config": _hconfig,
+        "himalaya_account": _halias,
         "from_addr": str((email or {}).get("from_addr") or (email or {}).get("from_email") or ""),
         "from_name": str((email or {}).get("from_name") or ""),
         "subject": str((email or {}).get("subject") or ""),
@@ -363,14 +370,39 @@ def _himalaya_config_context(config_path, platform=None):
     return cfg, None
 
 
-def _himalaya_cmd_variants(config_path, args):
+def _account_qualified_args(args, account):
+    """Insert ``-a <account>`` after the leading subcommand words.
+
+    ``-a/--account`` is a per-subcommand option in Himalaya (not global), so it
+    must follow the subcommand tokens. We place it immediately before the first
+    option token (``-*``), or append it when there are none.
+    """
+    args = list(args)
+    account = str(account or "").strip()
+    if not account:
+        return args
+    insert_at = len(args)
+    for idx, token in enumerate(args):
+        if isinstance(token, str) and token.startswith("-"):
+            insert_at = idx
+            break
+    return args[:insert_at] + ["-a", account] + args[insert_at:]
+
+
+def _himalaya_cmd_variants(config_path, args, account=None):
     cfg = os.path.expanduser(config_path or "")
     base = _himalaya_binary()
     variants = []
+    qualified = _account_qualified_args(args, account)
     if cfg:
         config_argument, _ = _himalaya_config_context(cfg)
+        if qualified != list(args):
+            variants.append([base, "-c", config_argument] + qualified)
+            variants.append([base, "--config", config_argument] + qualified)
         variants.append([base, "-c", config_argument] + list(args))
         variants.append([base, "--config", config_argument] + list(args))
+    if qualified != list(args):
+        variants.append([base] + qualified)
     variants.append([base] + list(args))
     unique = []
     seen = set()
@@ -415,10 +447,10 @@ def _himalaya_error_snippet(value, limit=500):
     return text
 
 
-def _run_himalaya_json(config_path, args, timeout=30):
+def _run_himalaya_json(config_path, args, timeout=30, account=None):
     """Run Himalaya and return parsed JSON. Command/auth failures are explicit."""
     attempts = []
-    for cmd in _himalaya_cmd_variants(config_path, args):
+    for cmd in _himalaya_cmd_variants(config_path, args, account=account):
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
@@ -459,8 +491,8 @@ def _run_himalaya_json(config_path, args, timeout=30):
     raise HimalayaCommandError(args, attempts)
 
 
-def list_himalaya(config_path):
-    data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30)
+def list_himalaya(config_path, account=None):
+    data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30, account=account)
     return _unwrap_himalaya_list(data)
 
 def _html_to_text(value):
@@ -585,12 +617,12 @@ def _parse_exported_message(path):
     }
 
 
-def _export_himalaya_message(config_path, msg_id):
+def _export_himalaya_message(config_path, msg_id, account=None):
     attempts = []
     with tempfile.TemporaryDirectory(prefix="hermes-email-read-") as tmp:
         destination = Path(tmp) / "message.eml"
         args = ["message", "export", str(msg_id), "--full", "--destination", str(destination)]
-        for cmd in _himalaya_cmd_variants(config_path, args):
+        for cmd in _himalaya_cmd_variants(config_path, args, account=account):
             try:
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=30,
@@ -634,15 +666,16 @@ def _extract_message_body(msg):
 
 
 
-def read_himalaya(config_path, msg_id):
+def read_himalaya(config_path, msg_id, account=None):
     try:
-        return _export_himalaya_message(config_path, msg_id)
+        return _export_himalaya_message(config_path, msg_id, account=account)
     except Exception:
         # Preview is essential: a watchdog must never mutate the mailbox's Seen flag.
         data = _run_himalaya_json(
             config_path,
             ["message", "read", str(msg_id), "--preview", "--output", "json"],
             timeout=30,
+            account=account,
         )
     if data is None:
         return None
@@ -1146,7 +1179,14 @@ def check_account(acct, pushed_count=None):
     acct_name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
 
     if acct["type"] == "himalaya":
-        envelopes = list_himalaya(acct.get("himalaya_config") or acct.get("config"))
+        hconfig = acct.get("himalaya_config") or acct.get("config")
+        acct_alias = str(acct.get("himalaya_account") or "").strip()
+        if not acct_alias and hconfig:
+            try:
+                acct_alias = email_config._himalaya_aliases(hconfig)[1]
+            except Exception:
+                acct_alias = ""
+        envelopes = list_himalaya(hconfig, account=acct_alias)
     else:
         envelopes = list_agently()
 
@@ -1165,7 +1205,7 @@ def check_account(acct, pushed_count=None):
             continue
 
         if acct["type"] == "himalaya":
-            msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id)
+            msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
         else:
             msg = read_agently(msg_id)
 

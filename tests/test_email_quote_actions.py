@@ -176,7 +176,8 @@ class EmailQuoteActionTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0][-1], "42")
         self.assertNotIn("原样正文", run.call_args_list[0].args[0])
         self.assertIn("send", run.call_args_list[1].args[0])
-        self.assertEqual(run.call_args_list[1].args[0][-2:], ["template", "send"])
+        # Item (a): send must bind the receiving mailbox's alias, not the config default.
+        self.assertEqual(run.call_args_list[1].args[0][-4:], ["template", "send", "-a", "test"])
         sent_template = run.call_args_list[1].kwargs["input"]
         self.assertEqual(sent_template.split("\n\n", 1)[1], "原样正文\n")
         self.assertNotIn("quoted original", sent_template)
@@ -198,7 +199,7 @@ class EmailQuoteActionTests(unittest.TestCase):
             "mail": {"account_type": "himalaya", "himalaya_config": str(config), "message_id": "42", "himalaya_account": "test"},
         })
         sent = run.call_args_list[1]
-        self.assertEqual(sent.args[0][-2:], ["template", "send"])
+        self.assertEqual(sent.args[0][-4:], ["template", "send", "-a", "test"])
         self.assertIn("<#multipart type=alternative>", sent.kwargs["input"])
         self.assertIn("border-top:1px solid #9ca3af;width:140px", sent.kwargs["input"])
         self.assertNotIn("这里是验收正文。", " ".join(sent.args[0]))
@@ -277,7 +278,7 @@ class EmailQuoteActionTests(unittest.TestCase):
         email_actions._send_himalaya_forward({"kind": "forward", "recipient": "friend@example.com", "body": "附言\n\n签名", "mail": {"account_type": "himalaya", "himalaya_config": str(config), "message_id": "42", "himalaya_account": "test"}})
         self.assertIn("forward", run.call_args_list[0].args[0])
         self.assertNotIn("附言", run.call_args_list[0].args[0])
-        self.assertEqual(run.call_args_list[1].args[0][-2:], ["template", "send"])
+        self.assertEqual(run.call_args_list[1].args[0][-4:], ["template", "send", "-a", "test"])
         sent_template = run.call_args_list[1].kwargs["input"]
         self.assertIn("附言\n\n签名\n\n-------- Forwarded Message --------", sent_template)
         self.assertIn("<#!part type=application/pdf", sent_template)

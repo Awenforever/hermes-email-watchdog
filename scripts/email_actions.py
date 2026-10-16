@@ -401,7 +401,15 @@ def _himalaya_context(action: dict) -> tuple[list[str], str | None, str]:
         config_arg, cwd = ntpath.basename(expanded), ntpath.dirname(expanded) or "."
     else:
         config_arg, cwd = expanded, None
-    return [_himalaya_binary(), "-c", config_arg], cwd, str(action.get("himalaya_account") or "").strip()
+    aliases, default_alias = email_config._himalaya_aliases(expanded)
+    account = str(action.get("himalaya_account") or "").strip() or default_alias
+    if not account:
+        if len(aliases) > 1:
+            raise RuntimeError("Himalaya 配置存在多个账号且未标记默认账号，无法确定发件身份")
+        raise RuntimeError("无法确定 Himalaya 账号别名，拒绝发送")
+    if aliases and account not in aliases:
+        raise RuntimeError(f"Himalaya 账号别名 '{account}' 不存在于其配置中，拒绝发送")
+    return [_himalaya_binary(), "-c", config_arg], cwd, account
 
 
 def _transport_result(sent) -> dict:
@@ -443,7 +451,8 @@ def _send_himalaya_reply(draft: dict) -> dict:
     # Its non-interactive contract is to read the template from stdin.  This
     # also keeps user-authored mail bodies out of process listings.
     sent = subprocess.run(
-        common + ["template", "send"], input=final_template,
+        common + ["template", "send"] + (["-a", account] if account else []),
+        input=final_template,
         capture_output=True, text=True, timeout=60, cwd=cwd,
     )
     if sent.returncode != 0:
@@ -473,7 +482,8 @@ def _send_himalaya_forward(draft: dict) -> dict:
         rendered_body = draft.get("body", "")
     final_template = _replace_forward_template_body(generated.stdout, rendered_body, recipient)
     sent = subprocess.run(
-        common + ["template", "send"], input=final_template,
+        common + ["template", "send"] + (["-a", account] if account else []),
+        input=final_template,
         capture_output=True, text=True, timeout=60, cwd=cwd,
     )
     if sent.returncode != 0:
