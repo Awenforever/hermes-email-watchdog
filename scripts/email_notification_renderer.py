@@ -124,8 +124,14 @@ def _body_source(email: Mapping[str, Any]) -> str:
     return ""
 
 
-def clean_body(value: Any) -> str:
-    """Deterministically clean real message text without model rewriting."""
+def clean_body(value: Any, join_lines: bool = True) -> str:
+    """Deterministically clean real message text without model rewriting.
+
+    ``join_lines=True`` (default) reflows hard-wrapped short lines into
+    paragraphs for compact notification cards. ``join_lines=False`` preserves the
+    author's original line breaks — used by ``@原文`` so the "original" view keeps
+    its real structure instead of collapsing into walls.
+    """
     text = _text(value)
     if not text:
         return ""
@@ -175,6 +181,8 @@ def clean_body(value: Any) -> str:
         lines.append(line)
     while lines and not lines[-1]:
         lines.pop()
+    if not join_lines:
+        return "\n".join(lines).strip()
     joined: List[str] = []
     for line in lines:
         if (

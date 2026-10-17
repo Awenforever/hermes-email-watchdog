@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from email.utils import parsedate_to_datetime
 
-DEFAULT_MAX_CHARS = 12000
+DEFAULT_MAX_CHARS = 16000
 MIN_MAX_CHARS = 2000
 MAX_MAX_CHARS = 20000
 # Bubbles are capped at 2000 chars by the transport, which also appends a
@@ -32,6 +32,30 @@ def _max_chars() -> int:
     return max(MIN_MAX_CHARS, min(MAX_MAX_CHARS, value))
 
 
+def _choose_cut(window: str) -> int:
+    """Break index within ``window`` (len <= MAX_BLOCK_CHARS) that never splits a
+    space-delimited token/URL unless a single unbroken run exceeds the block cap.
+
+    ``_SENTENCE_ENDS`` already includes the space and newline, so a late break
+    keeps the block well-filled. When the only break is early we still take it —
+    leaving the long token whole in the remainder — instead of hard-cutting
+    mid-token, which used to break links inside space-less runs (inline base64,
+    long tracking URLs, punctuation-free CJK walls).
+    """
+    best = -1
+    for marker in _SENTENCE_ENDS:
+        candidate = window.rfind(marker)
+        if candidate > best:
+            best = candidate
+    if best >= MAX_BLOCK_CHARS // 2:
+        return best
+    if best > 0:
+        return best
+    # A single unbroken run longer than MAX_BLOCK_CHARS: no safe boundary exists,
+    # so a hard cut is unavoidable.
+    return MAX_BLOCK_CHARS - 1
+
+
 def _split_oversized(paragraph: str) -> list[str]:
     if len(paragraph) <= MAX_BLOCK_CHARS:
         return [paragraph]
@@ -39,13 +63,7 @@ def _split_oversized(paragraph: str) -> list[str]:
     remaining = paragraph
     while len(remaining) > MAX_BLOCK_CHARS:
         window = remaining[:MAX_BLOCK_CHARS]
-        cut = -1
-        for marker in _SENTENCE_ENDS:
-            candidate = window.rfind(marker)
-            if candidate > cut:
-                cut = candidate
-        if cut < MAX_BLOCK_CHARS // 2:
-            cut = MAX_BLOCK_CHARS - 1
+        cut = _choose_cut(window)
         pieces.append(remaining[: cut + 1].rstrip())
         remaining = remaining[cut + 1 :].lstrip()
     if remaining:
@@ -54,10 +72,15 @@ def _split_oversized(paragraph: str) -> list[str]:
 
 
 def prepare_blocks(text: str) -> list[str]:
-    """Clean the raw body and split it into transport-safe paragraph blocks."""
+    """Clean the raw body and split it into transport-safe paragraph blocks.
+
+    Uses ``clean_body(..., join_lines=False)``: ``@原文`` means the *original*
+    text, so the author's line breaks are preserved instead of being reflowed
+    into walls the way the notification-card cleaner does.
+    """
     from email_notification_renderer import clean_body
 
-    cleaned = clean_body(text)
+    cleaned = clean_body(text, join_lines=False)
     if not cleaned:
         return []
     paragraphs = [p.strip() for p in cleaned.split("\n\n")]
@@ -79,17 +102,31 @@ def _format_date(raw: object) -> str:
         return text[:40]
 
 
+def _cap(value: object, limit: int) -> str:
+    """Whitespace-collapse and length-cap a header field.
+
+    The header is emitted as a single block, and the transport HARD-TRUNCATES any
+    block over 2000 chars — so an uncapped subject/sender from an automated
+    mailer could silently drop the whole header. Capping each field keeps it far
+    under the limit.
+    """
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 def render_original(action: dict, fetched: dict, max_chars: int | None = None) -> str:
     """Render header + full body blocks as one WeChat reply string."""
     budget = int(max_chars or _max_chars())
     blocks = prepare_blocks(str((fetched or {}).get("text") or ""))
 
-    subject = " ".join(str((action or {}).get("subject") or "").split()) or "（无主题）"
-    from_name = " ".join(str((action or {}).get("from_name") or "").split())
-    from_addr = " ".join(str((action or {}).get("from_addr") or "").split())
+    subject = _cap((action or {}).get("subject"), 160) or "（无主题）"
+    from_name = _cap((action or {}).get("from_name"), 80)
+    from_addr = _cap((action or {}).get("from_addr"), 120)
     sender = f"{from_name} <{from_addr}>" if from_name and from_addr else (from_addr or from_name)
     date = _format_date((fetched or {}).get("date_sent"))
-    account = " ".join(str((action or {}).get("account") or "").split())
+    account = _cap((action or {}).get("account"), 60)
 
     header = ["### 📄 邮件原文", f"**主题** {subject}"]
     if sender:
