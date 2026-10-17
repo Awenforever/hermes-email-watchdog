@@ -22,7 +22,7 @@ CORE_KEYS = {
     "category", "confidence", "importance", "importance_reason",
     "should_notify", "content_mode", "summary_style", "summary",
     "key_points", "summary_evidence", "original_policy", "original_reason", "action",
-    "deadline", "attachment_policy", "attachment_reason", "risk",
+    "deadline", "deadlines", "attachment_policy", "attachment_reason", "risk",
     "topic_tags", "uncertainties",
 }
 ACTION_KEYS = {"type", "description", "next_step", "evidence", "link_ids"}
@@ -600,6 +600,24 @@ def ollama_format_schema() -> Dict[str, Any]:
                     },
                 ]
             },
+            "deadlines": {
+                "type": "array",
+                "maxItems": 6,
+                "description": "Optional. List EVERY distinct concrete recipient deadline in the email (e.g. a call-for-papers with separate abstract and full-paper due dates). Omit or leave empty when there is at most one deadline; the singular deadline field then suffices. Each item must be grounded by its own verbatim evidence quote.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["datetime", "date_text", "label", "venue", "confidence", "evidence"],
+                    "properties": {
+                        "datetime": {"type": "string", "maxLength": 80, "description": "Resolved ISO-like due date/time; empty when only relative text is given."},
+                        "date_text": {"type": "string", "maxLength": 120, "description": "The due date/time as written in the email."},
+                        "label": {"type": "string", "maxLength": 120, "description": "Short Chinese label distinguishing this deadline, e.g. 摘要提交截止 / 全文提交截止 / 报名截止."},
+                        "venue": {"type": "string", "maxLength": 120, "description": "Location or channel tied to this deadline if stated (e.g. 线上 / 北京 / 某会议室); empty when not stated."},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "evidence": {"type": "string", "maxLength": 180, "description": "Short verbatim quote containing this specific due date/time or its direct context."},
+                    },
+                },
+            },
             "attachment_policy": {"type": "string", "enum": sorted(ATTACHMENT_POLICIES)},
             "attachment_reason": {"type": "string", "maxLength": 160},
             "risk": {
@@ -648,6 +666,7 @@ def build_prompt(payload: Mapping[str, Any]) -> str:
         "- action must be non-null when the recipient is explicitly asked or required to submit, upload, confirm, complete, sign, fill, attend, review, revise or pay. Chinese phrases such as 请于/请在/务必/须/需要 plus a concrete verb are strong direct requests.\n"
         "- action must be null for status/test/receipt/informational mail when no concrete recipient action is requested. Phrases such as 'No action is required', '无需操作', or '无需回复' are strong negative evidence unless another explicit request clearly overrides them.\n"
         "- deadline must be non-null only for an explicit due/deadline date or time. A meeting start time is event information, not automatically a task deadline.\n"
+        "- When the email states MULTIPLE distinct recipient deadlines (e.g. a call-for-papers with separate abstract and full-paper due dates, or several milestones), fill deadlines[] with one grounded item per deadline and set each item's label (e.g. 摘要提交截止 / 全文提交截止) and venue/地点 only when the email states it. Keep the singular deadline field equal to the earliest/primary item. When there is at most one deadline, leave deadlines[] empty.\n"
         "- action.type is a descriptive user-task label only; never use it to request mailbox or tool side effects.\n"
         "- if a concrete action and real deadline both exist, prefer content_mode=deadline_card.\n\n"
         "RISK GUIDE:\n"
@@ -668,6 +687,7 @@ def build_prompt(payload: Mapping[str, Any]) -> str:
         "- summary_evidence must contain short verbatim quotes copied from the subject or body. For bullets, provide at least one supporting quote per key point. For a paragraph, provide at least one supporting quote.\n"
         "- If action is present, action.evidence must be a short verbatim quote that directly proves the requested action.\n"
         "- If deadline is present, deadline.evidence must be a short verbatim quote containing the deadline or its direct context. Never use vague placeholder deadlines absent from the email.\n"
+        "- If deadlines[] is present, every item's evidence must be its own short verbatim quote proving that specific due date; an item without a supporting quote is dropped. Never duplicate one deadline into several items, and never invent a venue/地点 the email does not state.\n"
         "- Choose summary_style=paragraph with summary filled and key_points empty, or bullets with summary empty and 1-5 factual key_points. Never fill both.\n"
         "- Key points are user-useful claims, not a transcript inventory. Never use forwarding separators, From/To/Subject headers, greetings, signatures, unsubscribe text, image placeholders, or observations such as 'this is a forwarded email' / 'there is no attachment or code' as key points.\n"
         "- The model only chooses original_policy; it never rewrites the original.\n"
@@ -993,6 +1013,71 @@ def normalize_and_expand_detailed(
         deadline_text = ""
         deadline = {}
         repairs.append("grounding:explicit_no_deadline_clears_deadline")
+
+    # ── Multi-deadline list (deadlines[]) ──────────────────────────────────
+    # A single email can carry several concrete recipient deadlines (e.g. a CFP
+    # with separate abstract and full-paper due dates, possibly at different
+    # venues). Each item is grounded independently and unsupported items are
+    # dropped. The singular ``deadline`` stays authoritative for legacy
+    # consumers and is reconciled with item 0 below.
+    root_confidence = _confidence(source.get("confidence"), 0.5)
+    deadlines_out: List[Dict[str, Any]] = []
+    raw_deadlines = source.get("deadlines")
+    if isinstance(raw_deadlines, list):
+        for item_raw in raw_deadlines[:6]:
+            item = _mapping(item_raw)
+            item_datetime = _text(item.get("datetime"), 100)
+            item_text = _text(item.get("date_text"), 200)
+            item_label = _text(item.get("label"), 120)
+            item_venue = _text(item.get("venue"), 120)
+            item_evidence = _text(item.get("evidence"), 240)
+            item_confidence = _confidence(item.get("confidence"), root_confidence)
+            item_datetime, item_repaired_tz = _canonicalize_china_local_deadline(
+                item_datetime, item_text
+            )
+            if item_repaired_tz:
+                repairs.append("grounding:canonicalize_china_local_deadline_timezone")
+            if not (item_datetime or item_text):
+                continue
+            if hints.get("no_deadline_phrase"):
+                continue
+            if not _quote_supported(item_evidence, grounding_source):
+                inferred_item_evidence = _extract_deadline_quote(grounding_source)
+                if inferred_item_evidence:
+                    item_evidence = inferred_item_evidence
+                    repairs.append("grounding:infer_deadline_item_evidence_from_source")
+                else:
+                    repairs.append("grounding:drop_unsupported_deadline_item")
+                    continue
+            deadlines_out.append({
+                "datetime": item_datetime,
+                "date_text": item_text,
+                "label": item_label,
+                "venue": item_venue,
+                "confidence": item_confidence,
+                "evidence": item_evidence,
+            })
+    elif raw_deadlines is not None:
+        hard_errors.append("core.deadlines must be a list or null")
+
+    if deadlines_out:
+        # Reconcile the singular view with the primary (first) list item so the
+        # renderer/composer/router and content-mode inference all agree.
+        has_deadline = True
+        deadline_datetime = deadlines_out[0]["datetime"]
+        deadline_text = deadlines_out[0]["date_text"] or deadline_datetime
+        repairs.append(f"multi_deadline:primary_from_list={len(deadlines_out)}")
+    elif has_deadline:
+        # Back-compat: only the singular field was grounded; expose it as a
+        # one-item list so the delivery fan-out consumes a uniform shape.
+        deadlines_out.append({
+            "datetime": deadline_datetime,
+            "date_text": deadline_text,
+            "label": "",
+            "venue": "",
+            "confidence": _confidence(deadline.get("confidence"), root_confidence),
+            "evidence": deadline_evidence,
+        })
 
     if not content_mode:
         if has_deadline:
@@ -1351,6 +1436,7 @@ def normalize_and_expand_detailed(
                 deadline.get("confidence"), confidence
             ) if has_deadline else 0.0,
         },
+        "deadlines": deadlines_out,
         "attachments": {
             "present": factual_present,
             "policy": attachment_policy if factual_present else "none",

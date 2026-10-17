@@ -178,5 +178,23 @@ class OriginalCommandDispatchTests(unittest.TestCase):
         self.assertIn("无法还原对应邮件", result["message"])
 
 
+class FormatDateTests(unittest.TestCase):
+    def test_utc_timestamp_is_normalized_to_beijing_and_labeled(self):
+        # Gmail/himalaya report UTC; a raw 04:36 must not read as a 4am send.
+        out = email_original._format_date("Mon, 14 Oct 2026 04:36:00 +0000")
+        self.assertEqual("2026-10-14 12:36（北京时间）", out)
+
+    def test_offset_timestamp_converts_to_beijing_and_is_labeled(self):
+        out = email_original._format_date("Wed, 15 Oct 2026 09:30:00 +0800")
+        self.assertEqual("2026-10-15 09:30（北京时间）", out)
+
+    def test_naive_timestamp_is_left_unlabeled(self):
+        self.assertEqual("2026-10-15 09:30", email_original._format_date("2026-10-15T09:30:00"))
+
+    def test_unparseable_value_is_returned_trimmed(self):
+        self.assertEqual("不是日期", email_original._format_date("不是日期"))
+        self.assertEqual("", email_original._format_date(""))
+
+
 if __name__ == "__main__":
     unittest.main()

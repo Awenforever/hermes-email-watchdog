@@ -65,13 +65,15 @@ def append_interaction_guidance(text: str, schedule: list) -> str:
     lines = []
     candidates = [item for item in (schedule or []) if isinstance(item, dict) and item.get("deadline")]
     if len(candidates) == 1:
-        lines.append('> 如需添加提醒，请引用本消息回复 `提醒我`。')
+        lines.append('> 如需添加提醒，请引用本消息回复 `@提醒`。')
     elif len(candidates) > 1:
         lines.append("> **可选截止时间**")
         for index, item in enumerate(candidates, start=1):
-            label = str(item.get("title") or "邮件待办").strip().replace("\n", " ")[:100]
-            lines.append(f"> {index}. `{item.get('deadline')}` · {label}")
-        lines.append('> 如需添加提醒，请引用本消息回复编号（可多选，如 `1,3`）。')
+            label = str(item.get("label") or item.get("title") or "邮件待办").strip().replace("\n", " ")[:100]
+            venue = str(item.get("venue") or "").strip().replace("\n", " ")[:60]
+            suffix = f"（{venue}）" if venue and venue not in label else ""
+            lines.append(f"> {index}. `{item.get('deadline')}` · {label}{suffix}")
+        lines.append('> 如需添加提醒，请引用本消息回复 `@提醒 1,3`（可多选，也可直接回复编号）。')
     lines.append('> 引用本消息操作：`@回复` 换行写正文 ｜ `@转发 收件邮箱` 可附言 ｜ `@原文` 看全文')
     return (str(text or "").rstrip() + "\n\n" + "\n".join(lines)).strip()
 
@@ -455,6 +457,26 @@ def format_notification(email: dict, analysis: dict, attachments: list, schedule
     return text
 
 
+def _transport_uid(email: dict) -> str:
+    """Raw per-mailbox Himalaya UID used to address a message on the wire.
+
+    Storage keys are account-scoped (``account:uid``) for cross-account
+    uniqueness, but Himalaya addresses a message by its raw UID within the
+    ``-c <config>``/``-a <alias>`` account context. Passing the scoped key makes
+    every transport call fail (``invalid digit found in string``). Prefer the
+    explicit ``uid``; otherwise strip a leading ``account:`` namespace. A bare
+    legacy id (no colon) is already raw and passes through unchanged.
+    """
+    raw = str((email or {}).get("uid") or "").strip()
+    if raw:
+        return raw
+    for key in ("msg_id", "id"):
+        value = str((email or {}).get(key) or "").strip()
+        if value:
+            return value.split(":", 1)[1] if ":" in value else value
+    return ""
+
+
 def download_attachments(email: dict, analysis: dict, account: dict) -> list:
     """Download allowed attachments and persist paths in email_store.attachments."""
     attachments = email.get("attachments") or []
@@ -525,12 +547,12 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
     if account.get("type") == "himalaya":
         cfg = account.get("himalaya_config") or account.get("config")
         if cfg:
-            saved_paths = _download_himalaya(cfg, email.get("msg_id") or email.get("id"), save_dir)
+            saved_paths = _download_himalaya_with_retry(cfg, _transport_uid(email), save_dir)
     elif account.get("type") == "agently":
         for att in attachments:
             aid = att.get("attachment_id") or att.get("id")
             if aid:
-                path = _download_agently(email.get("msg_id") or email.get("id"), aid, save_dir)
+                path = _download_agently(_transport_uid(email), aid, save_dir)
                 if path:
                     saved_paths.append(path)
 
@@ -867,44 +889,78 @@ def _concise_schedule_title(analysis: dict, email: dict) -> str:
 
 
 def upsert_schedule(email: dict, analysis: dict) -> list:
-    """Build inert reminder candidates. Activation requires an authorized quote action."""
+    """Build inert reminder candidates. Activation requires an authorized quote action.
+
+    Fans out over ``analysis['deadlines']`` so one email can offer several
+    distinct schedules (e.g. a CFP with separate abstract and full-paper due
+    dates). Falls back to the singular ``analysis['deadline']`` — emitting one
+    ``:main`` candidate exactly as before — when no list is present, so cached
+    decisions and the heuristic fast lane keep working unchanged.
+    """
     if not email_store:
         return []
     settings = email_config.get_delivery_settings() if email_config else {}
     if settings.get("create_reminders", True) is False:
         return []
 
-    deadline = analysis.get("deadline") or {}
-    reminders = analysis.get("reminder_schedule") or []
-    if not (deadline.get("has_deadline") or deadline.get("datetime") or reminders):
+    msg_id = email.get("id") or email.get("msg_id")
+    base_title = _concise_schedule_title(analysis, email)
+    action_text = _schedule_action_text(analysis)
+    default_reminders = analysis.get("reminder_schedule") or []
+    message_date = email.get("date_sent") or email.get("date")
+    singular = analysis.get("deadline") if isinstance(analysis.get("deadline"), dict) else {}
+
+    deadline_items = [d for d in (analysis.get("deadlines") or []) if isinstance(d, dict)]
+    if not deadline_items:
+        if singular.get("has_deadline") or singular.get("datetime") or singular.get("date_text"):
+            deadline_items = [{
+                "datetime": singular.get("datetime") or "",
+                "date_text": singular.get("date_text") or "",
+                "label": "",
+                "venue": "",
+                "timezone": singular.get("timezone") or "",
+            }]
+    if not deadline_items:
         return []
 
-    msg_id = email.get("id") or email.get("msg_id")
-    sched_id = f"{msg_id}:main"
-    action = analysis.get("action_needed") or {}
-    timezone_name = _effective_timezone_name(deadline.get("timezone") or settings.get("timezone", "auto"))
-    deadline_value = deadline.get("datetime") or deadline.get("date_text") or ""
-    deadline_value = _resolve_deadline_value(deadline_value, email.get("date_sent") or email.get("date"), timezone_name)
-    resolved_deadline = _parse_datetime(deadline_value, timezone_name)
-    if resolved_deadline is None or resolved_deadline <= datetime.now(resolved_deadline.tzinfo):
-        # Never create active calendar/reminder state for an ambiguous or
-        # already expired historical deadline.
-        return []
-    schedule_title = _concise_schedule_title(analysis, email)
-    if not reminders and deadline_value:
-        reminders = _default_reminders(deadline_value, schedule_title, settings)
-    item = {
-        "id": sched_id,
-        "message_id": msg_id,
-        "title": schedule_title,
-        "action_needed": _schedule_action_text(analysis),
-        "deadline": deadline_value,
-        "timezone": timezone_name,
-        "status": "active",
-        "reminder_json": json.dumps(reminders, ensure_ascii=False),
-    }
-    item["status"] = "offered"
-    return [{**item, "reminders": reminders}]
+    multi = len(deadline_items) > 1
+    items = []
+    for index, entry in enumerate(deadline_items, start=1):
+        timezone_name = _effective_timezone_name(
+            entry.get("timezone") or singular.get("timezone") or settings.get("timezone", "auto")
+        )
+        deadline_value = entry.get("datetime") or entry.get("date_text") or ""
+        deadline_value = _resolve_deadline_value(deadline_value, message_date, timezone_name)
+        resolved_deadline = _parse_datetime(deadline_value, timezone_name)
+        if resolved_deadline is None or resolved_deadline <= datetime.now(resolved_deadline.tzinfo):
+            # Never create active calendar/reminder state for an ambiguous or
+            # already expired historical deadline.
+            continue
+        label = " ".join(str(entry.get("label") or "").split())[:120]
+        venue = " ".join(str(entry.get("venue") or "").split())[:120]
+        title = base_title
+        if label and label not in title:
+            title = f"{base_title}｜{label}"
+        if venue:
+            title = f"{title}（{venue}）"
+        reminders = list(default_reminders)
+        if not reminders and deadline_value:
+            reminders = _default_reminders(deadline_value, title, settings)
+        sched_id = f"{msg_id}:{index}" if multi else f"{msg_id}:main"
+        item = {
+            "id": sched_id,
+            "message_id": msg_id,
+            "title": title,
+            "label": label,
+            "venue": venue,
+            "action_needed": action_text,
+            "deadline": deadline_value,
+            "timezone": timezone_name,
+            "status": "offered",
+            "reminder_json": json.dumps(reminders, ensure_ascii=False),
+        }
+        items.append({**item, "reminders": reminders})
+    return items
 
 
 def install_reminder_cron(schedule_items: list) -> list:
@@ -1197,6 +1253,56 @@ def _himalaya_cwd(config_path):
     return _himalaya_config_context(config_path)[1]
 
 
+# A single himalaya invocation does a fresh IMAP login, so one poll can hit a
+# transient timeout or provider hiccup (seen live as Gmail rc=124). Zero retries
+# meant a single blip permanently marked the attachment download_failed and it
+# was never re-fetched. Bound the retries so a genuine outage still terminates.
+_ATTACHMENT_DOWNLOAD_ATTEMPTS = 3
+_ATTACHMENT_DOWNLOAD_BACKOFF_SECONDS = 2.0
+
+
+def _download_himalaya_with_retry(config_path, msg_id, save_dir):
+    """Bounded-retry wrapper around :func:`_download_himalaya`.
+
+    Retries the whole download a bounded number of times with a short linear
+    backoff, stopping as soon as any file lands. A missing himalaya binary
+    (``FileNotFoundError``) is not transient, so bail immediately without burning
+    retries. Every attempt is logged so a persistent failure is observable rather
+    than silently swallowed.
+    """
+    import logging
+    import time
+
+    log = logging.getLogger(__name__)
+    for attempt in range(1, _ATTACHMENT_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            saved = _download_himalaya(config_path, msg_id, save_dir)
+        except FileNotFoundError:
+            log.warning(
+                "Hermes Email Watchdog attachment download: himalaya binary unavailable (uid=%s)", msg_id,
+            )
+            return []
+        if saved:
+            if attempt > 1:
+                log.warning(
+                    "Hermes Email Watchdog attachment download recovered on attempt %d/%d (uid=%s)",
+                    attempt, _ATTACHMENT_DOWNLOAD_ATTEMPTS, msg_id,
+                )
+            return saved
+        if attempt < _ATTACHMENT_DOWNLOAD_ATTEMPTS:
+            backoff = _ATTACHMENT_DOWNLOAD_BACKOFF_SECONDS * attempt
+            log.warning(
+                "Hermes Email Watchdog attachment download attempt %d/%d returned nothing (uid=%s); retrying in %.1fs",
+                attempt, _ATTACHMENT_DOWNLOAD_ATTEMPTS, msg_id, backoff,
+            )
+            time.sleep(backoff)
+    log.warning(
+        "Hermes Email Watchdog attachment download failed after %d attempts (uid=%s)",
+        _ATTACHMENT_DOWNLOAD_ATTEMPTS, msg_id,
+    )
+    return []
+
+
 def _download_himalaya(config_path, msg_id, save_dir):
     os.makedirs(save_dir, exist_ok=True)
     # Himalaya v1.2.0's attachment download command can corrupt arbitrary
@@ -1237,7 +1343,11 @@ def _download_himalaya_from_raw_message(config_path, msg_id, save_dir):
                     cmd, capture_output=True, text=True, timeout=60,
                     cwd=_himalaya_cwd(config_path), stdin=subprocess.DEVNULL,
                 )
-            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            except FileNotFoundError:
+                # himalaya binary is missing — not a transient blip. Propagate so
+                # the retry wrapper bails immediately instead of burning retries.
+                raise
+            except subprocess.TimeoutExpired as exc:
                 attempts.append(exc)
                 continue
             if result.returncode == 0 and message_path.is_file():

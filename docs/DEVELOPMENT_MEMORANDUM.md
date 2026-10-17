@@ -12,7 +12,7 @@ history. It is intentionally separate from the product README.
 - Email Watchdog consumes that optional event but channel plugins must not
   import, require, or special-case Email Watchdog.
 - An email deadline is evidence, not authorization. Store an inert candidate;
-  create active reminders only after exact user intent (`提醒我` or selected
+  create active reminders only after exact user intent (`@提醒` or selected
   numbers). Date-only deadlines mean 09:00 in the Hermes profile timezone.
 - A reply is a two-phase operation. Preserve all text after the first `回复`
   newline byte-for-byte (apart from newline normalization), append only the

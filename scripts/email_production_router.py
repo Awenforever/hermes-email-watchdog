@@ -189,6 +189,18 @@ def decision_to_legacy_analysis(decision: Mapping[str, Any], original: Mapping[s
     notification = decision.get("notification") if isinstance(decision.get("notification"), Mapping) else {}
     action = decision.get("action") if isinstance(decision.get("action"), Mapping) else {}
     deadline = decision.get("deadline") if isinstance(decision.get("deadline"), Mapping) else {}
+    deadlines_raw = decision.get("deadlines") if isinstance(decision.get("deadlines"), list) else []
+    deadlines_list = [
+        {
+            "datetime": _text(item.get("datetime"), 120),
+            "date_text": _text(item.get("date_text"), 200),
+            "label": _text(item.get("label"), 120),
+            "venue": _text(item.get("venue"), 120),
+            "confidence": item.get("confidence") or 0.0,
+        }
+        for item in deadlines_raw
+        if isinstance(item, Mapping) and (_text(item.get("datetime"), 120) or _text(item.get("date_text"), 200))
+    ]
     attachments = decision.get("attachments") if isinstance(decision.get("attachments"), Mapping) else {}
     risk = decision.get("risk") if isinstance(decision.get("risk"), Mapping) else {}
     summary = _text(notification.get("summary"), 1600)
@@ -212,6 +224,7 @@ def decision_to_legacy_analysis(decision: Mapping[str, Any], original: Mapping[s
             "date_text": _text(deadline.get("date_text"), 200), "timezone": "Asia/Shanghai",
             "confidence": deadline.get("confidence") or 0.0,
         },
+        "deadlines": deadlines_list,
         "reminder_schedule": [],
         "attachment_handling": {
             "policy": (

@@ -40,14 +40,14 @@ class EmailQuoteActionTests(unittest.TestCase):
         return {"platform": "weixin", "authorized": True, "user_id": "paired", "message_id": mid, "message": text, "reference": {"present": True, "text": reference or self.notification}}
 
     def test_untrusted_hook_event_is_ignored(self):
-        context = self.context("提醒我")
+        context = self.context("@提醒")
         context.pop("authorized")
         self.assertIsNone(email_actions.handle_inbound(context))
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_store.upsert_schedule")
     def test_concurrent_duplicate_action_has_one_state_transition(self, upsert, sync):
-        context = self.context("提醒我", mid="same-inbound")
+        context = self.context("@提醒", mid="same-inbound")
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(lambda _: email_actions.handle_inbound(dict(context)), range(16)))
         self.assertTrue(all(item["decision"] == "handled" for item in results))
@@ -57,8 +57,8 @@ class EmailQuoteActionTests(unittest.TestCase):
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_store.upsert_schedule")
     def test_exact_remind_me_activates_single_deadline_idempotently(self, upsert, sync):
-        first = email_actions.handle_inbound(self.context("提醒我"))
-        second = email_actions.handle_inbound(self.context("提醒我"))
+        first = email_actions.handle_inbound(self.context("@提醒"))
+        second = email_actions.handle_inbound(self.context("@提醒"))
         self.assertEqual(first["decision"], "handled")
         self.assertIn("已创建", first["message"])
         self.assertEqual(first["message"], second["message"])

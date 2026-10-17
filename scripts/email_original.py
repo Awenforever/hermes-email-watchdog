@@ -10,6 +10,7 @@ TRUNCATES any oversized block, so every emitted block must stay below
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 DEFAULT_MAX_CHARS = 16000
@@ -92,14 +93,50 @@ def prepare_blocks(text: str) -> list[str]:
     return blocks
 
 
+def _beijing_tz():
+    """Profile timezone (Asia/Shanghai) with a fixed +08:00 fallback.
+
+    ``zoneinfo`` needs tzdata, which is present in the Linux container but may be
+    missing elsewhere; the fixed offset keeps the label correct regardless.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Asia/Shanghai")
+    except Exception:
+        return timezone(timedelta(hours=8))
+
+
+def _parse_date(text: str):
+    """Parse an RFC2822 (Date header) or ISO-8601 timestamp; None if unparseable."""
+    try:
+        return parsedate_to_datetime(text)
+    except Exception:
+        pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def _format_date(raw: object) -> str:
+    """Render a message timestamp for the ``@原文`` header.
+
+    An offset-bearing header (e.g. Gmail's ``+0000``) is converted to the profile
+    timezone and labelled 北京时间, so a UTC ``04:36`` no longer reads as a local
+    early-morning send. A naive header has no known zone, so its wall-clock is
+    shown unlabelled rather than falsely stamped as Beijing time.
+    """
     text = str(raw or "").strip()
     if not text:
         return ""
-    try:
-        return parsedate_to_datetime(text).strftime("%Y-%m-%d %H:%M")
-    except Exception:
+    parsed = _parse_date(text)
+    if parsed is None:
         return text[:40]
+    if parsed.tzinfo is not None:
+        local = parsed.astimezone(_beijing_tz())
+        return local.strftime("%Y-%m-%d %H:%M") + "（北京时间）"
+    return parsed.strftime("%Y-%m-%d %H:%M")
 
 
 def _cap(value: object, limit: int) -> str:

@@ -409,9 +409,17 @@ def _activate_reminders(action: dict, selected: list[int]) -> str:
     details = []
     for index, item in enumerate(created):
         when = str(item.get("deadline") or "").replace("T", " ")[:16]
+        label = " ".join(str(item.get("label") or "").split())
         title = " ".join(str(item.get("title") or "邮件待办").split())
+        shown = label or title
+        venue = " ".join(str(item.get("venue") or "").split())
+        line = f"{index + 1}. `{when}` · {shown}"
+        if venue and venue not in shown:
+            line += f"（{venue}）"
         offsets = _reminder_offsets_label(item.get("reminders"))
-        details.append(f"{index + 1}. `{when}` · {title}" + (f"（{offsets}）" if offsets else ""))
+        if offsets:
+            line += f"（{offsets}）"
+        details.append(line)
     reply = "✅ 已创建邮件提醒\n\n" + "\n".join(details)
     schedule_list = _active_schedule_list()
     if schedule_list:
@@ -692,7 +700,7 @@ def _recall_result(draft: dict) -> str:
 
 def _explicit_mail_command(raw_typed: str) -> bool:
     typed = str(raw_typed or "").strip()
-    return bool(re.match(r"^@(?:回复|转发|原文|确认发送|取消|召回)(?:\s|$)", typed))
+    return bool(re.match(r"^@(?:回复|转发|原文|提醒|确认发送|取消|召回)(?:\s|$)", typed))
 
 
 def _handle_inbound_locked(context: dict):
@@ -788,7 +796,7 @@ def _handle_inbound_locked(context: dict):
         if actions:
             return _handled("该气泡包含多封邮件，无法安全确定操作对象；请引用单封邮件的推送。", _receipt_key(context, "ambiguous"))
         mail_command = (
-            typed in {"提醒我", "确认发送", "取消", "@确认发送", "@取消", "@召回", "@原文"}
+            typed in {"@提醒", "确认发送", "取消", "@确认发送", "@取消", "@召回", "@原文"}
             or _explicit_mail_command(raw_typed)
             or bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
         )
@@ -805,14 +813,31 @@ def _handle_inbound_locked(context: dict):
         return None
     action = actions[0]
 
-    if typed == "提醒我" or re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed):
+    reminder_inline = None
+    if typed == "@提醒" or typed.startswith("@提醒 ") or typed.startswith("@提醒\n"):
+        reminder_inline = typed[len("@提醒"):].strip()
+    numeric_selection = bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
+    if reminder_inline is not None or numeric_selection:
         candidates = [item for item in (action.get("deadlines") or []) if isinstance(item, dict) and item.get("deadline")]
-        if typed == "提醒我":
-            if len(candidates) != 1:
-                return _handled("检测到多个截止时间，请回复需要提醒的编号，例如 `1,3`。", _receipt_key(context, "reminder-select"))
-            selected = [1]
-        else:
+        if not candidates:
+            return _handled("这封邮件没有可创建的有效截止时间。", _receipt_key(context, "reminder-none"))
+        if numeric_selection:
             selected = sorted({int(value) for value in re.findall(r"\d+", typed)})
+        elif reminder_inline and re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", reminder_inline):
+            selected = sorted({int(value) for value in re.findall(r"\d+", reminder_inline)})
+        elif reminder_inline == "":
+            if len(candidates) == 1:
+                selected = [1]
+            else:
+                return _handled(
+                    f"检测到 {len(candidates)} 个截止时间，请回复需要提醒的编号，例如 `@提醒 1,3`。",
+                    _receipt_key(context, "reminder-select"),
+                )
+        else:
+            return _handled(
+                "请在 `@提醒` 后填写编号，例如 `@提醒 1,3`；或直接回复 `@提醒` 为唯一截止时间创建提醒。",
+                _receipt_key(context, "reminder-format"),
+            )
         receipt = _receipt_key(context, "reminder:" + ",".join(map(str, selected)))
         if receipt in state["receipts"]:
             return _handled(state["receipts"][receipt], receipt)

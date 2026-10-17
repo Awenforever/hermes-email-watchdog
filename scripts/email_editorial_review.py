@@ -884,8 +884,14 @@ def finalize_markdown(
         due = _text(item.get("deadline") or item.get("time"), 120)
         if due:
             # The schedule is only *offered* here; a reminder does not exist until
-            # the user quotes the card and replies `提醒我`. Say so explicitly.
-            schedule_lines.append(f"- 日程：`{due.replace('`', '′')}`（默认**不提醒**）")
+            # the user quotes the card and replies `@提醒`. Say so explicitly.
+            label = _text(item.get("label"), 120)
+            venue = _text(item.get("venue"), 120)
+            detail = label or ""
+            if venue and venue not in detail:
+                detail = f"{detail}（{venue}）" if detail else f"（{venue}）"
+            suffix = f" · {detail}" if detail else ""
+            schedule_lines.append(f"- 日程：`{due.replace('`', '′')}`{suffix}（默认**不提醒**）")
     if schedule_lines:
         text += "\n\n**日程**\n" + "\n".join(schedule_lines)
     if email is not None:

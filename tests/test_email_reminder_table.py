@@ -57,7 +57,7 @@ class ReminderListTests(unittest.TestCase):
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
     def test_reply_shows_offsets_and_active_list(self, upsert, update, get_sched, _settings, _sync):
-        result = email_actions.handle_inbound(self.context("提醒我"))
+        result = email_actions.handle_inbound(self.context("@提醒"))
         message = result["message"]
         self.assertIn("已创建邮件提醒", message)
         # Offsets come from the generated reminders, not a hardcoded string.
@@ -77,7 +77,7 @@ class ReminderListTests(unittest.TestCase):
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
     def test_schedule_id_is_account_scoped_and_legacy_retired(self, upsert, update, _get, _s, _sync):
-        email_actions.handle_inbound(self.context("提醒我"))
+        email_actions.handle_inbound(self.context("@提醒"))
         saved = upsert.call_args.args[0]
         self.assertEqual("USTC:42:main", saved["id"])
         self.assertEqual("USTC", saved["account"])
@@ -89,8 +89,8 @@ class ReminderListTests(unittest.TestCase):
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
     def test_reminder_activation_is_idempotent_with_list(self, upsert, _update, _get, _s, _sync):
-        first = email_actions.handle_inbound(self.context("提醒我", mid="same"))
-        second = email_actions.handle_inbound(self.context("提醒我", mid="same"))
+        first = email_actions.handle_inbound(self.context("@提醒", mid="same"))
+        second = email_actions.handle_inbound(self.context("@提醒", mid="same"))
         self.assertEqual(first["message"], second["message"])
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
@@ -102,7 +102,7 @@ class ReminderListTests(unittest.TestCase):
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
     def test_long_title_is_shown_in_full_not_truncated(self, upsert, update, get_sched, _settings, _sync):
-        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        message = email_actions.handle_inbound(self.context("@提醒"))["message"]
         self.assertIn("**当前活跃日程**", message)
         # The whole subject survives verbatim: no 36-char cut, no ellipsis.
         self.assertIn("Advanced Robust Satellite Techniques", message)
@@ -117,7 +117,7 @@ class ReminderListTests(unittest.TestCase):
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
     def test_legacy_row_account_recovered_from_scoped_message_id(self, upsert, update, get_sched, _settings, _sync):
-        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        message = email_actions.handle_inbound(self.context("@提醒"))["message"]
         self.assertIn("截止：2030-01-02 09:00 · 账户：USTC", message)
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
@@ -128,7 +128,7 @@ class ReminderListTests(unittest.TestCase):
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
     def test_unknown_account_renders_dash_not_blank(self, upsert, update, get_sched, _settings, _sync):
-        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        message = email_actions.handle_inbound(self.context("@提醒"))["message"]
         self.assertIn("账户：—", message)
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
@@ -139,7 +139,7 @@ class ReminderListTests(unittest.TestCase):
     @patch("email_actions.email_store.update_schedule")
     @patch("email_actions.email_store.upsert_schedule")
     def test_missing_deadline_renders_placeholder(self, upsert, update, get_sched, _settings, _sync):
-        message = email_actions.handle_inbound(self.context("提醒我"))["message"]
+        message = email_actions.handle_inbound(self.context("@提醒"))["message"]
         self.assertIn("截止：无明确截止", message)
 
 

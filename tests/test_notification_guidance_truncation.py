@@ -22,9 +22,9 @@ class GuidanceTruncationTests(unittest.TestCase):
 
     def test_multi_line_guidance_block_is_preserved(self):
         body = "标题\n\n" + ("长" * 4000)
-        guidance = "> 如需添加提醒，请引用本消息回复 `提醒我`。\n> 引用本消息操作：`@回复` 换行写正文 ｜ `@转发 收件邮箱` 可附言"
+        guidance = "> 如需添加提醒，请引用本消息回复 `@提醒`。\n> 引用本消息操作：`@回复` 换行写正文 ｜ `@转发 收件邮箱` 可附言"
         out = h._truncate_preserving_guidance(body + "\n\n" + guidance, 1800)
-        self.assertIn("提醒我", out)
+        self.assertIn("@提醒", out)
         self.assertIn("@转发 收件邮箱", out)
         self.assertLessEqual(len(out), 1800)
 
