@@ -402,9 +402,16 @@ def _himalaya_cmd_variants(config_path, args, account=None):
             variants.append([base, "--config", config_argument] + qualified)
         variants.append([base, "-c", config_argument] + list(args))
         variants.append([base, "--config", config_argument] + list(args))
-    if qualified != list(args):
-        variants.append([base] + qualified)
-    variants.append([base] + list(args))
+    else:
+        # Only invoke himalaya bare when NO config path is known. With a known
+        # config, a bare call would either select a different default account
+        # (cross-account leak) or — when no default config.toml exists — drop
+        # himalaya into its interactive config wizard, which on a TTY-less daemon
+        # fails as "cannot prompt boolean / The input device is not a TTY" and
+        # masks the real per-account error behind a confusing fallback message.
+        if qualified != list(args):
+            variants.append([base] + qualified)
+        variants.append([base] + list(args))
     unique = []
     seen = set()
     for cmd in variants:
@@ -431,11 +438,20 @@ class HimalayaCommandError(RuntimeError):
     def _format(self):
         if not self.attempts:
             return f"himalaya failed for args={self.cmd_args!r}: no attempts"
-        last = self.attempts[-1]
-        rc = last.get("rc")
-        detail = last.get("stderr") or last.get("stdout") or last.get("error") or last.get("parse_error") or ""
+        # Surface the PRIMARY invocation's error (the account's real config), not
+        # the last fallback. A trailing bare/no-config attempt can fail inside
+        # himalaya's interactive wizard, and its "cannot prompt boolean" message
+        # would otherwise mask the true cause of the account check failure.
+        primary = next(
+            (a for a in self.attempts
+             if (a.get("stderr") or a.get("stdout") or a.get("error") or a.get("parse_error"))),
+            self.attempts[0],
+        )
+        rc = primary.get("rc")
+        detail = primary.get("stderr") or primary.get("stdout") or primary.get("error") or primary.get("parse_error") or ""
         detail = _himalaya_error_snippet(detail)
-        return f"himalaya failed for args={self.cmd_args!r}: rc={rc}; {detail}"
+        tried = f" [{len(self.attempts)} variant(s) tried]" if len(self.attempts) > 1 else ""
+        return f"himalaya failed for args={self.cmd_args!r}: rc={rc}; {detail}{tried}"
 
 
 def _himalaya_error_snippet(value, limit=500):
@@ -455,7 +471,7 @@ def _run_himalaya_json(config_path, args, timeout=30, account=None):
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
-                cwd=_himalaya_cwd(config_path),
+                cwd=_himalaya_cwd(config_path), stdin=subprocess.DEVNULL,
             )
             stdout = result.stdout or ""
             stderr = result.stderr or ""
@@ -627,7 +643,7 @@ def _export_himalaya_message(config_path, msg_id, account=None):
             try:
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=30,
-                    cwd=_himalaya_cwd(config_path),
+                    cwd=_himalaya_cwd(config_path), stdin=subprocess.DEVNULL,
                 )
             except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
                 attempts.append({"rc": 124 if isinstance(exc, subprocess.TimeoutExpired) else 127, "error": str(exc)})

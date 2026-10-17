@@ -1177,7 +1177,12 @@ def _himalaya_cmd_variants(config_path, args):
         config_argument, _ = _himalaya_config_context(cfg)
         variants.append([base, "-c", config_argument] + list(args))
         variants.append([base, "--config", config_argument] + list(args))
-    variants.append([base] + list(args))
+    else:
+        # Never invoke himalaya bare when a config path is known: with no default
+        # config.toml a bare call enters himalaya's interactive wizard and fails
+        # on a TTY-less daemon ("cannot prompt boolean / not a TTY"), masking the
+        # real error — and a bare call could otherwise hit a wrong default account.
+        variants.append([base] + list(args))
     unique = []
     seen = set()
     for cmd in variants:
@@ -1205,7 +1210,7 @@ def _download_himalaya(config_path, msg_id, save_dir):
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=60,
-                cwd=_himalaya_cwd(config_path),
+                cwd=_himalaya_cwd(config_path), stdin=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             return []
@@ -1230,7 +1235,7 @@ def _download_himalaya_from_raw_message(config_path, msg_id, save_dir):
             try:
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=60,
-                    cwd=_himalaya_cwd(config_path),
+                    cwd=_himalaya_cwd(config_path), stdin=subprocess.DEVNULL,
                 )
             except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
                 attempts.append(exc)
