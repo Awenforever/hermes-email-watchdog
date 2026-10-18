@@ -102,11 +102,13 @@ class EditorialReviewTests(unittest.TestCase):
             "markdown": "### 📬 新邮件｜USTC\n\n**主题** `测试`",
         }
         delivery = {"attachments": [], "schedule": [
-            {"deadline": "2026-10-16T23:30:00+08:00", "title": "x", "status": "offered"},
+            {"deadline": "2026-10-16T23:30:00+08:00", "title": "x",
+             "label": "提交材料", "status": "offered"},
         ]}
         text = editorial.finalize_markdown(review, delivery, decision())["text"]
-        self.assertIn("**日程**", text)
-        self.assertIn("- 日程：`2026-10-16T23:30:00+08:00`（默认**不提醒**）", text)
+        self.assertIn("**日程**（默认**不提醒**）", text)
+        self.assertIn("- 提交材料 · `2026-10-16 23:30`", text)
+        self.assertEqual(text.count("默认**不提醒**"), 1)
         self.assertNotIn("已记录提醒", text)
         self.assertNotIn("**提醒**", text)
 

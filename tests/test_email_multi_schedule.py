@@ -4,7 +4,7 @@
 Proves a single email with several distinct deadlines (e.g. a CFP whose
 abstract and full-paper dates differ, and whose sessions are in different
 venues) is extracted, fanned out into N account-scoped schedule rows, offered
-as a numbered card, and selectively activated via ``@提醒 1,3``.
+as a numbered card, and selectively activated via ``@提醒 1,2``.
 
 Synthetic CFP fixture only; no private mail, no network, no prod writes.
 Runs entirely against a temp state root.
@@ -26,6 +26,7 @@ import email_production_router as router  # noqa: E402
 import email_delivery  # noqa: E402
 import email_actions  # noqa: E402
 import email_store  # noqa: E402
+import email_assistant_composer  # noqa: E402
 
 SETTINGS = {
     "timezone": "Asia/Shanghai",
@@ -148,15 +149,28 @@ class MultiSchedulePipelineTests(unittest.TestCase):
         self.assertIn("摘要提交截止", items[0]["title"])
         self.assertIn("北京国际会议中心", items[0]["title"])
         self.assertTrue(items[0].get("reminders"))
+        # Defect C: each multi-deadline item's 待办 is its OWN task label, not the
+        # shared whole-email action summary.
+        self.assertEqual(items[0]["action_needed"], "摘要提交截止")
+        self.assertEqual(items[1]["action_needed"], "全文提交截止")
 
-    def test_guidance_card_is_numbered_with_venues(self):
+    def test_guidance_multi_hint_is_concise(self):
         guidance = email_delivery.append_interaction_guidance("通知正文", self._items())
-        self.assertIn("1. `", guidance)
-        self.assertIn("摘要提交截止", guidance)
-        self.assertIn("北京国际会议中心", guidance)
-        self.assertIn("线上", guidance)
-        self.assertIn("@提醒 1,3", guidance)
+        self.assertIn("> 如需添加提醒，请引用本消息回复 `@提醒 1,2, …`。", guidance)
+        self.assertIn("> 引用本消息操作：", guidance)
+        # The numbered deadline list now lives in the card body's 日程 section,
+        # not duplicated into the footer hint.
+        self.assertNotIn("可选截止时间", guidance)
         self.assertNotIn("提醒我", guidance)
+
+    def test_schedule_section_numbered_with_venues(self):
+        lines = email_assistant_composer.render_schedule_section(self._items())
+        text = "\n".join(lines)
+        self.assertEqual(lines[0], "**日程**（默认**不提醒**）")
+        # 默认不提醒 appears exactly once, on the header.
+        self.assertEqual(text.count("默认**不提醒**"), 1)
+        self.assertIn("- 1. 摘要提交截止（北京国际会议中心） · `2030-03-01 23:59`", text)
+        self.assertIn("- 2. 全文提交截止（线上） · `2030-05-20 23:59`", text)
 
     def test_activate_multi_select_creates_two_scoped_rows(self):
         items = self._items()

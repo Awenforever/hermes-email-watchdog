@@ -67,13 +67,7 @@ def append_interaction_guidance(text: str, schedule: list) -> str:
     if len(candidates) == 1:
         lines.append('> 如需添加提醒，请引用本消息回复 `@提醒`。')
     elif len(candidates) > 1:
-        lines.append("> **可选截止时间**")
-        for index, item in enumerate(candidates, start=1):
-            label = str(item.get("label") or item.get("title") or "邮件待办").strip().replace("\n", " ")[:100]
-            venue = str(item.get("venue") or "").strip().replace("\n", " ")[:60]
-            suffix = f"（{venue}）" if venue and venue not in label else ""
-            lines.append(f"> {index}. `{item.get('deadline')}` · {label}{suffix}")
-        lines.append('> 如需添加提醒，请引用本消息回复 `@提醒 1,3`（可多选，也可直接回复编号）。')
+        lines.append('> 如需添加提醒，请引用本消息回复 `@提醒 1,2, …`。')
     lines.append('> 引用本消息操作：`@回复` 换行写正文 ｜ `@转发 收件邮箱` 可附言 ｜ `@原文` 看全文')
     return (str(text or "").rstrip() + "\n\n" + "\n".join(lines)).strip()
 
@@ -947,13 +941,17 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
         if not reminders and deadline_value:
             reminders = _default_reminders(deadline_value, title, settings)
         sched_id = f"{msg_id}:{index}" if multi else f"{msg_id}:main"
+        # Per-item task text: for a multi-deadline email each schedule is its own
+        # task, so the reminder 待办 must be that task's label, not the shared
+        # whole-email action summary. Single-deadline items keep action_text.
+        item_action = label or action_text
         item = {
             "id": sched_id,
             "message_id": msg_id,
             "title": title,
             "label": label,
             "venue": venue,
-            "action_needed": action_text,
+            "action_needed": item_action,
             "deadline": deadline_value,
             "timezone": timezone_name,
             "status": "offered",

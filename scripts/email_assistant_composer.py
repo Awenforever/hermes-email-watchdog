@@ -814,6 +814,44 @@ def _section(lines: List[str], title: str, content: Sequence[str]) -> None:
         lines.extend(["", f"**{title}**", *clean])
 
 
+def render_schedule_section(schedule: Any) -> List[str]:
+    """Shared 日程 block for both composers.
+
+    The header carries 默认不提醒 exactly once; each offered deadline becomes a
+    task·time line, numbered only when there is more than one. The task text
+    prefers the per-item label, then action_needed, then title — never the raw
+    email subject blob. A reminder does not exist until the user quotes the card
+    and replies ``@提醒``, so this block only *offers* schedules.
+    """
+    rows: List[Tuple[str, str]] = []
+    for item in _items(schedule):
+        if not isinstance(item, Mapping):
+            continue
+        due = _format_time(item.get("deadline") or item.get("time") or item.get("datetime"))
+        if not due:
+            continue
+        task = " ".join(_text(item.get("label"), 120).split()).replace("`", "′")
+        if not task:
+            task = " ".join(_text(item.get("action_needed"), 120).split()).replace("`", "′")
+        if not task:
+            task = " ".join(_text(item.get("title"), 120).split()).replace("`", "′")
+        venue = " ".join(_text(item.get("venue"), 120).split()).replace("`", "′")
+        if venue and venue not in task:
+            task = f"{task}（{venue}）" if task else f"（{venue}）"
+        rows.append((task, due))
+    if not rows:
+        return []
+    numbered = len(rows) > 1
+    lines = ["**日程**（默认**不提醒**）"]
+    for index, (task, due) in enumerate(rows, start=1):
+        prefix = f"{index}. " if numbered else ""
+        if task:
+            lines.append(f"- {prefix}{task} · {_code(due)}")
+        else:
+            lines.append(f"- {prefix}{_code(due)}")
+    return lines
+
+
 def render_notification(
     email: Mapping[str, Any],
     decision: Mapping[str, Any],
@@ -934,15 +972,11 @@ def render_notification(
         _section(lines, "附件", attachment_lines)
         blocks.append("附件")
 
-    schedules = []
-    for item in _items(delivery.get("schedule")):
-        if isinstance(item, Mapping):
-            due = _format_time(item.get("deadline") or item.get("time") or item.get("datetime"))
-            if due:
-                schedules.append(f"- 已记录截止时间 {_code(due)}，将按设置提前提醒")
-    if schedules:
-        _section(lines, "提醒", schedules)
-        blocks.append("提醒")
+    sched_lines = render_schedule_section(delivery.get("schedule"))
+    if sched_lines:
+        lines.append("")
+        lines.extend(sched_lines)
+        blocks.append("日程")
 
     excerpt = _meaningful_excerpt(body, decision, category)
     if excerpt:
