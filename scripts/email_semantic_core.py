@@ -464,6 +464,71 @@ def _extract_action_quote(source: str) -> str:
     return ""
 
 
+_ENUM_DEADLINE_MARKER_RE = re.compile(
+    r"^\s*(?:事项\s*[一二三四五六七八九十\d]+|第\s*[一二三四五六七八九十\d]+\s*[项条件事]?|"
+    r"\d{1,2}\s*[.、)）]|[（(]\s*\d{1,2}\s*[)）])"
+)
+_ENUM_DEADLINE_DATE_RE = re.compile(
+    r"(20\d{2})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})\s*[日号]?"
+    r"(?:[^\d\n]{0,8}?(\d{1,2})\s*[:：]\s*(\d{2}))?"
+)
+_ENUM_DEADLINE_KEYWORD_RE = re.compile(
+    r"(?i)(截止|截至|不晚于|完成|提交|缴纳|上报|反馈|报名|deadline|due|前)"
+)
+_ENUM_LABEL_BOUNDARY_RE = re.compile(
+    r"(?i)(截止|截至|不晚于|到期|deadline|due\b|时间\s*[:：]|日期\s*[:：])"
+)
+_ENUM_VENUE_RE = re.compile(r"(?i)(?:地点|地址|位置|venue|location)[:：]?\s*([^\n，,。；;]{2,60})")
+
+
+def _extract_enumerated_deadlines(source: str, max_items: int = 6) -> List[Dict[str, Any]]:
+    """Deterministically rebuild per-item deadlines from an enumerated body.
+
+    Small semantic models frequently paraphrase a multi-deadline notice instead
+    of emitting the structured deadlines[] array, which collapses the delivery
+    fan-out to a single generic row. When the body enumerates items
+    (事项一/二/三, 1./2./3., 第一项…) and each item carries a deadline keyword and
+    its own stated date, recover one grounded item per line. Evidence is the
+    verbatim source line, so every recovered item is grounded by construction.
+    """
+    items: List[Dict[str, Any]] = []
+    for raw_line in re.split(r"[\n。；;！!？?]+", _text(source, 12000)):
+        line = " ".join(raw_line.split())
+        if not line:
+            continue
+        marker = _ENUM_DEADLINE_MARKER_RE.match(line)
+        if not marker:
+            continue
+        if not _ENUM_DEADLINE_KEYWORD_RE.search(line):
+            continue
+        match = _ENUM_DEADLINE_DATE_RE.search(line)
+        if not match:
+            continue
+        year, month, day, hour, minute = match.groups()
+        if hour is not None and minute is not None:
+            hh, mm = int(hour), int(minute)
+        else:
+            hh, mm = 23, 59
+        iso = f"{int(year):04d}-{int(month):02d}-{int(day):02d}T{hh:02d}:{mm:02d}:00+08:00"
+        label_span = line[marker.end():match.start()]
+        boundary = _ENUM_LABEL_BOUNDARY_RE.search(label_span)
+        label = label_span[:boundary.start()] if boundary else label_span
+        label = " ".join(label.strip(" \t，,、:：-—　").split())[:120]
+        venue_match = _ENUM_VENUE_RE.search(line)
+        venue = " ".join(venue_match.group(1).split())[:120] if venue_match else ""
+        items.append({
+            "datetime": iso,
+            "date_text": _text(match.group(0), 200),
+            "label": label,
+            "venue": venue,
+            "confidence": 0.85,
+            "evidence": _text(line, 240),
+        })
+        if len(items) >= max_items:
+            break
+    return items
+
+
 def _extract_deadline_quote(source: str) -> str:
     deadline_signal = re.compile(
         r"(?i)(deadline|due\s+by|截止|不晚于|请于|须于|前完成|前提交|前回复)"
@@ -1060,6 +1125,14 @@ def normalize_and_expand_detailed(
             })
     elif raw_deadlines is not None:
         hard_errors.append("core.deadlines must be a list or null")
+
+    if not deadlines_out and not hints.get("no_deadline_phrase"):
+        enumerated = _extract_enumerated_deadlines(grounding_source)
+        if enumerated:
+            deadlines_out = enumerated
+            repairs.append(
+                f"grounding:deterministic_enumerated_deadlines={len(deadlines_out)}"
+            )
 
     if deadlines_out:
         # Reconcile the singular view with the primary (first) list item so the

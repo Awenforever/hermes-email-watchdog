@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import email_actions
 import email_original
+import email_watch
 
 
 class PrepareBlocksTests(unittest.TestCase):
@@ -194,6 +195,71 @@ class FormatDateTests(unittest.TestCase):
     def test_unparseable_value_is_returned_trimmed(self):
         self.assertEqual("不是日期", email_original._format_date("不是日期"))
         self.assertEqual("", email_original._format_date(""))
+
+
+
+class CacheFirstOriginalTests(unittest.TestCase):
+    """@原文 must survive the Gmail IMAP simultaneous-connection cap.
+
+    The full body is already persisted at delivery time under
+    CACHE_DIR/{message_id}.json; serve it from there and only fall back to a
+    live message export when no usable cache exists.
+    """
+
+    ACTION = {
+        "account_type": "himalaya", "himalaya_config": "/x.toml",
+        "himalaya_account": "gmail", "message_id": "Gmail:6500", "uid": "6500",
+        "subject": "会议通知", "account": "Gmail",
+        "from_name": "张三", "from_addr": "zhang@example.com",
+    }
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.cache_dir = Path(self.temp.name)
+        self._saved_cache_dir = email_watch.CACHE_DIR
+        email_watch.CACHE_DIR = str(self.cache_dir)
+
+    def tearDown(self):
+        email_watch.CACHE_DIR = self._saved_cache_dir
+        self.temp.cleanup()
+
+    def _write_cache(self, storage_id, body):
+        stamp = "Sat, 18 Oct 2026 04:36:00 +0000"
+        payload = {
+            "account": "Gmail", "msg_id": storage_id, "subject": "会议通知",
+            "from_addr": "zhang@example.com", "from_name": "张三", "body": body,
+            "has_attachments": False, "attachments": [], "links": [],
+            "date_sent": stamp, "date_received": stamp, "date_seen": stamp,
+            "cached_at": stamp,
+        }
+        (self.cache_dir / (storage_id + ".json")).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+
+    @patch("email_watch.read_himalaya",
+           side_effect=RuntimeError("Too many simultaneous connections"))
+    def test_cache_hit_serves_original_without_live_fetch(self, read):
+        self._write_cache("Gmail:6500", "请参加会议，记得携带材料。")
+        out = email_original.build_original_reply(dict(self.ACTION), "6500")
+        read.assert_not_called()
+        self.assertIn("### 📄 邮件原文", out)
+        self.assertIn("请参加会议，记得携带材料。", out)
+        self.assertNotIn("获取邮件原文失败", out)
+
+    @patch("email_watch.read_himalaya",
+           return_value={"text": "实时正文。", "date_sent": ""})
+    def test_cache_miss_falls_back_to_live_fetch(self, read):
+        out = email_original.build_original_reply(dict(self.ACTION), "6500")
+        read.assert_called_once()
+        self.assertIn("实时正文。", out)
+
+    @patch("email_watch.read_himalaya",
+           side_effect=RuntimeError("Too many simultaneous connections"))
+    def test_blank_body_cache_falls_through_to_live_fetch(self, read):
+        self._write_cache("Gmail:6500", "   ")
+        with self.assertRaises(RuntimeError):
+            email_original.build_original_reply(dict(self.ACTION), "6500")
+        read.assert_called_once()
 
 
 if __name__ == "__main__":

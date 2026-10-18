@@ -62,14 +62,13 @@ def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict)
 
 def append_interaction_guidance(text: str, schedule: list) -> str:
     """Offer user-controlled actions; never create reminders merely from mail content."""
-    lines = []
     candidates = [item for item in (schedule or []) if isinstance(item, dict) and item.get("deadline")]
-    if len(candidates) == 1:
-        lines.append('> 如需添加提醒，请引用本消息回复 `@提醒`。')
-    elif len(candidates) > 1:
-        lines.append('> 如需添加提醒，请引用本消息回复 `@提醒 1,2, …`。')
-    lines.append('> 引用本消息操作：`@回复` 换行写正文 ｜ `@转发 收件邮箱` 可附言 ｜ `@原文` 看全文')
-    return (str(text or "").rstrip() + "\n\n" + "\n".join(lines)).strip()
+    reminder = "`@提醒 1,2`" if len(candidates) > 1 else "`@提醒`"
+    guidance = (
+        f"> 引用本消息并：{reminder}以设置自动提醒 ｜ `@回复` 换行写正文 ｜ "
+        "`@转发 目标邮箱` 换行可附言 ｜ `@原文` 查看原文"
+    )
+    return (str(text or "").rstrip() + "\n\n" + guidance).strip()
 
 
 def format_notification(email: dict, analysis: dict, attachments: list, schedule: list) -> str:

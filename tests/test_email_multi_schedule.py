@@ -156,8 +156,8 @@ class MultiSchedulePipelineTests(unittest.TestCase):
 
     def test_guidance_multi_hint_is_concise(self):
         guidance = email_delivery.append_interaction_guidance("通知正文", self._items())
-        self.assertIn("> 如需添加提醒，请引用本消息回复 `@提醒 1,2, …`。", guidance)
-        self.assertIn("> 引用本消息操作：", guidance)
+        self.assertIn("> 引用本消息并：`@提醒 1,2`以设置自动提醒", guidance)
+        self.assertIn("`@原文` 查看原文", guidance)
         # The numbered deadline list now lives in the card body's 日程 section,
         # not duplicated into the footer hint.
         self.assertNotIn("可选截止时间", guidance)
@@ -278,6 +278,140 @@ class ReminderCommandDispatchTests(unittest.TestCase):
         self.assertEqual("handled", result["decision"])
         self.assertIn("请在 `@提醒` 后填写编号", result["message"])
         self.assertEqual([], email_store.get_schedules("active", 50))
+
+
+
+
+class DeterministicEnumeratedDeadlineTests(unittest.TestCase):
+    """A small model that paraphrases instead of emitting deadlines[] must not
+    collapse a multi-deadline notice into one generic row.
+
+    Drives the REAL normalize_and_expand_detailed path with a model output that
+    OMITS the structured list (the Gmail:6500 failure mode: empty deadlines[]
+    and no singular deadline); the core must rebuild three grounded per-item
+    deadlines from the enumerated body and fan out into three scoped rows. The
+    body uses full-stop separators only, which the extractor splits on.
+    """
+
+    ENUM_SUBJECT = "【自测】多截止日期提醒验证 MST-DETERMINISTIC"
+    ENUM_BODY = (
+        "各位好，本邮件用于验证多截止日期提取，请按时推进以下三项事项。"
+        "事项一：项目周会材料准备，截止2030年3月1日 09:00。"
+        "事项二：季度报告提交，截止2030年5月20日 18:00。"
+        "事项三：年度审计材料归档，截止2030年7月10日 09:00。"
+    )
+    ENUM_FACTS = {
+        "attachments_present": False,
+        "attachment_names": [],
+        "code_candidates": [],
+        "sender_domain": "example.org",
+        "source_subject": ENUM_SUBJECT,
+        "source_body": ENUM_BODY,
+    }
+    ENUM_RAW = {
+        "category": "task_reminder",
+        "confidence": 0.8,
+        "importance": "medium",
+        "importance_reason": "包含多项明确截止时间",
+        "should_notify": True,
+        "content_mode": "deadline_card",
+        "summary_style": "bullets",
+        "summary": "三项事项均有明确截止时间。",
+        "key_points": ["三项事项均有明确截止时间"],
+        "summary_evidence": [
+            "事项一：项目周会材料准备，截止2030年3月1日 09:00",
+            "事项二：季度报告提交，截止2030年5月20日 18:00",
+            "事项三：年度审计材料归档，截止2030年7月10日 09:00",
+        ],
+        "original_policy": "none",
+        "original_reason": "",
+        "action": {
+            "type": "prepare",
+            "description": "按时推进三项事项",
+            "next_step": "在各截止日期前完成",
+            "evidence": "请按时推进以下三项事项",
+        },
+        "deadline": None,
+        "deadlines": [],
+        "attachment_policy": "none",
+        "attachment_reason": "",
+        "risk": {"level": "none", "notes": []},
+        "topic_tags": ["自测"],
+        "uncertainties": [],
+    }
+
+    def setUp(self):
+        email_store.init_db()
+        conn = email_store._get_conn()
+        conn.execute("DELETE FROM schedules")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    def _detailed(self):
+        return core.normalize_and_expand_detailed(
+            self.ENUM_RAW, message_key="mst-det-1", facts=self.ENUM_FACTS
+        )
+
+    def _items(self, key="mst-det-1"):
+        decision, errors, _repairs, _keys = self._detailed()
+        self.assertFalse(errors, errors[:4])
+        analysis = router.decision_to_legacy_analysis(decision, {})
+        email = {
+            "id": key, "msg_id": key, "account": "Gmail",
+            "subject": self.ENUM_SUBJECT,
+            "date_sent": "Sat, 18 Oct 2026 04:36:00 +0000",
+        }
+        return email_delivery.upsert_schedule(email, analysis)
+
+    def test_extractor_recovers_three_grounded_items_without_model_list(self):
+        decision, errors, repairs, _keys = self._detailed()
+        self.assertFalse(errors, errors[:4])
+        self.assertIsNotNone(decision)
+        dl = decision.get("deadlines") or []
+        self.assertEqual(3, len(dl))
+        self.assertEqual(
+            ["项目周会材料准备", "季度报告提交", "年度审计材料归档"],
+            [item["label"] for item in dl],
+        )
+        self.assertEqual("2030-03-01T09:00:00+08:00", dl[0]["datetime"])
+        self.assertEqual("2030-05-20T18:00:00+08:00", dl[1]["datetime"])
+        self.assertEqual("2030-07-10T09:00:00+08:00", dl[2]["datetime"])
+        source = self.ENUM_SUBJECT + self.ENUM_BODY
+        for item in dl:
+            self.assertIn(item["evidence"], source)
+        self.assertIn("grounding:deterministic_enumerated_deadlines=3", repairs)
+        self.assertIn("multi_deadline:primary_from_list=3", repairs)
+
+    def test_singular_deadline_reconciled_from_first_item(self):
+        decision, errors, _repairs, _keys = self._detailed()
+        self.assertFalse(errors, errors[:4])
+        sing = decision.get("deadline") or {}
+        self.assertTrue(sing.get("has_deadline"))
+        self.assertEqual("2030-03-01T09:00:00+08:00", sing.get("datetime"))
+
+    def test_fan_out_yields_three_scoped_rows_with_own_labels(self):
+        items = self._items()
+        self.assertEqual(3, len(items))
+        self.assertEqual(
+            ["mst-det-1:1", "mst-det-1:2", "mst-det-1:3"],
+            [i["id"] for i in items],
+        )
+        self.assertTrue(all(i["status"] == "offered" for i in items))
+        self.assertEqual(
+            ["项目周会材料准备", "季度报告提交", "年度审计材料归档"],
+            [i["action_needed"] for i in items],
+        )
+
+    def test_card_offers_three_numbered_deadlines_and_multi_hint(self):
+        items = self._items(key="mst-det-2")
+        lines = email_assistant_composer.render_schedule_section(items)
+        self.assertEqual("**日程**（默认**不提醒**）", lines[0])
+        self.assertEqual(1, sum(1 for ln in lines if "默认**不提醒**" in ln))
+        self.assertIn("- 1. 项目周会材料准备 · `2030-03-01 09:00`", lines)
+        self.assertIn("- 2. 季度报告提交 · `2030-05-20 18:00`", lines)
+        self.assertIn("- 3. 年度审计材料归档 · `2030-07-10 09:00`", lines)
+        guidance = email_delivery.append_interaction_guidance("通知正文", items)
+        self.assertIn("> 引用本消息并：`@提醒 1,2`以设置自动提醒", guidance)
 
 
 if __name__ == "__main__":

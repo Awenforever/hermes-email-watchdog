@@ -225,6 +225,42 @@ def _fetch_with_deadline(config_path: str, uid: str, alias: str | None, deadline
         pool.shutdown(wait=False, cancel_futures=True)
 
 
+def _load_cached_original(action: dict) -> dict | None:
+    """Serve @原文 from the watchdog local full-body cache when available.
+
+    The live IMAP export fails whenever the provider is at its simultaneous
+    connection cap (Gmail "Too many simultaneous connections"), yet the full body
+    was already persisted at delivery time under CACHE_DIR/{message_id}.json.
+    Prefer that cache; return None only when it is missing or has no body, so the
+    caller falls back to a live fetch.
+    """
+    storage_id = str((action or {}).get("message_id") or "").strip()
+    if not storage_id:
+        return None
+    try:
+        import json
+        import os
+
+        import email_watch
+        cache_dir = getattr(email_watch, "CACHE_DIR", "")
+        if not cache_dir:
+            return None
+        path = os.path.join(cache_dir, f"{storage_id}.json")
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    body = str(data.get("body") or "")
+    if not body.strip():
+        return None
+    return {
+        "text": body,
+        "date_sent": data.get("date_sent") or data.get("date_received") or "",
+        "attachments": data.get("attachments") or [],
+    }
+
 def build_original_reply(action: dict, uid: str, deadline_seconds: int | None = None) -> str:
     """Fetch and render the original email for one resolved mail action.
 
@@ -235,6 +271,9 @@ def build_original_reply(action: dict, uid: str, deadline_seconds: int | None = 
     action = action if isinstance(action, dict) else {}
     if str(action.get("account_type") or "").lower() != "himalaya":
         return "该邮箱通道暂不支持查看原文，请在邮箱客户端中查看。"
+    cached = _load_cached_original(action)
+    if cached is not None:
+        return render_original(action, cached)
     config_path = str(action.get("himalaya_config") or "").strip()
     uid = str(uid or "").strip()
     if not config_path or not uid:
