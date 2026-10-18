@@ -1,5 +1,5 @@
 name: hermes-email-watchdog
-version: 0.13.3
+version: 0.13.4
 manifest_version: 1
 api_version: 1
 description: Read-only email triage with grounded classification and actionable messaging alerts.
@@ -7,7 +7,7 @@ author: Awenforever
 license: MIT
 homepage: https://github.com/Awenforever/hermes-email-watchdog
 tags: [email, imap, triage, gateway]
-requires_hermes: ">=0.21.3,<0.22"
+requires_hermes: ">=0.22,<0.23"
 config_schema:
   enabled:
     type: bool
