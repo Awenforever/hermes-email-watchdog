@@ -197,6 +197,15 @@ def _card_chrome(
     if received:
         meta += f" · {_code(received)}"
     lines = [f"### {icon} {title}｜{account_label}", "", meta]
+    # On-demand mailbox disambiguation: the header alias (e.g. Gmail) is enough
+    # unless two enabled mailboxes share a domain, in which case show which
+    # address actually received this message. The common case adds no line.
+    if email.get("account_domain_shared"):
+        mailbox = _text(
+            email.get("account_email") or account.get("email") or email.get("to_addr"), 160
+        )
+        if mailbox:
+            lines.extend(["", f"**收件邮箱** {_code(mailbox)}"])
     return lines
 
 

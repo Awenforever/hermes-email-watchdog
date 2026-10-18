@@ -1189,11 +1189,34 @@ def _delivery_owns_learning_record(delivery):
     }
 
 
+def _ambiguous_mail_domains():
+    """Mail domains shared by 2+ enabled accounts.
+
+    A bare alias (``Gmail``) cannot tell two same-domain mailboxes apart, so the
+    card adds an explicit 收件邮箱 line only for those accounts. Recomputed from
+    live config; cheap (one read per account check).
+    """
+    from collections import Counter
+    try:
+        accounts = email_config.get_accounts(True)
+    except Exception:
+        accounts = ACCOUNTS if isinstance(globals().get("ACCOUNTS"), list) else []
+    domains = []
+    for entry in accounts or []:
+        addr = str((entry or {}).get("email") or "").strip().lower()
+        if "@" in addr:
+            domains.append(addr.split("@", 1)[1])
+    return {domain for domain, count in Counter(domains).items() if count > 1}
+
+
 # ── Process single account ──────────────────────────────────────
 def check_account(acct, pushed_count=None):
     """Check one account for new emails. Returns list of notification strings."""
     alerts = []
     acct_name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
+    acct_email = str(acct.get("email") or "").strip()
+    acct_domain = acct_email.lower().split("@", 1)[1] if "@" in acct_email.lower() else ""
+    account_domain_shared = bool(acct_domain and acct_domain in _ambiguous_mail_domains())
 
     if acct["type"] == "himalaya":
         hconfig = acct.get("himalaya_config") or acct.get("config")
@@ -1279,6 +1302,7 @@ def check_account(acct, pushed_count=None):
         from_domain = from_addr_lower.split("@", 1)[1] if "@" in from_addr_lower else ""
         email_data = {
             "id": storage_id, "msg_id": storage_id, "uid": msg_id, "account": acct_name,
+            "account_email": acct_email, "account_domain_shared": account_domain_shared,
             "subject": subject, "from_addr": from_addr, "from_email": from_addr_lower,
             "from_domain": from_domain, "from_name": from_name,
             "body": body[:12000], "to_addr": to_addr,
