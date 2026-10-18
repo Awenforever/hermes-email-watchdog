@@ -1,3 +1,7 @@
+## Unreleased
+
+- Support Hermes 0.22 (requires_hermes >=0.22,<0.23).
+
 # Changelog
 
 ## 0.13.3 - 2026-10-09
