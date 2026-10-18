@@ -14,6 +14,7 @@ import re
 import subprocess
 import shutil
 import sys
+import time
 import importlib
 from html import unescape
 from email import policy as email_policy
@@ -254,6 +255,126 @@ def run(cmd, timeout=30, cwd=None):
     except FileNotFoundError:
         return "", 127
 
+
+# EMAIL_WATCHDOG_HIMALAYA_FAILURE_CLASSIFICATION_V1
+# Transport / server-side-cap / timeout signatures. A different CLI spelling of
+# the same himalaya command cannot resolve these, and retrying only opens more
+# IMAP sessions against Gmail's per-account concurrent-connection cap.
+_TRANSIENT_FAILURE_MARKERS = (
+    "too many simultaneous connections",
+    "simultaneous connection",
+    "code: some(alert)",
+    "connection refused",
+    "os error 111",
+    "cannot connect to tcp stream",
+    "cannot connect to tls stream",
+    "cannot connect to imap server",
+    "cannot connect to smtp server",
+    "tls handshake eof",
+    "handshake eof",
+    "peer closed connection",
+    "close_notify",
+    "stream error",
+    "connection reset",
+    "broken pipe",
+    "network is unreachable",
+    "network unreachable",
+    "temporary failure in name resolution",
+    "timed out",
+    "timeout",
+    "try again later",
+    "service unavailable",
+    "eof",
+)
+
+# CLI / config / account / wizard signatures. These MAY succeed under a different
+# variant spelling (long-form flag, with/without -a account), so callers fall back.
+_CONFIG_FAILURE_MARKERS = (
+    "cannot prompt",
+    "not a tty",
+    "input device is not a tty",
+    "unexpected argument",
+    "unrecognized",
+    "unknown argument",
+    "unknown flag",
+    "invalid value",
+    "invalid argument",
+    "account not found",
+    "no account",
+    "missing account",
+    "cannot parse",
+    "parse error",
+    "invalid toml",
+    "configuration error",
+    "no such file or directory",
+    "config",
+)
+
+
+def _classify_himalaya_failure(rc, stdout="", stderr=""):
+    """Classify a himalaya failure as ``transient`` / ``config`` / ``unknown``.
+
+    ``transient`` (transport / connection-cap / timeout / TLS-stream): retrying a
+    different CLI spelling cannot help and only opens more IMAP sessions, so
+    callers MUST fail fast without trying fallback variants. ``config`` (CLI arg /
+    account / wizard / TTY / parse): a different variant may succeed, so callers
+    may fall back. ``unknown``: treated as non-retryable-by-variant (fail fast) to
+    avoid burning connections on an unrecognised error.
+    """
+    if rc == 124:
+        return "transient"
+    blob = ("%s\n%s" % (stdout or "", stderr or "")).lower()
+    if not blob.strip():
+        return "unknown"
+    for marker in _TRANSIENT_FAILURE_MARKERS:
+        if marker in blob:
+            return "transient"
+    for marker in _CONFIG_FAILURE_MARKERS:
+        if marker in blob:
+            return "config"
+    return "unknown"
+
+
+# EMAIL_WATCHDOG_HIMALAYA_GRACEFUL_TIMEOUT_V1
+def _run_himalaya_subprocess(cmd, timeout, cwd):
+    """Run himalaya, letting it close the IMAP session cleanly on timeout.
+
+    ``subprocess.run(timeout=...)`` SIGKILLs immediately, so himalaya never sends
+    IMAP LOGOUT and Gmail may keep the half-open session counted against the
+    per-account concurrent-connection cap (a zombie session). Send SIGTERM first,
+    wait a short grace period for a clean logout, then SIGKILL only if it is still
+    alive. Returns ``(returncode, stdout, stderr, timed_out)``.
+    """
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, text=True, cwd=cwd,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return proc.returncode, stdout or "", stderr or "", False
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        stdout, stderr = proc.communicate(timeout=5)
+        return proc.returncode, stdout or "", stderr or "", True
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        stdout, stderr = proc.communicate(timeout=5)
+    except Exception:
+        stdout, stderr = "", ""
+    rc = proc.returncode if proc.returncode is not None else 124
+    return rc, stdout or "", stderr or "", True
+
+
 def load_json(path):
     if os.path.exists(path):
         with open(path) as f:
@@ -465,31 +586,37 @@ def _himalaya_error_snippet(value, limit=500):
 
 
 def _run_himalaya_json(config_path, args, timeout=30, account=None):
-    """Run Himalaya and return parsed JSON. Command/auth failures are explicit."""
+    """Run Himalaya and return parsed JSON. Command/auth failures are explicit.
+
+    Variant fallback is reserved for config/CLI errors. Transport / connection-cap
+    / timeout failures fail fast on the canonical command: retrying a different
+    spelling cannot resolve a server-side cap and only opens additional IMAP
+    sessions, which is what amplifies "Too many simultaneous connections".
+    """
     attempts = []
     for cmd in _himalaya_cmd_variants(config_path, args, account=account):
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout,
-                cwd=_himalaya_cwd(config_path), stdin=subprocess.DEVNULL,
+            rc, stdout, stderr, timed_out = _run_himalaya_subprocess(
+                cmd, timeout, _himalaya_cwd(config_path)
             )
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
-            attempt = {
-                "cmd": cmd[:3],
-                "rc": result.returncode,
-                "stdout": _himalaya_error_snippet(stdout, 800),
-                "stderr": _himalaya_error_snippet(stderr, 800),
-            }
-            attempts.append(attempt)
-        except subprocess.TimeoutExpired:
-            attempts.append({"cmd": cmd[:3], "rc": 124, "error": f"timeout after {timeout}s"})
-            continue
         except FileNotFoundError as exc:
             attempts.append({"cmd": cmd[:3], "rc": 127, "error": str(exc)})
             continue
+        attempt = {
+            "cmd": cmd[:3],
+            "rc": 124 if timed_out else rc,
+            "stdout": _himalaya_error_snippet(stdout, 800),
+            "stderr": _himalaya_error_snippet(stderr, 800),
+        }
+        if timed_out:
+            attempt["error"] = f"timeout after {timeout}s"
+        attempts.append(attempt)
 
-        if result.returncode != 0:
+        if timed_out or rc != 0:
+            # Fail fast unless this is a config/CLI error that a fallback variant
+            # could actually fix.
+            if _classify_himalaya_failure(124 if timed_out else rc, stdout, stderr) != "config":
+                raise HimalayaCommandError(args, attempts)
             continue
 
         raw = stdout.strip()
@@ -641,16 +768,17 @@ def _export_himalaya_message(config_path, msg_id, account=None):
         args = ["message", "export", str(msg_id), "--full", "--destination", str(destination)]
         for cmd in _himalaya_cmd_variants(config_path, args, account=account):
             try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=30,
-                    cwd=_himalaya_cwd(config_path), stdin=subprocess.DEVNULL,
+                rc, _out, stderr, timed_out = _run_himalaya_subprocess(
+                    cmd, 30, _himalaya_cwd(config_path)
                 )
-            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-                attempts.append({"rc": 124 if isinstance(exc, subprocess.TimeoutExpired) else 127, "error": str(exc)})
+            except FileNotFoundError as exc:
+                attempts.append({"rc": 127, "error": str(exc)})
                 continue
-            attempts.append({"rc": result.returncode, "stderr": _himalaya_error_snippet(result.stderr)})
-            if result.returncode == 0 and destination.is_file():
+            attempts.append({"rc": 124 if timed_out else rc, "stderr": _himalaya_error_snippet(stderr)})
+            if rc == 0 and not timed_out and destination.is_file():
                 return _parse_exported_message(destination)
+            if _classify_himalaya_failure(124 if timed_out else rc, "", stderr) != "config":
+                raise HimalayaCommandError(["message", "export", str(msg_id)], attempts)
     raise HimalayaCommandError(["message", "export", str(msg_id)], attempts)
 
 
@@ -735,11 +863,20 @@ def download_himalaya_attachments(config_path, msg_id, save_dir):
     """Download attachments from a Himalaya message. Returns newly saved paths."""
     before = set(os.listdir(save_dir)) if os.path.isdir(save_dir) else set()
     os.makedirs(save_dir, exist_ok=True)
+    succeeded = False
     for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
-        out, rc = run(cmd, timeout=60, cwd=_himalaya_cwd(config_path))
-        if rc == 0:
+        try:
+            rc, _out, err, timed_out = _run_himalaya_subprocess(cmd, 60, _himalaya_cwd(config_path))
+        except FileNotFoundError:
+            continue
+        if rc == 0 and not timed_out:
+            succeeded = True
             break
-    else:
+        # Transport / cap / timeout: a different spelling cannot help; stop instead
+        # of opening more IMAP sessions. Only config/CLI errors fall back.
+        if _classify_himalaya_failure(124 if timed_out else rc, "", err) != "config":
+            break
+    if not succeeded:
         return []
     after = set(os.listdir(save_dir))
     saved = []
@@ -1481,6 +1618,92 @@ def _due_reminder_alerts() -> list:
         return []
 
 
+# EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN_V1
+# The gateway reloads this module on EVERY poll (importlib.reload), so module
+# level state cannot carry a cooldown across polls. Persist the last-emitted
+# failure signature per account in the plugin state dir instead; it survives both
+# reloads and restarts. This stops the identical "### ⚠️ <acct> 检查失败" card from
+# being re-sent every poll interval (#130) while still surfacing a genuinely new
+# failure class or a fresh outage after recovery.
+_CHECK_FAILURE_COOLDOWN_SECONDS = int(
+    os.getenv("HERMES_EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN", "900") or "900"
+)
+
+
+def _check_failure_state_path():
+    return os.path.join(os.path.dirname(os.path.abspath(SEEN_FILE)), "check_failure_cooldown.json")
+
+
+def _load_check_failure_state():
+    try:
+        with open(_check_failure_state_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_check_failure_state(state):
+    try:
+        path = _check_failure_state_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _failure_signature(exc):
+    """Collapse a check failure to a coarse class so varying transport wording
+    (cap / refused / TLS-eof / timeout) maps to ONE signature and stops the
+    per-poll card spam, while a genuinely different failure still surfaces."""
+    text = str(exc or "")
+    m = re.search(r"rc=(-?\d+)", text)
+    rc = int(m.group(1)) if m else 0
+    klass = _classify_himalaya_failure(rc, "", text)
+    if klass in ("transient", "config"):
+        return klass
+    norm = re.sub(r"\d+", "#", text)[:200]
+    return "unknown:" + hashlib.sha256(norm.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _should_emit_check_failure(name, exc):
+    """Rate-limit the 检查失败 card per account + failure class.
+
+    Returns True when this failure should surface now (first occurrence, a new
+    failure class, or the cooldown has elapsed); False to suppress a repeat that
+    would otherwise spam the same card every poll interval.
+    """
+    if _CHECK_FAILURE_COOLDOWN_SECONDS <= 0:
+        return True
+    sig = _failure_signature(exc)
+    state = _load_check_failure_state()
+    now = time.time()
+    last = state.get(name)
+    if isinstance(last, dict) and last.get("signature") == sig:
+        try:
+            last_ts = float(last.get("ts") or 0)
+        except Exception:
+            last_ts = 0.0
+        if now - last_ts < _CHECK_FAILURE_COOLDOWN_SECONDS:
+            return False
+    state[name] = {"signature": sig, "ts": now}
+    _save_check_failure_state(state)
+    return True
+
+
+def _clear_check_failure(name):
+    """Drop the cooldown entry on success so the NEXT outage surfaces at once."""
+    try:
+        state = _load_check_failure_state()
+        if name in state:
+            state.pop(name, None)
+            _save_check_failure_state(state)
+    except Exception:
+        pass
+
+
 def main():
     _reset_output_metadata()
     due_alerts = _due_reminder_alerts()
@@ -1492,14 +1715,16 @@ def main():
     accounts_seen = set()
 
     for acct in ACCOUNTS:
+        name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
         try:
             acct_alerts = check_account(acct)
             if acct_alerts:
                 all_alerts.extend(acct_alerts)
-                accounts_seen.add(acct.get("label") or acct.get("name") or acct.get("id") or "account")
+                accounts_seen.add(name)
+            _clear_check_failure(name)
         except Exception as e:
-            name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
-            all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
+            if _should_emit_check_failure(name, e):
+                all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
             accounts_seen.add(name)
 
     if not all_alerts:

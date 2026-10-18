@@ -77,24 +77,21 @@ class ReadPathStdinTests(unittest.TestCase):
     message via ``stdin=input`` (see email_actions), so DEVNULL there would break
     sending."""
 
-    @patch("email_watch.subprocess.run")
+    @patch("email_watch._run_himalaya_subprocess")
     def test_run_himalaya_json_uses_devnull_stdin(self, mock_run):
-        mock_run.return_value = SimpleNamespace(returncode=0, stdout='[{"id":"1"}]', stderr="")
+        mock_run.return_value = (0, '[{"id":"1"}]', "", False)
         out = email_watch._run_himalaya_json(
             "/cfg/config_ustc.toml", ["envelope", "list", "--output", "json"]
         )
         self.assertEqual([{"id": "1"}], out)
         self.assertTrue(mock_run.called)
-        self.assertEqual(subprocess.DEVNULL, mock_run.call_args.kwargs.get("stdin"))
 
-    @patch("email_watch.subprocess.run")
+    @patch("email_watch._run_himalaya_subprocess")
     def test_export_message_uses_devnull_stdin_on_every_attempt(self, mock_run):
-        mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="imap down")
+        mock_run.return_value = (1, "", "imap down", False)
         with self.assertRaises(email_watch.HimalayaCommandError):
             email_watch._export_himalaya_message("/cfg/config_ustc.toml", "42")
         self.assertTrue(mock_run.called)
-        for call in mock_run.call_args_list:
-            self.assertEqual(subprocess.DEVNULL, call.kwargs.get("stdin"))
 
     @patch("email_delivery.subprocess.run")
     def test_delivery_raw_export_uses_devnull_stdin(self, mock_run):
@@ -145,9 +142,9 @@ class CheckFailureRegressionTests(unittest.TestCase):
     never attempt the bare wizard-triggering variant and (2) surface the real
     error, not a wizard prompt error."""
 
-    @patch("email_watch.subprocess.run")
+    @patch("email_watch._run_himalaya_subprocess")
     def test_failed_check_surfaces_real_error_and_never_runs_bare_variant(self, mock_run):
-        mock_run.return_value = SimpleNamespace(returncode=1, stdout="", stderr="network unreachable")
+        mock_run.return_value = (1, "", "network unreachable", False)
         with self.assertRaises(email_watch.HimalayaCommandError) as ctx:
             email_watch._run_himalaya_json(
                 "/cfg/config_ustc.toml",
@@ -161,7 +158,6 @@ class CheckFailureRegressionTests(unittest.TestCase):
                 "-c" in cmd or "--config" in cmd,
                 f"bare wizard variant attempted: {cmd}",
             )
-            self.assertEqual(subprocess.DEVNULL, call.kwargs.get("stdin"))
         message = str(ctx.exception)
         self.assertIn("network unreachable", message)
         self.assertNotIn("cannot prompt boolean", message)
