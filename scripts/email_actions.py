@@ -914,7 +914,7 @@ def _handle_inbound_locked(context: dict):
 
     if any(typed.startswith(command) for command in ("@回复", "@转发", "@原文", "@确认发送", "@取消", "@召回")):
         return _handled(
-            "命令格式无效。回复请使用 `@回复` 后换行输入正文；转发请使用 `@转发 收件邮箱`，下一行可选填附言；查看原文、确认、取消和召回须分别单独发送 `@原文`、`@确认发送`、`@取消`、`@召回`。",
+            "命令格式无效。回复请使用 `@回复` 后换行输入正文；转发请使用 `@转发 目标邮箱`，下一行可选填附言；查看原文、确认、取消和召回须分别单独发送 `@原文`、`@确认发送`、`@取消`、`@召回`。",
             _receipt_key(context, "mail-command-invalid"),
         )
     return None
