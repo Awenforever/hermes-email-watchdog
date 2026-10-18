@@ -1,3 +1,7 @@
+## 0.13.4
+
+- Support Hermes 0.22 (requires_hermes >=0.22,<0.23).
+
 ## Unreleased
 
 - Support Hermes 0.22 (requires_hermes >=0.22,<0.23).
