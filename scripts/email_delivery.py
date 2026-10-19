@@ -38,7 +38,7 @@ TRUST_DOWNLOAD_TLDS = (".edu.cn", ".ac.cn", ".gov.cn", ".com", ".org", ".net", "
 SUSPICIOUS_TLDS = (".tk", ".ml", ".ga", ".cf", ".gq", ".xyz", ".top", ".club")
 
 
-def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict) -> dict:
+def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict, semantic: dict = None) -> dict:
     """Apply delivery decision and side effects. Returns notification payload."""
     analysis = analysis or {}
     if analysis.get("should_notify") is False:
@@ -49,7 +49,7 @@ def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict)
     schedule = upsert_schedule(email, analysis)
     cron_entries = install_reminder_cron(schedule)
     text = format_notification(email, analysis, attachments, schedule)
-    text = append_interaction_guidance(text, schedule)
+    text = append_interaction_guidance(text, schedule, _compute_replyable(email, account, semantic))
     _persist_delivery(email, analysis, text, "pushed")
     return {
         "notification_text": text,
@@ -60,14 +60,72 @@ def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict)
     }
 
 
-def append_interaction_guidance(text: str, schedule: list) -> str:
-    """Offer user-controlled actions; never create reminders merely from mail content."""
+NO_REPLY_RE = re.compile(r"(?i)(?:^|[._+-])(no-?reply|do-?not-?reply|mailer-daemon|bounce)(?:@|[._+-])")
+_REPLY_BLOCKED_RISK = {"high", "critical", "高", "严重"}
+_REPLY_BLOCKED_CATEGORIES = {
+    "verification_code", "security_alert", "newsletter_marketing",
+    "system_notification", "receipt_invoice", "automated_notification",
+}
+
+
+def reply_block_reason(sender, risk_label="", category="", account_type="himalaya") -> str:
+    """Why the WeChat reply gate would block this message, or "" when it would succeed.
+
+    Shared by the interaction hint and the action layer so the advertised
+    ``@回复`` can never disagree with the enforced gate.
+    """
+    sender = str(sender or "").strip()
+    if not sender or NO_REPLY_RE.search(sender):
+        return "该邮件来自不可回复或自动发送地址，已阻止创建回复。"
+    if str(risk_label or "").lower() in _REPLY_BLOCKED_RISK:
+        return "该邮件被标记为高风险，已阻止从微信发起回复。"
+    if str(category or "").lower() in _REPLY_BLOCKED_CATEGORIES:
+        return "该邮件属于自动通知，默认不允许直接回复。"
+    if str(account_type or "").lower() != "himalaya":
+        return "该邮箱当前没有可验证的回复发送通道；请先在 Email Watchdog 中配置该账户的发信能力。"
+    return ""
+
+
+def _compute_replyable(email, account=None, semantic=None) -> bool:
+    """Mirror email_watch._record_output_action's field derivation exactly.
+
+    ``risk``/``category`` come from the delivery result's ``semantic`` sub-object
+    just as the action layer reads them, falling back to ``email.rule_category``.
+    Identical derivation keeps the ``@回复`` hint consistent with the reply gate
+    on every route (production happy path, route-disabled, and legacy fallback).
+    """
+    email = email or {}
+    account = account or {}
+    sender = str(email.get("from_addr") or email.get("from_email") or "").strip()
+    account_type = str(account.get("type") or "").strip()
+    risk_label = ""
+    category = ""
+    if isinstance(semantic, dict):
+        risk = semantic.get("risk") if isinstance(semantic.get("risk"), dict) else {}
+        decision = semantic.get("decision") if isinstance(semantic.get("decision"), dict) else {}
+        classification = decision.get("classification") if isinstance(decision.get("classification"), dict) else {}
+        risk_label = str(risk.get("level") or "")
+        category = str(classification.get("category") or "")
+    if not category:
+        category = str(email.get("rule_category") or "")
+    return not reply_block_reason(sender, risk_label, category, account_type)
+
+
+def append_interaction_guidance(text: str, schedule: list, replyable: bool = True) -> str:
+    """Offer only actions that would succeed: ``@提醒`` iff schedulable deadlines
+    exist, ``@回复`` iff replyable; ``@转发``/``@原文`` always. Never creates
+    reminders merely from mail content.
+    """
     candidates = [item for item in (schedule or []) if isinstance(item, dict) and item.get("deadline")]
-    reminder = "`@提醒 1,2`" if len(candidates) > 1 else "`@提醒`"
-    guidance = (
-        f"> 引用本消息并：{reminder}以设置自动提醒 ｜ `@回复` 换行写正文 ｜ "
-        "`@转发 目标邮箱` 换行可附言 ｜ `@原文` 查看原文"
-    )
+    segments = []
+    if candidates:
+        reminder = "`@提醒 1,2`" if len(candidates) > 1 else "`@提醒`"
+        segments.append(f"{reminder}以设置自动提醒")
+    if replyable:
+        segments.append("`@回复` 换行写正文")
+    segments.append("`@转发 目标邮箱` 换行可附言")
+    segments.append("`@原文` 查看原文")
+    guidance = "> 引用本消息并：" + " ｜ ".join(segments)
     return (str(text or "").rstrip() + "\n\n" + guidance).strip()
 
 
@@ -541,13 +599,6 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
         cfg = account.get("himalaya_config") or account.get("config")
         if cfg:
             saved_paths = _download_himalaya_with_retry(cfg, _transport_uid(email), save_dir)
-    elif account.get("type") == "agently":
-        for att in attachments:
-            aid = att.get("attachment_id") or att.get("id")
-            if aid:
-                path = _download_agently(_transport_uid(email), aid, save_dir)
-                if path:
-                    saved_paths.append(path)
 
     saved_paths = [_normalize_extensionless_attachment(path) for path in saved_paths]
     result = []
@@ -1385,20 +1436,6 @@ def _download_himalaya_from_raw_message(config_path, msg_id, save_dir):
             os.replace(stage, target)
             saved.append(str(target))
         return sorted(dict.fromkeys(saved))
-
-def _download_agently(msg_id, att_id, save_dir):
-    cmd = ["agently-cli", "attachment", "+download", "--msg", str(msg_id), "--att", str(att_id), "--output", save_dir]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except Exception:
-        return None
-    if result.returncode != 0:
-        return None
-    try:
-        data = json.loads(result.stdout)
-        return data.get("data", {}).get("saved_to")
-    except Exception:
-        return None
 
 
 def _snapshot(path):
@@ -2256,7 +2293,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
             text = str(renderer_meta.get("text") or "").strip()
             if not renderer_meta.get("ok") or not text:
                 raise RuntimeError("semantic renderers returned empty or invalid text")
-            text = append_interaction_guidance(text, schedule)
+            text = append_interaction_guidance(text, schedule, _compute_replyable(email, account, semantic_meta))
             renderer_meta["text"] = text
 
             try:
@@ -2295,7 +2332,8 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
             # reminder and persistence behavior without running a second semantic
             # observation or producing a second notification candidate.
             result = _ew_v4_original_deliver_email(
-                email or {}, rule_result or {}, fallback_analysis, account or {}
+                email or {}, rule_result or {}, fallback_analysis, account or {},
+                semantic=semantic_meta,
             )
             result = dict(result or {})
             result.update({

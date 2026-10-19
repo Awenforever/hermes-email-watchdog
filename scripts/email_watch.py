@@ -830,32 +830,6 @@ def read_himalaya(config_path, msg_id, account=None):
         return data
     return {"text": _extract_message_body(data)}
 
-def list_agently():
-    cmd = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(LOOKBACK)]
-    out, rc = run(cmd, timeout=30)
-    if rc != 0:
-        return []
-    try:
-        data = json.loads(out)
-        if data.get("ok") and data.get("data", {}).get("data"):
-            return data["data"]["data"]
-    except json.JSONDecodeError:
-        pass
-    return []
-
-def read_agently(msg_id):
-    cmd = ["agently-cli", "message", "+read", "--id", str(msg_id)]
-    out, rc = run(cmd, timeout=30)
-    if rc != 0:
-        return None
-    try:
-        data = json.loads(out)
-        if data.get("ok"):
-            return data["data"]
-    except json.JSONDecodeError:
-        pass
-    return None
-
 
 # ── Attachment downloading ──────────────────────────────────────
 
@@ -885,17 +859,6 @@ def download_himalaya_attachments(config_path, msg_id, save_dir):
         if os.path.isfile(fp):
             saved.append(fp)
     return saved
-
-def download_agently_attachment(msg_id, att_id, save_dir):
-    cmd = ["agently-cli", "attachment", "+download", "--msg", str(msg_id), "--att", str(att_id), "--output", save_dir]
-    out, rc = run(cmd, timeout=60)
-    if rc != 0:
-        return None
-    try:
-        data = json.loads(out)
-        return data.get("data", {}).get("saved_to")
-    except:
-        return None
 
 
 # ── Classification ──────────────────────────────────────────────
@@ -1355,17 +1318,14 @@ def check_account(acct, pushed_count=None):
     acct_domain = acct_email.lower().split("@", 1)[1] if "@" in acct_email.lower() else ""
     account_domain_shared = bool(acct_domain and acct_domain in _ambiguous_mail_domains())
 
-    if acct["type"] == "himalaya":
-        hconfig = acct.get("himalaya_config") or acct.get("config")
-        acct_alias = str(acct.get("himalaya_account") or "").strip()
-        if not acct_alias and hconfig:
-            try:
-                acct_alias = email_config._himalaya_aliases(hconfig)[1]
-            except Exception:
-                acct_alias = ""
-        envelopes = list_himalaya(hconfig, account=acct_alias)
-    else:
-        envelopes = list_agently()
+    hconfig = acct.get("himalaya_config") or acct.get("config")
+    acct_alias = str(acct.get("himalaya_account") or "").strip()
+    if not acct_alias and hconfig:
+        try:
+            acct_alias = email_config._himalaya_aliases(hconfig)[1]
+        except Exception:
+            acct_alias = ""
+    envelopes = list_himalaya(hconfig, account=acct_alias)
 
     if not envelopes:
         return alerts
@@ -1386,45 +1346,31 @@ def check_account(acct, pushed_count=None):
         if key in seen:
             continue
 
-        if acct["type"] == "himalaya":
-            msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
-        else:
-            msg = read_agently(msg_id)
+        msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
 
         if msg is None:
             seen[key] = True
             updated = True
             continue
 
-        if acct["type"] == "himalaya":
-            body = _extract_message_body(msg)
-            from_addr = email_identity.address_from(env.get("from"))
-            from_name = email_identity.name_from(env.get("from"))
-            subject = env.get("subject", "")
-            has_attachments = bool(
-                env.get("has_attachment", False)
-                or env.get("has_attachments", False)
-                or (msg.get("has_attachment") if isinstance(msg, dict) else False)
-                or (msg.get("has_attachments") if isinstance(msg, dict) else False)
-            )
-            to_addr = env.get("to", {}).get("addr", "") if isinstance(env.get("to"), dict) else ""
-            attachments = (
-                env.get("attachments")
-                or (msg.get("attachments") if isinstance(msg, dict) else None)
-                or (msg.get("attachment_list") if isinstance(msg, dict) else None)
-                or []
-            )
-            links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
-        else:
-            body = msg.get("body", "") if isinstance(msg, dict) else ""
-            from_addr = email_identity.address_from(env.get("from"))
-            from_name = email_identity.name_from(env.get("from"))
-            subject = env.get("subject", "")
-            has_attachments = env.get("has_attachments", False)
-            to_list = env.get("to") or [{}]
-            to_addr = to_list[0].get("email", "") if to_list else ""
-            attachments = env.get("attachments", [])
-            links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
+        body = _extract_message_body(msg)
+        from_addr = email_identity.address_from(env.get("from"))
+        from_name = email_identity.name_from(env.get("from"))
+        subject = env.get("subject", "")
+        has_attachments = bool(
+            env.get("has_attachment", False)
+            or env.get("has_attachments", False)
+            or (msg.get("has_attachment") if isinstance(msg, dict) else False)
+            or (msg.get("has_attachments") if isinstance(msg, dict) else False)
+        )
+        to_addr = env.get("to", {}).get("addr", "") if isinstance(env.get("to"), dict) else ""
+        attachments = (
+            env.get("attachments")
+            or (msg.get("attachments") if isinstance(msg, dict) else None)
+            or (msg.get("attachment_list") if isinstance(msg, dict) else None)
+            or []
+        )
+        links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
 
         scan_time = datetime.now(timezone.utc).isoformat()
         message_sent = msg.get("date_sent", "") if isinstance(msg, dict) else ""

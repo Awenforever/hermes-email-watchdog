@@ -157,7 +157,9 @@ class EmailQuoteActionTests(unittest.TestCase):
 
     def test_interaction_guidance_is_one_quote_block_without_divider(self):
         rendered = email_delivery.append_interaction_guidance("正文", [])
-        self.assertIn("> 引用本消息并：`@提醒`以设置自动提醒 ｜ `@回复` 换行写正文 ｜ `@转发 目标邮箱` 换行可附言 ｜ `@原文` 查看原文", rendered)
+        # Empty schedule -> no @提醒 segment; replyable defaults True -> @回复 kept.
+        self.assertIn("> 引用本消息并：`@回复` 换行写正文 ｜ `@转发 目标邮箱` 换行可附言 ｜ `@原文` 查看原文", rendered)
+        self.assertNotIn("@提醒", rendered)
         self.assertNotIn("如需回复邮件，请引用本消息", rendered)
         self.assertNotIn("\n---\n", rendered)
 

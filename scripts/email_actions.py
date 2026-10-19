@@ -28,7 +28,6 @@ STATE_ROOT = Path(os.getenv("HERMES_EMAIL_WATCHDOG_STATE_ROOT", str(HERMES_HOME 
 OUTBOX_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_FILE", str(STATE_ROOT / "outbox.json")))
 ACTION_FILE = STATE_ROOT / "mail-actions.json"
 _FOOTER_RE = re.compile(r"\n\s*---\s*\n\s*`\d+`\s+`[^`]+`\s*$", re.S)
-_NO_REPLY_RE = re.compile(r"(?i)(?:^|[._+-])(no-?reply|do-?not-?reply|mailer-daemon|bounce)(?:@|[._+-])")
 _THREAD_LOCKS = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 
@@ -285,19 +284,12 @@ def _render_reply_mml(body: str, signature: str) -> str:
 
 
 def _reply_block_reason(action: dict) -> str:
-    sender = str(action.get("from_addr") or "").strip()
-    if not sender or _NO_REPLY_RE.search(sender):
-        return "该邮件来自不可回复或自动发送地址，已阻止创建回复。"
-    if str(action.get("risk_label") or "").lower() in {"high", "critical", "高", "严重"}:
-        return "该邮件被标记为高风险，已阻止从微信发起回复。"
-    if str(action.get("category") or "").lower() in {
-        "verification_code", "security_alert", "newsletter_marketing",
-        "system_notification", "receipt_invoice", "automated_notification",
-    }:
-        return "该邮件属于自动通知，默认不允许直接回复。"
-    if str(action.get("account_type") or "").lower() != "himalaya":
-        return "该邮箱当前没有可验证的回复发送通道；请先在 Email Watchdog 中配置该账户的发信能力。"
-    return ""
+    return email_delivery.reply_block_reason(
+        action.get("from_addr"),
+        action.get("risk_label"),
+        action.get("category"),
+        action.get("account_type"),
+    )
 
 
 def _valid_single_recipient(value: str) -> str:

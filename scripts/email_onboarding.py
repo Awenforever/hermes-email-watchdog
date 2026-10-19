@@ -1642,17 +1642,6 @@ def _baseline_account_envelopes(account: dict[str, Any], lookback: int) -> list[
         except json.JSONDecodeError as exc:
             raise OnboardingError("mailbox baseline response was not JSON") from exc
 
-    if account.get("type") == "agently":
-        command = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(lookback)]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
-        if completed.returncode != 0:
-            raise OnboardingError("cannot initialize Agently mailbox baseline")
-        try:
-            payload = json.loads((completed.stdout or "{}").strip() or "{}")
-        except json.JSONDecodeError as exc:
-            raise OnboardingError("Agently mailbox baseline response was not JSON") from exc
-        return _unwrap_envelope_list(payload)
-
     raise OnboardingError("cannot initialize baseline for unsupported account type")
 
 
