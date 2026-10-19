@@ -153,10 +153,23 @@ DEFAULT_CONFIG = {
 }
 
 
+_UNDEFINED_ENV_VAR = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+
+
 def _expand(value):
-    if isinstance(value, str):
-        return os.path.expandvars(os.path.expanduser(value))
-    return value
+    if not isinstance(value, str):
+        return value
+    expanded = os.path.expandvars(os.path.expanduser(value))
+    # os.path.expandvars leaves an undefined $VAR literal; that token would
+    # otherwise become a real directory name and silently split state across two
+    # roots. Fail loudly so a missing env var surfaces at config load instead.
+    for match in _UNDEFINED_ENV_VAR.finditer(expanded):
+        if match.group(1) not in os.environ:
+            raise ValueError(
+                "path references undefined environment variable "
+                f"${match.group(1)}: {value!r}"
+            )
+    return expanded
 
 
 def _himalaya_aliases(config_path):
