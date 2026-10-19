@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.13.4 - 2026-10-20
+
+- Route every reply and forward through the mailbox that received the original
+  message, and scope stored message keys by account so two mailboxes exposing
+  the same provider id can no longer overwrite each other.
+- Add the `@原文` command: fetch and render the full original email with a
+  WeChat-safe layout, cache-first retrieval, Beijing-time labels, token-safe
+  splitting and a configurable body budget.
+- Support multiple deadlines per email with deterministic enumeration, rename
+  the reminder command to `@提醒` with multi-select, and show full, untruncated
+  schedule titles and per-item task text in cards and reminder tables.
+- Fix reminder activation that previously failed silently, and log due-reminder
+  failures instead of swallowing them.
+- Harden the Himalaya transport: never fall back to a bare no-config invocation
+  on a known account, fail fast on transient IMAP errors, apply a graceful
+  fetch timeout, retry a non-cap blip once, and debounce repeat 检查失败 alerts
+  by consecutive count and cooldown.
+- Restore owed attachment delivery with a transport-uid fix and a bounded
+  download retry.
+- Normalize plugin directory modes to 0755 on every install and upgrade so the
+  runtime user can always read its own source, and fail loudly when a state
+  path references an undefined environment variable instead of silently
+  creating a literal-named directory.
+- Add on-demand, guidance-preserving interaction hints and a smart same-domain
+  mailbox-identity header.
+
 ## 0.13.3 - 2026-10-09
 
 - Anonymize the sender-identity regression fixture so the public package passes
