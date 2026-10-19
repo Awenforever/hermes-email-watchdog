@@ -229,3 +229,67 @@ recall commands record and return their result without inventing state.
 User-facing failures must describe the current action only. Do not expose
 development-history wording such as “the system will not guess the latest
 mail”, internal match fields, or adapter debugging advice.
+
+## 2026-10-20 — Check-failure signalling, installer permissions, and path-resolution invariants
+
+A mailbox check failure is a signal to be shaped, not an event to surface on
+every poll. Failures must be classified before any retry or alert decision.
+Provider connection-cap markers (``too many simultaneous connections``,
+``code: some(alert)``) are throttling: fail fast and never retry, because a
+retry opens another session and deepens the cap. A non-cap transient blip
+(TLS handshake eof, stream error, connection reset, timeout) earns exactly one
+bounded retry of the canonical command after a short backoff — one additional
+session, not a variant sweep. Unknown and configuration/CLI/parse failures keep
+their existing behaviour (fail fast, or fall back to more variants for a
+suspected config error). The retry must never apply to the send path, which
+owns its own stdin contract.
+
+Alerting is debounced, not immediate. A user-visible check-failure card is
+emitted only after N consecutive same-signature failures for that account, and
+is then suppressed by a cooldown. A signature change — a genuinely new failure
+class — bypasses both the consecutive gate and the cooldown so a new outage
+surfaces at once. Success resets the consecutive streak but must not erase the
+cooldown timestamp; clearing the whole entry on success re-arms a flapping
+connection and re-alerts on every fail-after-success. Per-account state is
+independent, and every threshold is environment-tunable rather than a hardcoded
+magic number.
+
+Regression history: an earlier fail-fast hardening removed an incidental
+"try every variant on any failure" loop that had been masking single-poll
+blips, so alert frequency rose; combined with success wiping the cooldown
+entry, a flapping mailbox re-alerted on each cycle. The class-split bounded
+retry plus the consecutive-and-cooldown debounce above is the fix.
+
+The installer must leave the runtime user able to read the plugin. The active
+runtime identity has no supplementary groups, so any directory it must traverse
+has to be world-readable-and-executable. An installer that re-extracts source
+from an archive must normalize directory modes (0755), never preserve the
+developer working tree's restrictive umask modes (e.g. 0770 owned by a foreign
+uid:gid). A 0770 installed directory blocks the runtime user as "other"; the
+per-poll module reload then fails with ``spec not found`` and the scheduler
+stops silently while the container still reports healthy. The state root is the
+security boundary (owner-only, 0700); the code subtree beneath it can and must
+be world-readable. Verify the runtime uid can read the installed source before
+restarting, and treat that check as a mandatory post-install gate — a mode
+normalization applied by hand is not durable across the next archive
+extraction, so the installer itself owns the fix.
+
+Deployment must refresh the active hook, not merely the source tree. The
+gateway loads the hook handler from a dedicated active-hook directory that is
+resolved ahead of the source/skills directory. Copying source into the plugin
+directory updates importable modules but leaves the active handler stale, so
+handler-level fixes never take effect and the install manifest drifts from
+reality. Only the canonical installer refreshes the active handler, rewrites
+the manifest (recording the installed handler digest so staleness is
+detectable), runs the idempotent config migration, and preserves user state.
+Use it for any change to the files that are not on the hot-reload path; a bare
+source copy is acceptable only for hot-reloaded modules and still requires the
+permission gate above.
+
+Path resolution must never fall back to a literal unexpanded variable name.
+When the state-root environment variable is unset, resolution must fail fast or
+use a fully expanded default — never the literal ``$VAR`` text. A literal
+fallback silently creates a parallel junk state tree the moment the runtime
+environment is absent (for example during a bare diagnostic import), and the
+stray database is then mistaken for real state. This is a split-brain hazard,
+not a cosmetic one.
