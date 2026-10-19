@@ -335,6 +335,32 @@ def _classify_himalaya_failure(rc, stdout="", stderr=""):
     return "unknown"
 
 
+# EMAIL_WATCHDOG_HIMALAYA_CONNECTION_CAP_V1
+# Gmail's per-account concurrent IMAP session cap. These markers are a SUBSET of
+# the transient markers, but must be singled out: a cap failure must NEVER be
+# retried (a retry opens yet another session and deepens the cap), whereas other
+# transient blips (TLS handshake eof, stream error, connection reset, timeout) are
+# worth one bounded retry.
+_CAP_FAILURE_MARKERS = (
+    "too many simultaneous connections",
+    "simultaneous connection",
+    "code: some(alert)",
+)
+
+
+def _is_cap_failure(rc, stdout="", stderr=""):
+    """True when the failure is the IMAP server's concurrent-connection cap.
+
+    ``rc == 124`` (our own timeout) is never a cap: a slow-but-alive server is a
+    transient blip worth one retry, while a cap needs back-off, not another
+    session.
+    """
+    if rc == 124:
+        return False
+    blob = ("%s\n%s" % (stdout or "", stderr or "")).lower()
+    return any(marker in blob for marker in _CAP_FAILURE_MARKERS)
+
+
 # EMAIL_WATCHDOG_HIMALAYA_GRACEFUL_TIMEOUT_V1
 def _run_himalaya_subprocess(cmd, timeout, cwd):
     """Run himalaya, letting it close the IMAP session cleanly on timeout.
@@ -585,52 +611,102 @@ def _himalaya_error_snippet(value, limit=500):
     return text
 
 
+# EMAIL_WATCHDOG_HIMALAYA_BOUNDED_TRANSIENT_RETRY_V1
+# One short-backoff retry of the canonical command for a NON-cap transient blip
+# (TLS handshake eof / stream error / connection reset / timeout). This restores
+# the incidental retry that masked blips before fail-fast, but bounded to +1 IMAP
+# session — NOT the old +3 from trying every CLI variant, which is what amplified
+# Gmail's per-account connection cap. Cap-class and unknown failures still fail
+# fast with no retry; config/CLI/parse errors still fall back to other variants.
+_TRANSIENT_RETRY_BACKOFF_SECONDS = float(
+    os.getenv("HERMES_EMAIL_WATCHDOG_TRANSIENT_RETRY_BACKOFF", "2") or "2"
+)
+
+
+def _invoke_himalaya_once(cmd, config_path, args, timeout):
+    """Run one himalaya command.
+
+    Returns ``(attempt, status, parsed, klass, is_cap)`` where status is:
+    ``"ok"`` (parsed valid, including an empty-envelope ``[]``), ``"fail"``
+    (rc != 0 or timeout), ``"parse"`` (rc == 0 but stdout unusable — treated like
+    config so callers may try another variant), or ``"missing"`` (binary absent).
+    """
+    try:
+        rc, stdout, stderr, timed_out = _run_himalaya_subprocess(
+            cmd, timeout, _himalaya_cwd(config_path)
+        )
+    except FileNotFoundError as exc:
+        return {"cmd": cmd[:3], "rc": 127, "error": str(exc)}, "missing", None, "config", False
+
+    attempt = {
+        "cmd": cmd[:3],
+        "rc": 124 if timed_out else rc,
+        "stdout": _himalaya_error_snippet(stdout, 800),
+        "stderr": _himalaya_error_snippet(stderr, 800),
+    }
+    if timed_out:
+        attempt["error"] = f"timeout after {timeout}s"
+
+    if timed_out or rc != 0:
+        eff_rc = 124 if timed_out else rc
+        klass = _classify_himalaya_failure(eff_rc, stdout, stderr)
+        return attempt, "fail", None, klass, _is_cap_failure(eff_rc, stdout, stderr)
+
+    raw = stdout.strip()
+    if not raw:
+        if list(args[:2]) == ["envelope", "list"]:
+            return attempt, "ok", [], "ok", False
+        attempt["parse_error"] = "empty stdout"
+        return attempt, "parse", None, "config", False
+
+    parsed = _json_loads_flexible(stdout)
+    if parsed is not None:
+        return attempt, "ok", parsed, "ok", False
+    attempt["parse_error"] = "stdout was not parseable JSON"
+    return attempt, "parse", None, "config", False
+
+
 def _run_himalaya_json(config_path, args, timeout=30, account=None):
     """Run Himalaya and return parsed JSON. Command/auth failures are explicit.
 
-    Variant fallback is reserved for config/CLI errors. Transport / connection-cap
-    / timeout failures fail fast on the canonical command: retrying a different
-    spelling cannot resolve a server-side cap and only opens additional IMAP
-    sessions, which is what amplifies "Too many simultaneous connections".
+    Variant fallback is reserved for config/CLI/parse errors. Transport failures
+    fail fast on the canonical command, EXCEPT a non-cap transient blip which gets
+    one bounded short-backoff retry (see ``_TRANSIENT_RETRY_BACKOFF_SECONDS``).
+    Retrying a different spelling cannot resolve a server-side cap and only opens
+    additional IMAP sessions, which is what amplifies "Too many simultaneous
+    connections".
     """
     attempts = []
-    for cmd in _himalaya_cmd_variants(config_path, args, account=account):
-        try:
-            rc, stdout, stderr, timed_out = _run_himalaya_subprocess(
-                cmd, timeout, _himalaya_cwd(config_path)
-            )
-        except FileNotFoundError as exc:
-            attempts.append({"cmd": cmd[:3], "rc": 127, "error": str(exc)})
-            continue
-        attempt = {
-            "cmd": cmd[:3],
-            "rc": 124 if timed_out else rc,
-            "stdout": _himalaya_error_snippet(stdout, 800),
-            "stderr": _himalaya_error_snippet(stderr, 800),
-        }
-        if timed_out:
-            attempt["error"] = f"timeout after {timeout}s"
+    variants = _himalaya_cmd_variants(config_path, args, account=account)
+    for index, cmd in enumerate(variants):
+        attempt, status, parsed, klass, is_cap = _invoke_himalaya_once(
+            cmd, config_path, args, timeout
+        )
         attempts.append(attempt)
 
-        if timed_out or rc != 0:
-            # Fail fast unless this is a config/CLI error that a fallback variant
-            # could actually fix.
-            if _classify_himalaya_failure(124 if timed_out else rc, stdout, stderr) != "config":
-                raise HimalayaCommandError(args, attempts)
-            continue
-
-        raw = stdout.strip()
-        if not raw:
-            if list(args[:2]) == ["envelope", "list"]:
-                return []
-            attempts[-1]["parse_error"] = "empty stdout"
-            continue
-
-        parsed = _json_loads_flexible(stdout)
-        if parsed is not None:
+        if status == "ok":
             return parsed
 
-        attempts[-1]["parse_error"] = "stdout was not parseable JSON"
+        if status in ("parse", "missing") or klass == "config":
+            # A different variant spelling may resolve a CLI/config/parse issue.
+            continue
+
+        # Non-config failure (transient or unknown). Only the canonical command's
+        # non-cap transient blip earns the single bounded retry.
+        if (
+            index == 0
+            and klass == "transient"
+            and not is_cap
+            and _TRANSIENT_RETRY_BACKOFF_SECONDS > 0
+        ):
+            time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+            r_attempt, r_status, r_parsed, _r_klass, _r_cap = _invoke_himalaya_once(
+                cmd, config_path, args, timeout
+            )
+            attempts.append(r_attempt)
+            if r_status == "ok":
+                return r_parsed
+        raise HimalayaCommandError(args, attempts)
 
     raise HimalayaCommandError(args, attempts)
 
@@ -1564,15 +1640,25 @@ def _due_reminder_alerts() -> list:
         return []
 
 
-# EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN_V1
+# EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN_V2
 # The gateway reloads this module on EVERY poll (importlib.reload), so module
-# level state cannot carry a cooldown across polls. Persist the last-emitted
-# failure signature per account in the plugin state dir instead; it survives both
-# reloads and restarts. This stops the identical "### ⚠️ <acct> 检查失败" card from
-# being re-sent every poll interval (#130) while still surfacing a genuinely new
-# failure class or a fresh outage after recovery.
+# level state cannot carry a cooldown across polls. Persist the per-account streak
+# + last-emitted failure signature in the plugin state dir instead; it survives both
+# reloads and restarts. V2 adds a consecutive-failure DEBOUNCE: a single blip that
+# recovers next poll stays silent, and success resets only the streak (not the
+# cooldown memory), so a flapping account no longer re-alerts on every fail-after-
+# success (#130 + the 2026-10-19 alert-frequency regression). A genuinely new
+# failure class still surfaces at once.
 _CHECK_FAILURE_COOLDOWN_SECONDS = int(
     os.getenv("HERMES_EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN", "900") or "900"
+)
+
+# Consecutive failures of the SAME account required before a 检查失败 card is
+# emitted. At the 45s poll cadence, N=3 means an outage must persist ~2min before
+# alerting, so a single dropped TLS handshake that recovers on the next poll stays
+# silent. Set to 1 to alert on the first failure (pre-debounce behaviour).
+_CHECK_FAILURE_MIN_CONSECUTIVE = int(
+    os.getenv("HERMES_EMAIL_WATCHDOG_CHECK_FAILURE_MIN_CONSECUTIVE", "3") or "3"
 )
 
 
@@ -1615,36 +1701,70 @@ def _failure_signature(exc):
 
 
 def _should_emit_check_failure(name, exc):
-    """Rate-limit the 检查失败 card per account + failure class.
+    """Debounce + rate-limit the 检查失败 card per account.
 
-    Returns True when this failure should surface now (first occurrence, a new
-    failure class, or the cooldown has elapsed); False to suppress a repeat that
-    would otherwise spam the same card every poll interval.
+    Emits only after ``_CHECK_FAILURE_MIN_CONSECUTIVE`` consecutive failures of the
+    same account, then caps repeats by the cooldown window. A single transient blip
+    that recovers on the next poll no longer surfaces a card — the pre-debounce
+    behaviour re-alerted on every fail-after-success because success wiped the whole
+    cooldown entry. A genuinely different failure class bypasses both the streak
+    threshold and the cooldown so a new problem surfaces at once.
+
+    The persisted per-account entry carries ``consecutive`` (streak length),
+    ``signature`` (class of the last EMITTED alert) and ``ts`` (when it was
+    emitted). Returns True when this failure should surface now.
     """
-    if _CHECK_FAILURE_COOLDOWN_SECONDS <= 0:
-        return True
     sig = _failure_signature(exc)
     state = _load_check_failure_state()
     now = time.time()
-    last = state.get(name)
-    if isinstance(last, dict) and last.get("signature") == sig:
-        try:
-            last_ts = float(last.get("ts") or 0)
-        except Exception:
-            last_ts = 0.0
-        if now - last_ts < _CHECK_FAILURE_COOLDOWN_SECONDS:
-            return False
-    state[name] = {"signature": sig, "ts": now}
+    entry = state.get(name)
+    if not isinstance(entry, dict):
+        entry = {}
+    try:
+        consecutive = int(entry.get("consecutive", 0) or 0) + 1
+    except Exception:
+        consecutive = 1
+    entry["consecutive"] = consecutive
+
+    prev_sig = entry.get("signature")
+    try:
+        prev_ts = float(entry.get("ts") or 0)
+    except Exception:
+        prev_ts = 0.0
+
+    signature_changed = prev_sig is not None and prev_sig != sig
+
+    emit = False
+    if signature_changed:
+        emit = True
+    elif _CHECK_FAILURE_MIN_CONSECUTIVE <= 1 or consecutive >= _CHECK_FAILURE_MIN_CONSECUTIVE:
+        if (
+            _CHECK_FAILURE_COOLDOWN_SECONDS <= 0
+            or prev_ts == 0
+            or (now - prev_ts) >= _CHECK_FAILURE_COOLDOWN_SECONDS
+        ):
+            emit = True
+
+    if emit:
+        entry["signature"] = sig
+        entry["ts"] = now
+    state[name] = entry
     _save_check_failure_state(state)
-    return True
+    return emit
 
 
-def _clear_check_failure(name):
-    """Drop the cooldown entry on success so the NEXT outage surfaces at once."""
+def _note_check_success(name):
+    """Reset the consecutive-failure streak on success WITHOUT wiping the cooldown
+    memory (signature/ts). Wiping the whole entry — the previous behaviour — let a
+    flapping account (fail -> ok -> fail) re-arm and re-alert on every blip. Keeping
+    ts means the cooldown still caps repeat alerts across a flap; only the streak
+    counter resets, so a fresh outage must again prove N consecutive failures."""
     try:
         state = _load_check_failure_state()
-        if name in state:
-            state.pop(name, None)
+        entry = state.get(name)
+        if isinstance(entry, dict) and int(entry.get("consecutive", 0) or 0) != 0:
+            entry["consecutive"] = 0
+            state[name] = entry
             _save_check_failure_state(state)
     except Exception:
         pass
@@ -1667,7 +1787,7 @@ def main():
             if acct_alerts:
                 all_alerts.extend(acct_alerts)
                 accounts_seen.add(name)
-            _clear_check_failure(name)
+            _note_check_success(name)
         except Exception as e:
             if _should_emit_check_failure(name, e):
                 all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")

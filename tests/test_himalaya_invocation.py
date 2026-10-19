@@ -142,8 +142,9 @@ class CheckFailureRegressionTests(unittest.TestCase):
     never attempt the bare wizard-triggering variant and (2) surface the real
     error, not a wizard prompt error."""
 
+    @patch("email_watch.time.sleep")
     @patch("email_watch._run_himalaya_subprocess")
-    def test_failed_check_surfaces_real_error_and_never_runs_bare_variant(self, mock_run):
+    def test_failed_check_surfaces_real_error_and_never_runs_bare_variant(self, mock_run, _mock_sleep):
         mock_run.return_value = (1, "", "network unreachable", False)
         with self.assertRaises(email_watch.HimalayaCommandError) as ctx:
             email_watch._run_himalaya_json(
