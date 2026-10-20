@@ -94,9 +94,37 @@ class ReplyBlockReasonTests(unittest.TestCase):
             self.assertTrue(email_delivery.reply_block_reason("person@example.com", risk, "", "himalaya"))
 
     def test_auto_category_blocked(self):
-        for cat in ("verification_code", "security_alert", "newsletter_marketing",
-                    "system_notification", "receipt_invoice", "automated_notification"):
-            self.assertTrue(email_delivery.reply_block_reason("person@example.com", "", cat, "himalaya"))
+        # Canonical automated/notification categories from
+        # email_semantic_schema.CATEGORIES must all be non-replyable.
+        for cat in ("verification_code", "account_security", "account_status_notice",
+                    "invoice_receipt", "health_check_notice", "system_automation_notice",
+                    "newsletter_marketing", "delivery_logistics", "data_download_order_notice",
+                    "academic_report_digest", "academic_alert_digest"):
+            self.assertTrue(email_delivery.reply_block_reason("person@example.com", "", cat, "himalaya"),
+                            msg="expected block for category=%r" % cat)
+
+    def test_human_categories_replyable(self):
+        # Human-correspondence categories must NOT be over-blocked.
+        for cat in ("personal_or_general", "research_feedback_thread",
+                    "paper_manuscript_feedback", "meeting_event", "task_deadline",
+                    "school_notice", "academic_opportunity_call", "unknown_needs_llm"):
+            self.assertEqual("", email_delivery.reply_block_reason("person@example.com", "low", cat, "himalaya"),
+                             msg="expected replyable for category=%r" % cat)
+
+    def test_system_automation_notice_push_card_omits_reply(self):
+        # Reported defect: a GitHub CI notification (system_automation_notice) from a
+        # plain notifications@ address must NOT advertise @回复.
+        replyable = email_delivery._compute_replyable(
+            {"from_addr": "notifications@github.com", "rule_category": ""},
+            {"type": "himalaya"},
+            {"risk": {"level": "low"},
+             "decision": {"classification": {"category": "system_automation_notice"}}},
+        )
+        self.assertFalse(replyable)
+        hint = _hint([], replyable)
+        self.assertNotIn("@回复", hint)
+        self.assertIn("`@转发 目标邮箱` 换行可附言", hint)
+        self.assertIn("`@原文` 查看原文", hint)
 
     def test_non_himalaya_blocked(self):
         for acct in ("agently", "", "imap"):

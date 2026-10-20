@@ -63,8 +63,12 @@ def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict,
 NO_REPLY_RE = re.compile(r"(?i)(?:^|[._+-])(no-?reply|do-?not-?reply|mailer-daemon|bounce)(?:@|[._+-])")
 _REPLY_BLOCKED_RISK = {"high", "critical", "高", "严重"}
 _REPLY_BLOCKED_CATEGORIES = {
-    "verification_code", "security_alert", "newsletter_marketing",
-    "system_notification", "receipt_invoice", "automated_notification",
+    # Canonical automated/notification categories (email_semantic_schema.CATEGORIES):
+    # their mailbox is unattended, so both the @回复 hint and the reply gate suppress.
+    "verification_code", "account_security", "account_status_notice",
+    "invoice_receipt", "health_check_notice", "system_automation_notice",
+    "newsletter_marketing", "delivery_logistics", "data_download_order_notice",
+    "academic_report_digest", "academic_alert_digest",
 }
 
 
