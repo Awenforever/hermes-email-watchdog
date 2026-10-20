@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.5 - 2026-10-20
+
+- Stop advertising `@回复` on unattended automated/notification mailboxes by
+  keying reply suppression to the canonical notification categories
+  (verification codes, account security/status, invoices, health checks,
+  system automation, newsletters, logistics, data/download notices, and
+  academic report/alert digests). Human correspondence such as school notices
+  and academic opportunity calls stays replyable.
+- Fix the runtime/template parity check so it passes whether or not
+  HERMES_HOME is set, mirroring the portable default the config module uses.
+
 ## 0.13.4 - 2026-10-20
 
 - Route every reply and forward through the mailbox that received the original
