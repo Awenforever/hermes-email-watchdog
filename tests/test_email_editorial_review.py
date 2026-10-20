@@ -475,6 +475,92 @@ class EditorialReviewTests(unittest.TestCase):
         self.assertIn("[已隐藏]", text)
         self.assertIn("RTVk", text)
 
+    def test_body_degenerate_helper_distinguishes_decoration_from_content(self):
+        self.assertEqual(
+            editorial._semantic_body("**发件人** `a@b.test`\n\n**主题** `S`\n\n正文"),
+            "正文",
+        )
+        # An empty body is tolerated: runtime chrome + composer fallback supply it.
+        self.assertFalse(editorial._body_degenerate(""))
+        for degenerate in ("...", "。", "📬", "**邮件摘要**\n...", "**邮件摘要**\n**要点**\n…", "- "):
+            self.assertTrue(editorial._body_degenerate(degenerate), repr(degenerate))
+        for meaningful in (
+            "CNN 有新结果", "123456", "**邮件摘要**\n实际内容",
+            "### 标题\n正文", "### 简报\n…", "### 邮件",
+        ):
+            self.assertFalse(editorial._body_degenerate(meaningful), repr(meaningful))
+
+    def test_degenerate_ellipsis_body_is_rejected(self):
+        email = {"subject": "CNN - 新的结果", "from_addr": "alerts@example.test", "body": "新论文。"}
+        raw = {
+            "publish": True,
+            "markdown": "**发件人** `alerts@example.test`\n\n**主题** `CNN - 新的结果`\n\n...",
+            "selected_links": [], "attachment_intent": "ignore",
+            "live_action": {"required": False, "description": "", "evidence": ""},
+            "temporal": None,
+        }
+        normalized, errors = editorial._normalize_result(raw, email, decision(), [])
+        self.assertIsNone(normalized)
+        self.assertIn("markdown body is degenerate", errors)
+
+    def test_label_only_body_without_prose_is_rejected(self):
+        email = {"subject": "Report", "from_addr": "author@example.test", "body": "报告内容。"}
+        raw = {
+            "publish": True,
+            "markdown": "**发件人** `author@example.test`\n\n**主题** `Report`\n\n**邮件摘要**\n**要点**\n…",
+            "selected_links": [], "attachment_intent": "ignore",
+            "live_action": {"required": False, "description": "", "evidence": ""},
+            "temporal": None,
+        }
+        normalized, errors = editorial._normalize_result(raw, email, decision(), [])
+        self.assertIsNone(normalized)
+        self.assertIn("markdown body is degenerate", errors)
+
+    def test_meaningful_body_is_not_flagged_degenerate(self):
+        email = {"subject": "Report", "from_addr": "author@example.test", "body": "报告内容。"}
+        raw = {
+            "publish": True,
+            "markdown": "**发件人** `author@example.test`\n\n**主题** `Report`\n\n**邮件摘要**\n本报告汇总了三篇新论文。",
+            "selected_links": [], "attachment_intent": "ignore",
+            "live_action": {"required": False, "description": "", "evidence": ""},
+            "temporal": None,
+        }
+        normalized, errors = editorial._normalize_result(raw, email, decision(), [])
+        self.assertIsNotNone(normalized)
+        self.assertEqual(errors, [])
+
+    def test_digit_only_access_code_body_is_preserved(self):
+        email = {"subject": "Your code", "from_addr": "noreply@example.test", "body": "Code 483920."}
+        raw = {
+            "publish": True,
+            "markdown": "**发件人** `noreply@example.test`\n\n**主题** `Your code`\n\n483920",
+            "selected_links": [], "attachment_intent": "ignore",
+            "live_action": {"required": False, "description": "", "evidence": ""},
+            "temporal": None,
+        }
+        normalized, errors = editorial._normalize_result(raw, email, decision(), [])
+        self.assertIsNotNone(normalized)
+        self.assertEqual(errors, [])
+
+    def test_degenerate_body_fails_gate_after_self_correction(self):
+        email = {"subject": "CNN - 新的结果", "from_addr": "alerts@example.test", "body": "新论文。"}
+        calls = []
+        def transport(prompt, settings):
+            calls.append(prompt)
+            return {"parsed": {
+                "publish": True,
+                "markdown": "**发件人** `alerts@example.test`\n\n**主题** `CNN - 新的结果`\n\n...",
+                "selected_links": [], "attachment_intent": "ignore",
+                "live_action": {"required": False, "description": "", "evidence": ""},
+                "temporal": None,
+            }, "model": settings["model"], "metrics": {}}
+        result = editorial.review_notification(
+            email, decision(), "candidate", transport=transport,
+            settings_override={**self.settings(), "fallback_model": ""},
+        )
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("degenerate" in item for item in result["errors"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
