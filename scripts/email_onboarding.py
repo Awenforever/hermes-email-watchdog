@@ -1232,7 +1232,20 @@ def _validate_himalaya_account(account: dict[str, Any]) -> dict[str, Any]:
     if not config_path.is_file():
         return {"passed": False, "error": "himalaya config does not exist", "config": _path_summary(config_path)}
     binary = _himalaya_binary()
-    args = ["envelope", "list", "--page-size", "1", "--output", "json"]
+    base_args = ["envelope", "list", "--page-size", "1", "--output", "json"]
+    alias = str(account.get("himalaya_account") or "").strip()
+    if not alias:
+        try:
+            alias = email_config._himalaya_aliases(str(config_path))[1]
+        except Exception:
+            alias = ""
+    # Probe the specific alias first (catches a wrong/absent default account in
+    # a shared config), then fall back to the config default so a healthy
+    # single-account config still validates.
+    arg_variants = []
+    if alias:
+        arg_variants.append(["envelope", "list", "-a", alias, "--page-size", "1", "--output", "json"])
+    arg_variants.append(base_args)
     attempts: list[dict[str, Any]] = []
     # Himalaya v1.2 treats ':' as a multi-config separator even on Windows,
     # so an absolute path such as C:\... is split at the drive letter and
@@ -1240,36 +1253,38 @@ def _validate_himalaya_account(account: dict[str, Any]) -> dict[str, Any]:
     # only its basename on native Windows.
     config_argument, working_directory = _himalaya_config_context(config_path)
     for flag in ("-c", "--config"):
-        command = [binary, flag, config_argument, *args]
-        try:
-            completed = subprocess.run(
-                command, capture_output=True, text=True, timeout=20, cwd=working_directory
-            )
-            row = {
-                "command": _redact_command(command),
-                "return_code": completed.returncode,
-                "stdout_sha256": hashlib.sha256((completed.stdout or "").encode("utf-8")).hexdigest(),
-                "stderr_excerpt": re.sub(r"\s+", " ", completed.stderr or "").strip()[:240],
-            }
-            attempts.append(row)
-            if completed.returncode == 0:
-                try:
-                    parsed = json.loads((completed.stdout or "[]").strip() or "[]")
-                except Exception:
-                    row["error"] = "stdout was not JSON"
-                    continue
-                return {
-                    "passed": True,
-                    "account_id": account.get("id"),
-                    "config": _path_summary(config_path),
-                    "envelope_list_only": True,
-                    "result_type": type(parsed).__name__,
-                    "attempts": attempts,
+        for args in arg_variants:
+            command = [binary, flag, config_argument, *args]
+            try:
+                completed = subprocess.run(
+                    command, capture_output=True, text=True, timeout=20, cwd=working_directory
+                )
+                row = {
+                    "command": _redact_command(command),
+                    "return_code": completed.returncode,
+                    "stdout_sha256": hashlib.sha256((completed.stdout or "").encode("utf-8")).hexdigest(),
+                    "stderr_excerpt": re.sub(r"\s+", " ", completed.stderr or "").strip()[:240],
                 }
-        except subprocess.TimeoutExpired:
-            attempts.append({"command": _redact_command(command), "return_code": 124, "error": "timeout"})
-        except FileNotFoundError:
-            attempts.append({"command": _redact_command(command), "return_code": 127, "error": "binary not found"})
+                attempts.append(row)
+                if completed.returncode == 0:
+                    try:
+                        parsed = json.loads((completed.stdout or "[]").strip() or "[]")
+                    except Exception:
+                        row["error"] = "stdout was not JSON"
+                        continue
+                    return {
+                        "passed": True,
+                        "account_id": account.get("id"),
+                        "himalaya_account": alias or account.get("himalaya_account") or "",
+                        "config": _path_summary(config_path),
+                        "envelope_list_only": True,
+                        "result_type": type(parsed).__name__,
+                        "attempts": attempts,
+                    }
+            except subprocess.TimeoutExpired:
+                attempts.append({"command": _redact_command(command), "return_code": 124, "error": "timeout"})
+            except FileNotFoundError:
+                attempts.append({"command": _redact_command(command), "return_code": 127, "error": "binary not found"})
     return {
         "passed": False,
         "account_id": account.get("id"),
@@ -1626,17 +1641,6 @@ def _baseline_account_envelopes(account: dict[str, Any], lookback: int) -> list[
             return _unwrap_envelope_list(json.loads((completed.stdout or "[]").strip() or "[]"))
         except json.JSONDecodeError as exc:
             raise OnboardingError("mailbox baseline response was not JSON") from exc
-
-    if account.get("type") == "agently":
-        command = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(lookback)]
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
-        if completed.returncode != 0:
-            raise OnboardingError("cannot initialize Agently mailbox baseline")
-        try:
-            payload = json.loads((completed.stdout or "{}").strip() or "{}")
-        except json.JSONDecodeError as exc:
-            raise OnboardingError("Agently mailbox baseline response was not JSON") from exc
-        return _unwrap_envelope_list(payload)
 
     raise OnboardingError("cannot initialize baseline for unsupported account type")
 

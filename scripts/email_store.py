@@ -152,6 +152,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS schedules (
         id TEXT PRIMARY KEY,
         message_id TEXT NOT NULL,
+        account TEXT,
         title TEXT,
         action_needed TEXT,
         deadline TEXT,
@@ -209,10 +210,82 @@ def _migrate_columns(conn):
         "analysis_json": "TEXT",
         "attachment_policy": "TEXT",
         "delivered_text_hash": "TEXT",
+        "uid": "TEXT",
     }
     for name, sql_type in wanted.items():
         if name not in columns:
             conn.execute(f"ALTER TABLE messages ADD COLUMN {name} {sql_type}")
+    sched_columns = {row[1] for row in conn.execute("PRAGMA table_info(schedules)").fetchall()}
+    if sched_columns:
+        if "account" not in sched_columns:
+            conn.execute("ALTER TABLE schedules ADD COLUMN account TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_schedules_account ON schedules(account)")
+    migrate_message_storage_keys(conn)
+
+
+def migrate_message_storage_keys(conn) -> int:
+    """Namespace legacy ``messages.id`` values by account (Option B storage keys).
+
+    Himalaya envelope ids are per-mailbox UIDs with no cross-account uniqueness
+    guarantee, so two accounts can produce the same numeric id. Historically the
+    raw UID was used directly as the storage primary key, which would silently
+    overwrite the other account's row and cross-wire the FK children
+    (attachments/links/actions/schedules). New ingestion stores
+    ``id = "<account>:<uid>"`` and keeps the raw UID in the ``uid`` column.
+
+    This migrates a pre-existing database to that scheme. It is idempotent
+    (already-scoped rows are skipped), transactional, and fail-safe: if any
+    derived key would collide with an existing id the whole migration is rolled
+    back and nothing is changed. Returns the number of messages rescoped.
+    """
+    rows = conn.execute("SELECT id, account, uid FROM messages").fetchall()
+    existing_ids = {row[0] for row in rows}
+    remap = {}
+    for row in rows:
+        old_id = row[0]
+        account = str(row[1] or "").strip()
+        if not old_id or not account:
+            continue
+        scoped = f"{account}:{old_id}"
+        if old_id == scoped or old_id.startswith(f"{account}:"):
+            continue  # already namespaced
+        if scoped in existing_ids:
+            # A different row already occupies the target key; refuse to guess.
+            return 0
+        remap[old_id] = scoped
+    if not remap:
+        return 0
+    # PRAGMA foreign_keys is a no-op inside a transaction, and Python's sqlite3
+    # opens implicit transactions on DML, so drive this migration in manual
+    # (autocommit) mode with an explicit transaction we fully control.
+    conn.commit()
+    prior_isolation = conn.isolation_level
+    conn.isolation_level = None
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        for old_id, new_id in remap.items():
+            conn.execute(
+                "UPDATE messages SET uid=COALESCE(NULLIF(uid,''), ?), id=? WHERE id=?",
+                (old_id, new_id, old_id),
+            )
+            for child in ("attachments", "links", "actions", "schedules"):
+                conn.execute(
+                    f"UPDATE {child} SET message_id=? WHERE message_id=?",
+                    (new_id, old_id),
+                )
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.isolation_level = prior_isolation
+    return len(remap)
+
 
 
 # ── Message CRUD ────────────────────────────────────────────────
@@ -221,17 +294,26 @@ def upsert_message(data: dict):
     """Insert or update a message. Returns message id."""
     conn = _get_conn()
     msg_id = data["id"]
+    # Persist only real columns; callers may pass transient keys that must not
+    # be mapped to phantom columns.
+    real_cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    fields = {k: v for k, v in data.items() if k in real_cols}
+    fields["id"] = msg_id
     existing = conn.execute("SELECT id FROM messages WHERE id=?", (msg_id,)).fetchone()
-    
+
     if existing:
-        cols = ", ".join(f"{k}=?" for k in data if k != "id")
-        vals = [data[k] for k in data if k != "id"] + [msg_id]
-        conn.execute(f"UPDATE messages SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        set_cols = [k for k in fields if k != "id"]
+        if set_cols:
+            cols = ", ".join(f"{k}=?" for k in set_cols)
+            vals = [fields[k] for k in set_cols] + [msg_id]
+            conn.execute(f"UPDATE messages SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        else:
+            conn.execute("UPDATE messages SET updated_at=datetime('now') WHERE id=?", (msg_id,))
     else:
-        cols = ", ".join(data.keys())
-        placeholders = ", ".join("?" for _ in data)
-        conn.execute(f"INSERT INTO messages ({cols}) VALUES ({placeholders})", list(data.values()))
-    
+        cols = ", ".join(fields.keys())
+        placeholders = ", ".join("?" for _ in fields)
+        conn.execute(f"INSERT INTO messages ({cols}) VALUES ({placeholders})", list(fields.values()))
+
     conn.commit()
     return msg_id
 
@@ -318,15 +400,25 @@ def get_attachments(message_id: str) -> list:
 def upsert_schedule(data: dict):
     conn = _get_conn()
     sched_id = data["id"]
+    # Callers pass richer dicts than the table (e.g. a transient ``reminders``
+    # list). Persist only real columns so an extra key can never become a
+    # phantom-column INSERT/UPDATE error.
+    real_cols = {row[1] for row in conn.execute("PRAGMA table_info(schedules)").fetchall()}
+    fields = {k: v for k, v in data.items() if k in real_cols}
+    fields["id"] = sched_id
     existing = conn.execute("SELECT id FROM schedules WHERE id=?", (sched_id,)).fetchone()
     if existing:
-        cols = ", ".join(f"{k}=?" for k in data if k != "id")
-        vals = [data[k] for k in data if k != "id"] + [sched_id]
-        conn.execute(f"UPDATE schedules SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        set_cols = [k for k in fields if k != "id"]
+        if set_cols:
+            cols = ", ".join(f"{k}=?" for k in set_cols)
+            vals = [fields[k] for k in set_cols] + [sched_id]
+            conn.execute(f"UPDATE schedules SET {cols}, updated_at=datetime('now') WHERE id=?", vals)
+        else:
+            conn.execute("UPDATE schedules SET updated_at=datetime('now') WHERE id=?", (sched_id,))
     else:
-        cols = ", ".join(data.keys())
-        placeholders = ", ".join("?" for _ in data)
-        conn.execute(f"INSERT INTO schedules ({cols}) VALUES ({placeholders})", list(data.values()))
+        cols = ", ".join(fields.keys())
+        placeholders = ", ".join("?" for _ in fields)
+        conn.execute(f"INSERT INTO schedules ({cols}) VALUES ({placeholders})", list(fields.values()))
     conn.commit()
     return sched_id
 

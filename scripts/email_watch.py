@@ -14,6 +14,7 @@ import re
 import subprocess
 import shutil
 import sys
+import time
 import importlib
 from html import unescape
 from email import policy as email_policy
@@ -155,13 +156,21 @@ def _record_output_action(email, account, analysis, delivery, notification_text)
                 "size_bytes": int(item.get("size_bytes") or os.path.getsize(path)),
                 "download_status": str(item.get("download_status") or "downloaded")[:40],
             })
+    _hconfig = str((account or {}).get("himalaya_config") or (account or {}).get("config") or "")
+    _halias = str((account or {}).get("himalaya_account") or "").strip()
+    if not _halias and _hconfig:
+        try:
+            _halias = email_config._himalaya_aliases(_hconfig)[1]
+        except Exception:
+            _halias = ""
     _LAST_OUTPUT_ACTIONS.append({
         "notification_text": str(notification_text),
         "message_id": str((email or {}).get("id") or (email or {}).get("msg_id") or ""),
+        "uid": str((email or {}).get("uid") or ""),
         "account": str((email or {}).get("account") or (account or {}).get("id") or ""),
         "account_type": str((account or {}).get("type") or ""),
-        "himalaya_config": str((account or {}).get("himalaya_config") or (account or {}).get("config") or ""),
-        "himalaya_account": str((account or {}).get("himalaya_account") or ""),
+        "himalaya_config": _hconfig,
+        "himalaya_account": _halias,
         "from_addr": str((email or {}).get("from_addr") or (email or {}).get("from_email") or ""),
         "from_name": str((email or {}).get("from_name") or ""),
         "subject": str((email or {}).get("subject") or ""),
@@ -245,6 +254,152 @@ def run(cmd, timeout=30, cwd=None):
         return "", 124
     except FileNotFoundError:
         return "", 127
+
+
+# EMAIL_WATCHDOG_HIMALAYA_FAILURE_CLASSIFICATION_V1
+# Transport / server-side-cap / timeout signatures. A different CLI spelling of
+# the same himalaya command cannot resolve these, and retrying only opens more
+# IMAP sessions against Gmail's per-account concurrent-connection cap.
+_TRANSIENT_FAILURE_MARKERS = (
+    "too many simultaneous connections",
+    "simultaneous connection",
+    "code: some(alert)",
+    "connection refused",
+    "os error 111",
+    "cannot connect to tcp stream",
+    "cannot connect to tls stream",
+    "cannot connect to imap server",
+    "cannot connect to smtp server",
+    "tls handshake eof",
+    "handshake eof",
+    "peer closed connection",
+    "close_notify",
+    "stream error",
+    "connection reset",
+    "broken pipe",
+    "network is unreachable",
+    "network unreachable",
+    "temporary failure in name resolution",
+    "timed out",
+    "timeout",
+    "try again later",
+    "service unavailable",
+    "eof",
+)
+
+# CLI / config / account / wizard signatures. These MAY succeed under a different
+# variant spelling (long-form flag, with/without -a account), so callers fall back.
+_CONFIG_FAILURE_MARKERS = (
+    "cannot prompt",
+    "not a tty",
+    "input device is not a tty",
+    "unexpected argument",
+    "unrecognized",
+    "unknown argument",
+    "unknown flag",
+    "invalid value",
+    "invalid argument",
+    "account not found",
+    "no account",
+    "missing account",
+    "cannot parse",
+    "parse error",
+    "invalid toml",
+    "configuration error",
+    "no such file or directory",
+    "config",
+)
+
+
+def _classify_himalaya_failure(rc, stdout="", stderr=""):
+    """Classify a himalaya failure as ``transient`` / ``config`` / ``unknown``.
+
+    ``transient`` (transport / connection-cap / timeout / TLS-stream): retrying a
+    different CLI spelling cannot help and only opens more IMAP sessions, so
+    callers MUST fail fast without trying fallback variants. ``config`` (CLI arg /
+    account / wizard / TTY / parse): a different variant may succeed, so callers
+    may fall back. ``unknown``: treated as non-retryable-by-variant (fail fast) to
+    avoid burning connections on an unrecognised error.
+    """
+    if rc == 124:
+        return "transient"
+    blob = ("%s\n%s" % (stdout or "", stderr or "")).lower()
+    if not blob.strip():
+        return "unknown"
+    for marker in _TRANSIENT_FAILURE_MARKERS:
+        if marker in blob:
+            return "transient"
+    for marker in _CONFIG_FAILURE_MARKERS:
+        if marker in blob:
+            return "config"
+    return "unknown"
+
+
+# EMAIL_WATCHDOG_HIMALAYA_CONNECTION_CAP_V1
+# Gmail's per-account concurrent IMAP session cap. These markers are a SUBSET of
+# the transient markers, but must be singled out: a cap failure must NEVER be
+# retried (a retry opens yet another session and deepens the cap), whereas other
+# transient blips (TLS handshake eof, stream error, connection reset, timeout) are
+# worth one bounded retry.
+_CAP_FAILURE_MARKERS = (
+    "too many simultaneous connections",
+    "simultaneous connection",
+    "code: some(alert)",
+)
+
+
+def _is_cap_failure(rc, stdout="", stderr=""):
+    """True when the failure is the IMAP server's concurrent-connection cap.
+
+    ``rc == 124`` (our own timeout) is never a cap: a slow-but-alive server is a
+    transient blip worth one retry, while a cap needs back-off, not another
+    session.
+    """
+    if rc == 124:
+        return False
+    blob = ("%s\n%s" % (stdout or "", stderr or "")).lower()
+    return any(marker in blob for marker in _CAP_FAILURE_MARKERS)
+
+
+# EMAIL_WATCHDOG_HIMALAYA_GRACEFUL_TIMEOUT_V1
+def _run_himalaya_subprocess(cmd, timeout, cwd):
+    """Run himalaya, letting it close the IMAP session cleanly on timeout.
+
+    ``subprocess.run(timeout=...)`` SIGKILLs immediately, so himalaya never sends
+    IMAP LOGOUT and Gmail may keep the half-open session counted against the
+    per-account concurrent-connection cap (a zombie session). Send SIGTERM first,
+    wait a short grace period for a clean logout, then SIGKILL only if it is still
+    alive. Returns ``(returncode, stdout, stderr, timed_out)``.
+    """
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, text=True, cwd=cwd,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return proc.returncode, stdout or "", stderr or "", False
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        stdout, stderr = proc.communicate(timeout=5)
+        return proc.returncode, stdout or "", stderr or "", True
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        stdout, stderr = proc.communicate(timeout=5)
+    except Exception:
+        stdout, stderr = "", ""
+    rc = proc.returncode if proc.returncode is not None else 124
+    return rc, stdout or "", stderr or "", True
+
 
 def load_json(path):
     if os.path.exists(path):
@@ -363,15 +518,47 @@ def _himalaya_config_context(config_path, platform=None):
     return cfg, None
 
 
-def _himalaya_cmd_variants(config_path, args):
+def _account_qualified_args(args, account):
+    """Insert ``-a <account>`` after the leading subcommand words.
+
+    ``-a/--account`` is a per-subcommand option in Himalaya (not global), so it
+    must follow the subcommand tokens. We place it immediately before the first
+    option token (``-*``), or append it when there are none.
+    """
+    args = list(args)
+    account = str(account or "").strip()
+    if not account:
+        return args
+    insert_at = len(args)
+    for idx, token in enumerate(args):
+        if isinstance(token, str) and token.startswith("-"):
+            insert_at = idx
+            break
+    return args[:insert_at] + ["-a", account] + args[insert_at:]
+
+
+def _himalaya_cmd_variants(config_path, args, account=None):
     cfg = os.path.expanduser(config_path or "")
     base = _himalaya_binary()
     variants = []
+    qualified = _account_qualified_args(args, account)
     if cfg:
         config_argument, _ = _himalaya_config_context(cfg)
+        if qualified != list(args):
+            variants.append([base, "-c", config_argument] + qualified)
+            variants.append([base, "--config", config_argument] + qualified)
         variants.append([base, "-c", config_argument] + list(args))
         variants.append([base, "--config", config_argument] + list(args))
-    variants.append([base] + list(args))
+    else:
+        # Only invoke himalaya bare when NO config path is known. With a known
+        # config, a bare call would either select a different default account
+        # (cross-account leak) or — when no default config.toml exists — drop
+        # himalaya into its interactive config wizard, which on a TTY-less daemon
+        # fails as "cannot prompt boolean / The input device is not a TTY" and
+        # masks the real per-account error behind a confusing fallback message.
+        if qualified != list(args):
+            variants.append([base] + qualified)
+        variants.append([base] + list(args))
     unique = []
     seen = set()
     for cmd in variants:
@@ -398,11 +585,20 @@ class HimalayaCommandError(RuntimeError):
     def _format(self):
         if not self.attempts:
             return f"himalaya failed for args={self.cmd_args!r}: no attempts"
-        last = self.attempts[-1]
-        rc = last.get("rc")
-        detail = last.get("stderr") or last.get("stdout") or last.get("error") or last.get("parse_error") or ""
+        # Surface the PRIMARY invocation's error (the account's real config), not
+        # the last fallback. A trailing bare/no-config attempt can fail inside
+        # himalaya's interactive wizard, and its "cannot prompt boolean" message
+        # would otherwise mask the true cause of the account check failure.
+        primary = next(
+            (a for a in self.attempts
+             if (a.get("stderr") or a.get("stdout") or a.get("error") or a.get("parse_error"))),
+            self.attempts[0],
+        )
+        rc = primary.get("rc")
+        detail = primary.get("stderr") or primary.get("stdout") or primary.get("error") or primary.get("parse_error") or ""
         detail = _himalaya_error_snippet(detail)
-        return f"himalaya failed for args={self.cmd_args!r}: rc={rc}; {detail}"
+        tried = f" [{len(self.attempts)} variant(s) tried]" if len(self.attempts) > 1 else ""
+        return f"himalaya failed for args={self.cmd_args!r}: rc={rc}; {detail}{tried}"
 
 
 def _himalaya_error_snippet(value, limit=500):
@@ -415,52 +611,108 @@ def _himalaya_error_snippet(value, limit=500):
     return text
 
 
-def _run_himalaya_json(config_path, args, timeout=30):
-    """Run Himalaya and return parsed JSON. Command/auth failures are explicit."""
+# EMAIL_WATCHDOG_HIMALAYA_BOUNDED_TRANSIENT_RETRY_V1
+# One short-backoff retry of the canonical command for a NON-cap transient blip
+# (TLS handshake eof / stream error / connection reset / timeout). This restores
+# the incidental retry that masked blips before fail-fast, but bounded to +1 IMAP
+# session — NOT the old +3 from trying every CLI variant, which is what amplified
+# Gmail's per-account connection cap. Cap-class and unknown failures still fail
+# fast with no retry; config/CLI/parse errors still fall back to other variants.
+_TRANSIENT_RETRY_BACKOFF_SECONDS = float(
+    os.getenv("HERMES_EMAIL_WATCHDOG_TRANSIENT_RETRY_BACKOFF", "2") or "2"
+)
+
+
+def _invoke_himalaya_once(cmd, config_path, args, timeout):
+    """Run one himalaya command.
+
+    Returns ``(attempt, status, parsed, klass, is_cap)`` where status is:
+    ``"ok"`` (parsed valid, including an empty-envelope ``[]``), ``"fail"``
+    (rc != 0 or timeout), ``"parse"`` (rc == 0 but stdout unusable — treated like
+    config so callers may try another variant), or ``"missing"`` (binary absent).
+    """
+    try:
+        rc, stdout, stderr, timed_out = _run_himalaya_subprocess(
+            cmd, timeout, _himalaya_cwd(config_path)
+        )
+    except FileNotFoundError as exc:
+        return {"cmd": cmd[:3], "rc": 127, "error": str(exc)}, "missing", None, "config", False
+
+    attempt = {
+        "cmd": cmd[:3],
+        "rc": 124 if timed_out else rc,
+        "stdout": _himalaya_error_snippet(stdout, 800),
+        "stderr": _himalaya_error_snippet(stderr, 800),
+    }
+    if timed_out:
+        attempt["error"] = f"timeout after {timeout}s"
+
+    if timed_out or rc != 0:
+        eff_rc = 124 if timed_out else rc
+        klass = _classify_himalaya_failure(eff_rc, stdout, stderr)
+        return attempt, "fail", None, klass, _is_cap_failure(eff_rc, stdout, stderr)
+
+    raw = stdout.strip()
+    if not raw:
+        if list(args[:2]) == ["envelope", "list"]:
+            return attempt, "ok", [], "ok", False
+        attempt["parse_error"] = "empty stdout"
+        return attempt, "parse", None, "config", False
+
+    parsed = _json_loads_flexible(stdout)
+    if parsed is not None:
+        return attempt, "ok", parsed, "ok", False
+    attempt["parse_error"] = "stdout was not parseable JSON"
+    return attempt, "parse", None, "config", False
+
+
+def _run_himalaya_json(config_path, args, timeout=30, account=None):
+    """Run Himalaya and return parsed JSON. Command/auth failures are explicit.
+
+    Variant fallback is reserved for config/CLI/parse errors. Transport failures
+    fail fast on the canonical command, EXCEPT a non-cap transient blip which gets
+    one bounded short-backoff retry (see ``_TRANSIENT_RETRY_BACKOFF_SECONDS``).
+    Retrying a different spelling cannot resolve a server-side cap and only opens
+    additional IMAP sessions, which is what amplifies "Too many simultaneous
+    connections".
+    """
     attempts = []
-    for cmd in _himalaya_cmd_variants(config_path, args):
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout,
-                cwd=_himalaya_cwd(config_path),
-            )
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
-            attempt = {
-                "cmd": cmd[:3],
-                "rc": result.returncode,
-                "stdout": _himalaya_error_snippet(stdout, 800),
-                "stderr": _himalaya_error_snippet(stderr, 800),
-            }
-            attempts.append(attempt)
-        except subprocess.TimeoutExpired:
-            attempts.append({"cmd": cmd[:3], "rc": 124, "error": f"timeout after {timeout}s"})
-            continue
-        except FileNotFoundError as exc:
-            attempts.append({"cmd": cmd[:3], "rc": 127, "error": str(exc)})
-            continue
+    variants = _himalaya_cmd_variants(config_path, args, account=account)
+    for index, cmd in enumerate(variants):
+        attempt, status, parsed, klass, is_cap = _invoke_himalaya_once(
+            cmd, config_path, args, timeout
+        )
+        attempts.append(attempt)
 
-        if result.returncode != 0:
-            continue
-
-        raw = stdout.strip()
-        if not raw:
-            if list(args[:2]) == ["envelope", "list"]:
-                return []
-            attempts[-1]["parse_error"] = "empty stdout"
-            continue
-
-        parsed = _json_loads_flexible(stdout)
-        if parsed is not None:
+        if status == "ok":
             return parsed
 
-        attempts[-1]["parse_error"] = "stdout was not parseable JSON"
+        if status in ("parse", "missing") or klass == "config":
+            # A different variant spelling may resolve a CLI/config/parse issue.
+            continue
+
+        # Non-config failure (transient or unknown). Only the canonical command's
+        # non-cap transient blip earns the single bounded retry.
+        if (
+            index == 0
+            and klass == "transient"
+            and not is_cap
+            and _TRANSIENT_RETRY_BACKOFF_SECONDS > 0
+        ):
+            time.sleep(_TRANSIENT_RETRY_BACKOFF_SECONDS)
+            r_attempt, r_status, r_parsed, _r_klass, _r_cap = _invoke_himalaya_once(
+                cmd, config_path, args, timeout
+            )
+            attempts.append(r_attempt)
+            if r_status == "ok":
+                return r_parsed
+        raise HimalayaCommandError(args, attempts)
 
     raise HimalayaCommandError(args, attempts)
 
 
-def list_himalaya(config_path):
-    data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30)
+def list_himalaya(config_path, account=None):
+    data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30, account=account)
     return _unwrap_himalaya_list(data)
 
 def _html_to_text(value):
@@ -585,23 +837,24 @@ def _parse_exported_message(path):
     }
 
 
-def _export_himalaya_message(config_path, msg_id):
+def _export_himalaya_message(config_path, msg_id, account=None):
     attempts = []
     with tempfile.TemporaryDirectory(prefix="hermes-email-read-") as tmp:
         destination = Path(tmp) / "message.eml"
         args = ["message", "export", str(msg_id), "--full", "--destination", str(destination)]
-        for cmd in _himalaya_cmd_variants(config_path, args):
+        for cmd in _himalaya_cmd_variants(config_path, args, account=account):
             try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=30,
-                    cwd=_himalaya_cwd(config_path),
+                rc, _out, stderr, timed_out = _run_himalaya_subprocess(
+                    cmd, 30, _himalaya_cwd(config_path)
                 )
-            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-                attempts.append({"rc": 124 if isinstance(exc, subprocess.TimeoutExpired) else 127, "error": str(exc)})
+            except FileNotFoundError as exc:
+                attempts.append({"rc": 127, "error": str(exc)})
                 continue
-            attempts.append({"rc": result.returncode, "stderr": _himalaya_error_snippet(result.stderr)})
-            if result.returncode == 0 and destination.is_file():
+            attempts.append({"rc": 124 if timed_out else rc, "stderr": _himalaya_error_snippet(stderr)})
+            if rc == 0 and not timed_out and destination.is_file():
                 return _parse_exported_message(destination)
+            if _classify_himalaya_failure(124 if timed_out else rc, "", stderr) != "config":
+                raise HimalayaCommandError(["message", "export", str(msg_id)], attempts)
     raise HimalayaCommandError(["message", "export", str(msg_id)], attempts)
 
 
@@ -634,15 +887,16 @@ def _extract_message_body(msg):
 
 
 
-def read_himalaya(config_path, msg_id):
+def read_himalaya(config_path, msg_id, account=None):
     try:
-        return _export_himalaya_message(config_path, msg_id)
+        return _export_himalaya_message(config_path, msg_id, account=account)
     except Exception:
         # Preview is essential: a watchdog must never mutate the mailbox's Seen flag.
         data = _run_himalaya_json(
             config_path,
             ["message", "read", str(msg_id), "--preview", "--output", "json"],
             timeout=30,
+            account=account,
         )
     if data is None:
         return None
@@ -652,32 +906,6 @@ def read_himalaya(config_path, msg_id):
         return data
     return {"text": _extract_message_body(data)}
 
-def list_agently():
-    cmd = ["agently-cli", "message", "+list", "--dir", "inbox", "--limit", str(LOOKBACK)]
-    out, rc = run(cmd, timeout=30)
-    if rc != 0:
-        return []
-    try:
-        data = json.loads(out)
-        if data.get("ok") and data.get("data", {}).get("data"):
-            return data["data"]["data"]
-    except json.JSONDecodeError:
-        pass
-    return []
-
-def read_agently(msg_id):
-    cmd = ["agently-cli", "message", "+read", "--id", str(msg_id)]
-    out, rc = run(cmd, timeout=30)
-    if rc != 0:
-        return None
-    try:
-        data = json.loads(out)
-        if data.get("ok"):
-            return data["data"]
-    except json.JSONDecodeError:
-        pass
-    return None
-
 
 # ── Attachment downloading ──────────────────────────────────────
 
@@ -685,11 +913,20 @@ def download_himalaya_attachments(config_path, msg_id, save_dir):
     """Download attachments from a Himalaya message. Returns newly saved paths."""
     before = set(os.listdir(save_dir)) if os.path.isdir(save_dir) else set()
     os.makedirs(save_dir, exist_ok=True)
+    succeeded = False
     for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
-        out, rc = run(cmd, timeout=60, cwd=_himalaya_cwd(config_path))
-        if rc == 0:
+        try:
+            rc, _out, err, timed_out = _run_himalaya_subprocess(cmd, 60, _himalaya_cwd(config_path))
+        except FileNotFoundError:
+            continue
+        if rc == 0 and not timed_out:
+            succeeded = True
             break
-    else:
+        # Transport / cap / timeout: a different spelling cannot help; stop instead
+        # of opening more IMAP sessions. Only config/CLI errors fall back.
+        if _classify_himalaya_failure(124 if timed_out else rc, "", err) != "config":
+            break
+    if not succeeded:
         return []
     after = set(os.listdir(save_dir))
     saved = []
@@ -698,17 +935,6 @@ def download_himalaya_attachments(config_path, msg_id, save_dir):
         if os.path.isfile(fp):
             saved.append(fp)
     return saved
-
-def download_agently_attachment(msg_id, att_id, save_dir):
-    cmd = ["agently-cli", "attachment", "+download", "--msg", str(msg_id), "--att", str(att_id), "--output", save_dir]
-    out, rc = run(cmd, timeout=60)
-    if rc != 0:
-        return None
-    try:
-        data = json.loads(out)
-        return data.get("data", {}).get("saved_to")
-    except:
-        return None
 
 
 # ── Classification ──────────────────────────────────────────────
@@ -1139,16 +1365,43 @@ def _delivery_owns_learning_record(delivery):
     }
 
 
+def _ambiguous_mail_domains():
+    """Mail domains shared by 2+ enabled accounts.
+
+    A bare alias (``Gmail``) cannot tell two same-domain mailboxes apart, so the
+    card adds an explicit 收件邮箱 line only for those accounts. Recomputed from
+    live config; cheap (one read per account check).
+    """
+    from collections import Counter
+    try:
+        accounts = email_config.get_accounts(True)
+    except Exception:
+        accounts = ACCOUNTS if isinstance(globals().get("ACCOUNTS"), list) else []
+    domains = []
+    for entry in accounts or []:
+        addr = str((entry or {}).get("email") or "").strip().lower()
+        if "@" in addr:
+            domains.append(addr.split("@", 1)[1])
+    return {domain for domain, count in Counter(domains).items() if count > 1}
+
+
 # ── Process single account ──────────────────────────────────────
 def check_account(acct, pushed_count=None):
     """Check one account for new emails. Returns list of notification strings."""
     alerts = []
     acct_name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
+    acct_email = str(acct.get("email") or "").strip()
+    acct_domain = acct_email.lower().split("@", 1)[1] if "@" in acct_email.lower() else ""
+    account_domain_shared = bool(acct_domain and acct_domain in _ambiguous_mail_domains())
 
-    if acct["type"] == "himalaya":
-        envelopes = list_himalaya(acct.get("himalaya_config") or acct.get("config"))
-    else:
-        envelopes = list_agently()
+    hconfig = acct.get("himalaya_config") or acct.get("config")
+    acct_alias = str(acct.get("himalaya_account") or "").strip()
+    if not acct_alias and hconfig:
+        try:
+            acct_alias = email_config._himalaya_aliases(hconfig)[1]
+        except Exception:
+            acct_alias = ""
+    envelopes = list_himalaya(hconfig, account=acct_alias)
 
     if not envelopes:
         return alerts
@@ -1160,49 +1413,40 @@ def check_account(acct, pushed_count=None):
     for env in envelopes:
         msg_id = str(env.get("id") or env.get("message_id", ""))
         key = f"{prefix}{msg_id}"
+        # Account-scoped storage identity. Himalaya envelope ids are per-mailbox
+        # UIDs with no cross-account uniqueness guarantee, so the storage primary
+        # key (and every FK child) is namespaced by account. The raw UID is kept
+        # in ``msg_id``/``uid`` because Himalaya transport addresses messages by it.
+        storage_id = key
 
         if key in seen:
             continue
 
-        if acct["type"] == "himalaya":
-            msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id)
-        else:
-            msg = read_agently(msg_id)
+        msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
 
         if msg is None:
             seen[key] = True
             updated = True
             continue
 
-        if acct["type"] == "himalaya":
-            body = _extract_message_body(msg)
-            from_addr = email_identity.address_from(env.get("from"))
-            from_name = email_identity.name_from(env.get("from"))
-            subject = env.get("subject", "")
-            has_attachments = bool(
-                env.get("has_attachment", False)
-                or env.get("has_attachments", False)
-                or (msg.get("has_attachment") if isinstance(msg, dict) else False)
-                or (msg.get("has_attachments") if isinstance(msg, dict) else False)
-            )
-            to_addr = env.get("to", {}).get("addr", "") if isinstance(env.get("to"), dict) else ""
-            attachments = (
-                env.get("attachments")
-                or (msg.get("attachments") if isinstance(msg, dict) else None)
-                or (msg.get("attachment_list") if isinstance(msg, dict) else None)
-                or []
-            )
-            links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
-        else:
-            body = msg.get("body", "") if isinstance(msg, dict) else ""
-            from_addr = email_identity.address_from(env.get("from"))
-            from_name = email_identity.name_from(env.get("from"))
-            subject = env.get("subject", "")
-            has_attachments = env.get("has_attachments", False)
-            to_list = env.get("to") or [{}]
-            to_addr = to_list[0].get("email", "") if to_list else ""
-            attachments = env.get("attachments", [])
-            links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
+        body = _extract_message_body(msg)
+        from_addr = email_identity.address_from(env.get("from"))
+        from_name = email_identity.name_from(env.get("from"))
+        subject = env.get("subject", "")
+        has_attachments = bool(
+            env.get("has_attachment", False)
+            or env.get("has_attachments", False)
+            or (msg.get("has_attachment") if isinstance(msg, dict) else False)
+            or (msg.get("has_attachments") if isinstance(msg, dict) else False)
+        )
+        to_addr = env.get("to", {}).get("addr", "") if isinstance(env.get("to"), dict) else ""
+        attachments = (
+            env.get("attachments")
+            or (msg.get("attachments") if isinstance(msg, dict) else None)
+            or (msg.get("attachment_list") if isinstance(msg, dict) else None)
+            or []
+        )
+        links = (msg.get("links") if isinstance(msg, dict) else None) or _extract_links_from_text(body)
 
         scan_time = datetime.now(timezone.utc).isoformat()
         message_sent = msg.get("date_sent", "") if isinstance(msg, dict) else ""
@@ -1216,7 +1460,8 @@ def check_account(acct, pushed_count=None):
         from_addr_lower = (from_addr or "").lower()
         from_domain = from_addr_lower.split("@", 1)[1] if "@" in from_addr_lower else ""
         email_data = {
-            "id": msg_id, "msg_id": msg_id, "account": acct_name,
+            "id": storage_id, "msg_id": storage_id, "uid": msg_id, "account": acct_name,
+            "account_email": acct_email, "account_domain_shared": account_domain_shared,
             "subject": subject, "from_addr": from_addr, "from_email": from_addr_lower,
             "from_domain": from_domain, "from_name": from_name,
             "body": body[:12000], "to_addr": to_addr,
@@ -1228,7 +1473,7 @@ def check_account(acct, pushed_count=None):
         }
 
         _cache_full_email(
-            acct_name, msg_id, subject, from_addr, from_name, body,
+            acct_name, storage_id, subject, from_addr, from_name, body,
             has_attachments, attachments=attachments, links=links,
             date_sent=date_sent, date_received=date_received, date_seen=scan_time,
         )
@@ -1250,7 +1495,7 @@ def check_account(acct, pushed_count=None):
                 trust_result,
             ) if trust_result.get("label") != "blocked" else {"score": 100, "label": "critical", "flags": ["trust_blocked"]}
             email_store.upsert_message({
-                "id": msg_id, "account": acct_name, "subject": subject, "from_name": from_name,
+                "id": storage_id, "uid": msg_id, "account": acct_name, "subject": subject, "from_name": from_name,
                 "from_email": from_addr_lower, "from_domain": from_domain,
                 "date_sent": date_sent, "date_received": date_received, "date_seen": scan_time,
                 "has_attachment": 1 if has_attachments else 0,
@@ -1263,8 +1508,8 @@ def check_account(acct, pushed_count=None):
                 if not isinstance(link, dict) or not link.get("url"):
                     continue
                 email_store.add_link({
-                    "id": hashlib.sha256(f"{msg_id}:{index}:{link['url']}".encode()).hexdigest()[:24],
-                    "message_id": msg_id,
+                    "id": hashlib.sha256(f"{storage_id}:{index}:{link['url']}".encode()).hexdigest()[:24],
+                    "message_id": storage_id,
                     "url": str(link.get("url"))[:4000],
                     "display_text": str(link.get("display_text") or "")[:500],
                     "domain": re.sub(r"^https?://", "", str(link.get("url")), flags=re.I).split("/", 1)[0][:255],
@@ -1287,7 +1532,7 @@ def check_account(acct, pushed_count=None):
             thread_id = email_thread_tracker.update_thread_on_reply(from_addr, subject, (body or "")[:200])
 
         if HAS_V3:
-            email_store.update_message_fields(msg_id, {
+            email_store.update_message_fields(storage_id, {
                 "rule_category": rule_result.get("category"),
                 "importance": rule_result.get("priority") if rule_result.get("priority") != "skip" else "low",
             })
@@ -1300,7 +1545,7 @@ def check_account(acct, pushed_count=None):
 
         if rule_result.get("action") == "skip" and not production_route_active:
             if HAS_V3:
-                email_store.update_message_fields(msg_id, {"push_status": "skipped"})
+                email_store.update_message_fields(storage_id, {"push_status": "skipped"})
                 try:
                     email_delivery.observe_shadow_only(
                         email_data, rule_result, acct, legacy_reason="legacy_rule_skip"
@@ -1377,14 +1622,157 @@ def check_account(acct, pushed_count=None):
         save_seen(seen)
     return alerts
 
+def _due_reminder_alerts() -> list:
+    """Due reminders for this poll; a collection failure must stay visible.
+
+    Swallowing this exception silently (the previous bare ``except``) stopped
+    every reminder forever with zero trace in the logs.
+    """
+    if not (HAS_V3 and hasattr(email_delivery, "collect_due_reminder_notifications")):
+        return []
+    try:
+        return list(email_delivery.collect_due_reminder_notifications() or [])
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "due-reminder collection failed; no due alerts this poll: %r", exc
+        )
+        return []
+
+
+# EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN_V2
+# The gateway reloads this module on EVERY poll (importlib.reload), so module
+# level state cannot carry a cooldown across polls. Persist the per-account streak
+# + last-emitted failure signature in the plugin state dir instead; it survives both
+# reloads and restarts. V2 adds a consecutive-failure DEBOUNCE: a single blip that
+# recovers next poll stays silent, and success resets only the streak (not the
+# cooldown memory), so a flapping account no longer re-alerts on every fail-after-
+# success (#130 + the 2026-10-19 alert-frequency regression). A genuinely new
+# failure class still surfaces at once.
+_CHECK_FAILURE_COOLDOWN_SECONDS = int(
+    os.getenv("HERMES_EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN", "900") or "900"
+)
+
+# Consecutive failures of the SAME account required before a 检查失败 card is
+# emitted. At the 45s poll cadence, N=3 means an outage must persist ~2min before
+# alerting, so a single dropped TLS handshake that recovers on the next poll stays
+# silent. Set to 1 to alert on the first failure (pre-debounce behaviour).
+_CHECK_FAILURE_MIN_CONSECUTIVE = int(
+    os.getenv("HERMES_EMAIL_WATCHDOG_CHECK_FAILURE_MIN_CONSECUTIVE", "3") or "3"
+)
+
+
+def _check_failure_state_path():
+    return os.path.join(os.path.dirname(os.path.abspath(SEEN_FILE)), "check_failure_cooldown.json")
+
+
+def _load_check_failure_state():
+    try:
+        with open(_check_failure_state_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_check_failure_state(state):
+    try:
+        path = _check_failure_state_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _failure_signature(exc):
+    """Collapse a check failure to a coarse class so varying transport wording
+    (cap / refused / TLS-eof / timeout) maps to ONE signature and stops the
+    per-poll card spam, while a genuinely different failure still surfaces."""
+    text = str(exc or "")
+    m = re.search(r"rc=(-?\d+)", text)
+    rc = int(m.group(1)) if m else 0
+    klass = _classify_himalaya_failure(rc, "", text)
+    if klass in ("transient", "config"):
+        return klass
+    norm = re.sub(r"\d+", "#", text)[:200]
+    return "unknown:" + hashlib.sha256(norm.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _should_emit_check_failure(name, exc):
+    """Debounce + rate-limit the 检查失败 card per account.
+
+    Emits only after ``_CHECK_FAILURE_MIN_CONSECUTIVE`` consecutive failures of the
+    same account, then caps repeats by the cooldown window. A single transient blip
+    that recovers on the next poll no longer surfaces a card — the pre-debounce
+    behaviour re-alerted on every fail-after-success because success wiped the whole
+    cooldown entry. A genuinely different failure class bypasses both the streak
+    threshold and the cooldown so a new problem surfaces at once.
+
+    The persisted per-account entry carries ``consecutive`` (streak length),
+    ``signature`` (class of the last EMITTED alert) and ``ts`` (when it was
+    emitted). Returns True when this failure should surface now.
+    """
+    sig = _failure_signature(exc)
+    state = _load_check_failure_state()
+    now = time.time()
+    entry = state.get(name)
+    if not isinstance(entry, dict):
+        entry = {}
+    try:
+        consecutive = int(entry.get("consecutive", 0) or 0) + 1
+    except Exception:
+        consecutive = 1
+    entry["consecutive"] = consecutive
+
+    prev_sig = entry.get("signature")
+    try:
+        prev_ts = float(entry.get("ts") or 0)
+    except Exception:
+        prev_ts = 0.0
+
+    signature_changed = prev_sig is not None and prev_sig != sig
+
+    emit = False
+    if signature_changed:
+        emit = True
+    elif _CHECK_FAILURE_MIN_CONSECUTIVE <= 1 or consecutive >= _CHECK_FAILURE_MIN_CONSECUTIVE:
+        if (
+            _CHECK_FAILURE_COOLDOWN_SECONDS <= 0
+            or prev_ts == 0
+            or (now - prev_ts) >= _CHECK_FAILURE_COOLDOWN_SECONDS
+        ):
+            emit = True
+
+    if emit:
+        entry["signature"] = sig
+        entry["ts"] = now
+    state[name] = entry
+    _save_check_failure_state(state)
+    return emit
+
+
+def _note_check_success(name):
+    """Reset the consecutive-failure streak on success WITHOUT wiping the cooldown
+    memory (signature/ts). Wiping the whole entry — the previous behaviour — let a
+    flapping account (fail -> ok -> fail) re-arm and re-alert on every blip. Keeping
+    ts means the cooldown still caps repeat alerts across a flap; only the streak
+    counter resets, so a fresh outage must again prove N consecutive failures."""
+    try:
+        state = _load_check_failure_state()
+        entry = state.get(name)
+        if isinstance(entry, dict) and int(entry.get("consecutive", 0) or 0) != 0:
+            entry["consecutive"] = 0
+            state[name] = entry
+            _save_check_failure_state(state)
+    except Exception:
+        pass
+
+
 def main():
     _reset_output_metadata()
-    due_alerts = []
-    if HAS_V3 and hasattr(email_delivery, "collect_due_reminder_notifications"):
-        try:
-            due_alerts = list(email_delivery.collect_due_reminder_notifications() or [])
-        except Exception:
-            due_alerts = []
+    due_alerts = _due_reminder_alerts()
     if is_sleep_time():
         _LAST_OUTPUT_NOTIFICATIONS.extend(str(item) for item in due_alerts if item)
         return "\n\n---\n\n".join(due_alerts)
@@ -1393,14 +1781,16 @@ def main():
     accounts_seen = set()
 
     for acct in ACCOUNTS:
+        name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
         try:
             acct_alerts = check_account(acct)
             if acct_alerts:
                 all_alerts.extend(acct_alerts)
-                accounts_seen.add(acct.get("label") or acct.get("name") or acct.get("id") or "account")
+                accounts_seen.add(name)
+            _note_check_success(name)
         except Exception as e:
-            name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
-            all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
+            if _should_emit_check_failure(name, e):
+                all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
             accounts_seen.add(name)
 
     if not all_alerts:

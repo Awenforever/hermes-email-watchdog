@@ -40,14 +40,14 @@ class EmailQuoteActionTests(unittest.TestCase):
         return {"platform": "weixin", "authorized": True, "user_id": "paired", "message_id": mid, "message": text, "reference": {"present": True, "text": reference or self.notification}}
 
     def test_untrusted_hook_event_is_ignored(self):
-        context = self.context("提醒我")
+        context = self.context("@提醒")
         context.pop("authorized")
         self.assertIsNone(email_actions.handle_inbound(context))
 
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_store.upsert_schedule")
     def test_concurrent_duplicate_action_has_one_state_transition(self, upsert, sync):
-        context = self.context("提醒我", mid="same-inbound")
+        context = self.context("@提醒", mid="same-inbound")
         with ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(lambda _: email_actions.handle_inbound(dict(context)), range(16)))
         self.assertTrue(all(item["decision"] == "handled" for item in results))
@@ -57,8 +57,8 @@ class EmailQuoteActionTests(unittest.TestCase):
     @patch("email_actions.email_delivery._sync_calendar_ics")
     @patch("email_actions.email_store.upsert_schedule")
     def test_exact_remind_me_activates_single_deadline_idempotently(self, upsert, sync):
-        first = email_actions.handle_inbound(self.context("提醒我"))
-        second = email_actions.handle_inbound(self.context("提醒我"))
+        first = email_actions.handle_inbound(self.context("@提醒"))
+        second = email_actions.handle_inbound(self.context("@提醒"))
         self.assertEqual(first["decision"], "handled")
         self.assertIn("已创建", first["message"])
         self.assertEqual(first["message"], second["message"])
@@ -157,8 +157,10 @@ class EmailQuoteActionTests(unittest.TestCase):
 
     def test_interaction_guidance_is_one_quote_block_without_divider(self):
         rendered = email_delivery.append_interaction_guidance("正文", [])
-        self.assertIn("> 如需回复邮件，请引用本消息，发送 `@回复` 后换行输入正文。", rendered)
-        self.assertIn("> 如需转发邮件，请引用本消息，发送 `@转发 收件邮箱`", rendered)
+        # Empty schedule -> no @提醒 segment; replyable defaults True -> @回复 kept.
+        self.assertIn("> 引用本消息并：`@回复` 换行写正文 ｜ `@转发 目标邮箱` 换行可附言 ｜ `@原文` 查看原文", rendered)
+        self.assertNotIn("@提醒", rendered)
+        self.assertNotIn("如需回复邮件，请引用本消息", rendered)
         self.assertNotIn("\n---\n", rendered)
 
     @patch("email_actions.email_config.load_config", return_value={"reply": {"outbound_enabled": True}})
@@ -176,7 +178,8 @@ class EmailQuoteActionTests(unittest.TestCase):
         self.assertEqual(run.call_args_list[0].args[0][-1], "42")
         self.assertNotIn("原样正文", run.call_args_list[0].args[0])
         self.assertIn("send", run.call_args_list[1].args[0])
-        self.assertEqual(run.call_args_list[1].args[0][-2:], ["template", "send"])
+        # Item (a): send must bind the receiving mailbox's alias, not the config default.
+        self.assertEqual(run.call_args_list[1].args[0][-4:], ["template", "send", "-a", "test"])
         sent_template = run.call_args_list[1].kwargs["input"]
         self.assertEqual(sent_template.split("\n\n", 1)[1], "原样正文\n")
         self.assertNotIn("quoted original", sent_template)
@@ -198,7 +201,7 @@ class EmailQuoteActionTests(unittest.TestCase):
             "mail": {"account_type": "himalaya", "himalaya_config": str(config), "message_id": "42", "himalaya_account": "test"},
         })
         sent = run.call_args_list[1]
-        self.assertEqual(sent.args[0][-2:], ["template", "send"])
+        self.assertEqual(sent.args[0][-4:], ["template", "send", "-a", "test"])
         self.assertIn("<#multipart type=alternative>", sent.kwargs["input"])
         self.assertIn("border-top:1px solid #9ca3af;width:140px", sent.kwargs["input"])
         self.assertNotIn("这里是验收正文。", " ".join(sent.args[0]))
@@ -277,7 +280,7 @@ class EmailQuoteActionTests(unittest.TestCase):
         email_actions._send_himalaya_forward({"kind": "forward", "recipient": "friend@example.com", "body": "附言\n\n签名", "mail": {"account_type": "himalaya", "himalaya_config": str(config), "message_id": "42", "himalaya_account": "test"}})
         self.assertIn("forward", run.call_args_list[0].args[0])
         self.assertNotIn("附言", run.call_args_list[0].args[0])
-        self.assertEqual(run.call_args_list[1].args[0][-2:], ["template", "send"])
+        self.assertEqual(run.call_args_list[1].args[0][-4:], ["template", "send", "-a", "test"])
         sent_template = run.call_args_list[1].kwargs["input"]
         self.assertIn("附言\n\n签名\n\n-------- Forwarded Message --------", sent_template)
         self.assertIn("<#!part type=application/pdf", sent_template)

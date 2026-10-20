@@ -369,8 +369,11 @@ def main() -> None:
 
         # Runtime default and distributable template match exactly.
         template_text = (ROOT / "references/email_watchdog_config.template.json").read_text(encoding="utf-8")
+        # Mirror email_config.HERMES_HOME_RAW's own fallback ("~/.hermes") so the
+        # parity check compares portable-raw defaults exactly like
+        # repository_contract_check does, whether or not HERMES_HOME is set.
         template_text = template_text.replace(
-            "~/.hermes", os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))
+            "~/.hermes", os.environ.get("HERMES_HOME", "~/.hermes")
         )
         template = json.loads(template_text)
         parity_delta = {

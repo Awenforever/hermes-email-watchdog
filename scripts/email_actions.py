@@ -28,7 +28,6 @@ STATE_ROOT = Path(os.getenv("HERMES_EMAIL_WATCHDOG_STATE_ROOT", str(HERMES_HOME 
 OUTBOX_FILE = Path(os.getenv("HERMES_EMAIL_WATCHDOG_OUTBOX_FILE", str(STATE_ROOT / "outbox.json")))
 ACTION_FILE = STATE_ROOT / "mail-actions.json"
 _FOOTER_RE = re.compile(r"\n\s*---\s*\n\s*`\d+`\s+`[^`]+`\s*$", re.S)
-_NO_REPLY_RE = re.compile(r"(?i)(?:^|[._+-])(no-?reply|do-?not-?reply|mailer-daemon|bounce)(?:@|[._+-])")
 _THREAD_LOCKS = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
 
@@ -285,19 +284,12 @@ def _render_reply_mml(body: str, signature: str) -> str:
 
 
 def _reply_block_reason(action: dict) -> str:
-    sender = str(action.get("from_addr") or "").strip()
-    if not sender or _NO_REPLY_RE.search(sender):
-        return "该邮件来自不可回复或自动发送地址，已阻止创建回复。"
-    if str(action.get("risk_label") or "").lower() in {"high", "critical", "高", "严重"}:
-        return "该邮件被标记为高风险，已阻止从微信发起回复。"
-    if str(action.get("category") or "").lower() in {
-        "verification_code", "security_alert", "newsletter_marketing",
-        "system_notification", "receipt_invoice", "automated_notification",
-    }:
-        return "该邮件属于自动通知，默认不允许直接回复。"
-    if str(action.get("account_type") or "").lower() != "himalaya":
-        return "该邮箱当前没有可验证的回复发送通道；请先在 Email Watchdog 中配置该账户的发信能力。"
-    return ""
+    return email_delivery.reply_block_reason(
+        action.get("from_addr"),
+        action.get("risk_label"),
+        action.get("category"),
+        action.get("account_type"),
+    )
 
 
 def _valid_single_recipient(value: str) -> str:
@@ -310,6 +302,71 @@ def _valid_single_recipient(value: str) -> str:
     return address
 
 
+def _ensure_schedule_message_row(schedule: dict, action: dict) -> None:
+    """Guarantee the schedules.message_id FK target exists before inserting.
+
+    A reminder can be activated long after the originating message row was
+    pruned; without this the NOT NULL + FOREIGN KEY constraint aborts the
+    insert and the activation is silently lost.
+    """
+    msg_id = str(schedule.get("message_id") or action.get("message_id") or "").strip()
+    if not msg_id:
+        return
+    schedule["message_id"] = msg_id
+    if email_store.get_message(msg_id):
+        return
+    email_store.upsert_message({
+        "id": msg_id,
+        "uid": _transport_uid(action),
+        "account": str(action.get("account") or schedule.get("account") or ""),
+        "subject": str(action.get("subject") or schedule.get("title") or ""),
+        "from_email": str(action.get("from_addr") or ""),
+        "from_name": str(action.get("from_name") or ""),
+    })
+
+
+def _reminder_offsets_label(reminders) -> str:
+    kinds = [str(item.get("kind")) for item in (reminders or []) if isinstance(item, dict) and item.get("kind")]
+    return "、".join(kinds)
+
+
+def _active_schedule_list(limit: int = 8) -> str:
+    """Readable list of schedules still active, showing full title + task.
+
+    Rendered as bold-header + bullet blocks (the same shape as the reminder
+    card, which is proven to render in WeChat) rather than a cramped 3-column
+    table that forced a 36-char cut. Title and task are shown in full so the
+    user can tell at a glance what each schedule actually asks of them.
+    """
+    try:
+        rows = email_store.get_schedules("active", 200)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    total = len(rows)
+    blocks = [f"**当前活跃日程**（共 {total} 项）"]
+    for index, row in enumerate(rows[:limit], 1):
+        when = str(row.get("deadline") or "").replace("T", " ")[:16] or "无明确截止"
+        account = str(row.get("account") or "").strip()
+        if not account:
+            # Legacy schedules predate the account column; recover it from the
+            # account-scoped storage key (e.g. message_id "USTC:1599727883").
+            scoped = str(row.get("message_id") or row.get("id") or "")
+            if ":" in scoped:
+                account = scoped.split(":", 1)[0]
+        account = account.strip() or "—"
+        title = " ".join(str(row.get("title") or "邮件待办").split()) or "邮件待办"
+        task = " ".join(str(row.get("action_needed") or "").split())
+        block = f"**{index}. {title}**\n- 截止：{when} · 账户：{account}"
+        if task:
+            block += f"\n- 待办：{task}"
+        blocks.append(block)
+    if total - limit > 0:
+        blocks.append(f"…另有 {total - limit} 项未列出。")
+    return "\n\n".join(blocks)
+
+
 def _activate_reminders(action: dict, selected: list[int]) -> str:
     candidates = [item for item in (action.get("deadlines") or []) if isinstance(item, dict) and item.get("deadline")]
     if not candidates:
@@ -317,19 +374,49 @@ def _activate_reminders(action: dict, selected: list[int]) -> str:
     chosen = [candidates[index - 1] for index in selected if 1 <= index <= len(candidates)]
     if not chosen:
         return "没有识别到有效编号，请按提示重新选择。"
+    account = str(action.get("account") or "").strip()
     created = []
     for item in chosen:
         active = dict(item)
         active["status"] = "active"
+        if account:
+            active["account"] = account
+            original_id = str(active.get("id") or "")
+            # Scope the schedule PK by account so two mailboxes that both expose
+            # IMAP id "42" cannot overwrite each other's reminder.
+            if original_id and not original_id.startswith(f"{account}:"):
+                active["id"] = f"{account}:{original_id}"
+                try:
+                    email_store.update_schedule(original_id, {"status": "superseded"})
+                except Exception:
+                    pass
         active["reminders"] = active.get("reminders") or email_delivery._default_reminders(
             active.get("deadline"), active.get("title"), email_config.get_delivery_settings()
         )
         active["reminder_json"] = json.dumps(active.get("reminders") or [], ensure_ascii=False)
+        _ensure_schedule_message_row(active, action)
         email_store.upsert_schedule(active)
         created.append(active)
     email_delivery._sync_calendar_ics()
-    details = [f"{index + 1}. `{item.get('deadline')}`（提前 24 小时、1 小时）" for index, item in enumerate(created)]
-    return "✅ 已创建邮件提醒\n\n" + "\n".join(details) + "\n\n如已完成可忽略后续提醒。"
+    details = []
+    for index, item in enumerate(created):
+        when = str(item.get("deadline") or "").replace("T", " ")[:16]
+        label = " ".join(str(item.get("label") or "").split())
+        title = " ".join(str(item.get("title") or "邮件待办").split())
+        shown = label or title
+        venue = " ".join(str(item.get("venue") or "").split())
+        line = f"{index + 1}. `{when}` · {shown}"
+        if venue and venue not in shown:
+            line += f"（{venue}）"
+        offsets = _reminder_offsets_label(item.get("reminders"))
+        if offsets:
+            line += f"（{offsets}）"
+        details.append(line)
+    reply = "✅ 已创建邮件提醒\n\n" + "\n".join(details)
+    schedule_list = _active_schedule_list()
+    if schedule_list:
+        reply += "\n\n" + schedule_list
+    return reply + "\n\n如已完成可忽略后续提醒。"
 
 
 def _himalaya_binary() -> str:
@@ -378,7 +465,15 @@ def _himalaya_context(action: dict) -> tuple[list[str], str | None, str]:
         config_arg, cwd = ntpath.basename(expanded), ntpath.dirname(expanded) or "."
     else:
         config_arg, cwd = expanded, None
-    return [_himalaya_binary(), "-c", config_arg], cwd, str(action.get("himalaya_account") or "").strip()
+    aliases, default_alias = email_config._himalaya_aliases(expanded)
+    account = str(action.get("himalaya_account") or "").strip() or default_alias
+    if not account:
+        if len(aliases) > 1:
+            raise RuntimeError("Himalaya 配置存在多个账号且未标记默认账号，无法确定发件身份")
+        raise RuntimeError("无法确定 Himalaya 账号别名，拒绝发送")
+    if aliases and account not in aliases:
+        raise RuntimeError(f"Himalaya 账号别名 '{account}' 不存在于其配置中，拒绝发送")
+    return [_himalaya_binary(), "-c", config_arg], cwd, account
 
 
 def _transport_result(sent) -> dict:
@@ -397,6 +492,24 @@ def _transport_result(sent) -> dict:
     return {"provider_message_id": message_id, "transport_receipt": output[:500]}
 
 
+def _transport_uid(action: dict) -> str:
+    """Raw Himalaya message id used to address a message on the wire.
+
+    Storage keys are account-scoped (``account:uid``) to guarantee cross-account
+    uniqueness, but Himalaya addresses a message by its raw per-mailbox UID within
+    the ``-a <alias>``/``-c <config>`` account context. Prefer the explicit ``uid``
+    carried on the action; otherwise strip a leading ``account:`` namespace. A bare
+    legacy id (no colon) is already a raw UID and passes through unchanged.
+    """
+    raw = str((action or {}).get("uid") or "").strip()
+    if raw:
+        return raw
+    message_id = str((action or {}).get("message_id") or "").strip()
+    if ":" in message_id:
+        return message_id.split(":", 1)[1]
+    return message_id
+
+
 def _send_himalaya_reply(draft: dict) -> dict:
     reply_settings = email_config.load_config().get("reply") or {}
     if not isinstance(reply_settings, dict) or not reply_settings.get("outbound_enabled", False):
@@ -406,7 +519,7 @@ def _send_himalaya_reply(draft: dict) -> dict:
     # Do not expose user-authored body text in the process argument list. The
     # generated template is used only for reply/thread headers; its body is
     # replaced below before being passed through stdin-like template content.
-    reply_cmd = common + ["template", "reply"] + (["-a", account] if account else []) + [str(action.get("message_id"))]
+    reply_cmd = common + ["template", "reply"] + (["-a", account] if account else []) + [str(_transport_uid(action))]
     generated = subprocess.run(reply_cmd, capture_output=True, text=True, timeout=45, cwd=cwd)
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成回复模板").strip()[:500])
@@ -420,7 +533,8 @@ def _send_himalaya_reply(draft: dict) -> dict:
     # Its non-interactive contract is to read the template from stdin.  This
     # also keeps user-authored mail bodies out of process listings.
     sent = subprocess.run(
-        common + ["template", "send"], input=final_template,
+        common + ["template", "send"] + (["-a", account] if account else []),
+        input=final_template,
         capture_output=True, text=True, timeout=60, cwd=cwd,
     )
     if sent.returncode != 0:
@@ -440,7 +554,7 @@ def _send_himalaya_forward(draft: dict) -> dict:
     command = common + ["template", "forward", "-H", f"To:{recipient}"]
     if account:
         command += ["-a", account]
-    command += [str(action.get("message_id"))]
+    command += [str(_transport_uid(action))]
     generated = subprocess.run(command, capture_output=True, text=True, timeout=45, cwd=cwd)
     if generated.returncode != 0 or not generated.stdout.strip():
         raise RuntimeError((generated.stderr or "无法生成转发模板").strip()[:500])
@@ -450,7 +564,8 @@ def _send_himalaya_forward(draft: dict) -> dict:
         rendered_body = draft.get("body", "")
     final_template = _replace_forward_template_body(generated.stdout, rendered_body, recipient)
     sent = subprocess.run(
-        common + ["template", "send"], input=final_template,
+        common + ["template", "send"] + (["-a", account] if account else []),
+        input=final_template,
         capture_output=True, text=True, timeout=60, cwd=cwd,
     )
     if sent.returncode != 0:
@@ -478,6 +593,43 @@ def _find_draft(reference_text: str, reference_title: str, state: dict) -> tuple
     if len(matches) == 1:
         return matches[0]
     return None, None
+
+
+def _draft_source_key(action: dict) -> str:
+    """Stable identity of the ORIGINAL email a draft replies to / forwards.
+
+    Keyed on the receiving account + the original message id, NOT the id of the
+    command message that created the draft, so re-quoting the same email push
+    and re-issuing ``@回复``/``@转发`` maps to the same source.
+    """
+    account = str((action or {}).get("account") or "").strip()
+    message_id = str((action or {}).get("message_id") or "").strip()
+    if not account and not message_id:
+        return ""
+    return f"{account}|{message_id}"
+
+
+def _supersede_pending_drafts(state: dict, source_key: str, keep_key: str | None = None) -> int:
+    """Mark every other PENDING draft for the same source email as superseded.
+
+    Users typically do not ``@取消`` a draft they want to change; they re-quote
+    the original push and re-issue the command. This keeps at most one active
+    pending draft per source email so the stale one can never be confirmed/sent.
+    """
+    if not source_key:
+        return 0
+    superseded = 0
+    for key, draft in (state.get("drafts") or {}).items():
+        if not isinstance(draft, dict) or key == keep_key:
+            continue
+        if str(draft.get("status") or "pending") != "pending":
+            continue
+        draft_source = str(draft.get("source_key") or _draft_source_key(draft.get("mail") or {}))
+        if draft_source and draft_source == source_key:
+            draft["status"] = "superseded"
+            draft["superseded_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+            superseded += 1
+    return superseded
 
 
 def _subject_with_prefix(subject: object, prefix: str) -> str:
@@ -540,7 +692,7 @@ def _recall_result(draft: dict) -> str:
 
 def _explicit_mail_command(raw_typed: str) -> bool:
     typed = str(raw_typed or "").strip()
-    return bool(re.match(r"^@(?:回复|转发|确认发送|取消|召回)(?:\s|$)", typed))
+    return bool(re.match(r"^@(?:回复|转发|原文|提醒|确认发送|取消|召回)(?:\s|$)", typed))
 
 
 def _handle_inbound_locked(context: dict):
@@ -593,6 +745,11 @@ def _handle_inbound_locked(context: dict):
                 response = "该草稿已经取消，无需重复操作。"
             else:
                 response = "该草稿已经取消，不会发送。请引用原邮件推送重新创建草稿。"
+        elif status == "superseded":
+            if typed in {"取消", "@取消"}:
+                response = "该草稿已被新草稿取代，无需再操作。"
+            else:
+                response = "该草稿已被你重新创建的草稿取代，不会发送。请引用最新的草稿预览发送 `@确认发送`。"
         elif status in {"transmitting", "delivery_uncertain"}:
             response = "该草稿已进入发送流程，但尚无法安全确认最终投递结果。为避免重复发信，系统不会自动重试；请先检查邮箱“已发送”目录。"
         elif typed in {"取消", "@取消"}:
@@ -631,7 +788,7 @@ def _handle_inbound_locked(context: dict):
         if actions:
             return _handled("该气泡包含多封邮件，无法安全确定操作对象；请引用单封邮件的推送。", _receipt_key(context, "ambiguous"))
         mail_command = (
-            typed in {"提醒我", "确认发送", "取消", "@确认发送", "@取消", "@召回"}
+            typed in {"@提醒", "确认发送", "取消", "@确认发送", "@取消", "@召回", "@原文"}
             or _explicit_mail_command(raw_typed)
             or bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
         )
@@ -648,20 +805,62 @@ def _handle_inbound_locked(context: dict):
         return None
     action = actions[0]
 
-    if typed == "提醒我" or re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed):
+    reminder_inline = None
+    if typed == "@提醒" or typed.startswith("@提醒 ") or typed.startswith("@提醒\n"):
+        reminder_inline = typed[len("@提醒"):].strip()
+    numeric_selection = bool(re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", typed))
+    if reminder_inline is not None or numeric_selection:
         candidates = [item for item in (action.get("deadlines") or []) if isinstance(item, dict) and item.get("deadline")]
-        if typed == "提醒我":
-            if len(candidates) != 1:
-                return _handled("检测到多个截止时间，请回复需要提醒的编号，例如 `1,3`。", _receipt_key(context, "reminder-select"))
-            selected = [1]
-        else:
+        if not candidates:
+            return _handled("这封邮件没有可创建的有效截止时间。", _receipt_key(context, "reminder-none"))
+        if numeric_selection:
             selected = sorted({int(value) for value in re.findall(r"\d+", typed)})
+        elif reminder_inline and re.fullmatch(r"\d+(?:\s*[,，、]\s*\d+)*", reminder_inline):
+            selected = sorted({int(value) for value in re.findall(r"\d+", reminder_inline)})
+        elif reminder_inline == "":
+            if len(candidates) == 1:
+                selected = [1]
+            else:
+                return _handled(
+                    f"检测到 {len(candidates)} 个截止时间，请回复需要提醒的编号，例如 `@提醒 1,3`。",
+                    _receipt_key(context, "reminder-select"),
+                )
+        else:
+            return _handled(
+                "请在 `@提醒` 后填写编号，例如 `@提醒 1,3`；或直接回复 `@提醒` 为唯一截止时间创建提醒。",
+                _receipt_key(context, "reminder-format"),
+            )
         receipt = _receipt_key(context, "reminder:" + ",".join(map(str, selected)))
         if receipt in state["receipts"]:
             return _handled(state["receipts"][receipt], receipt)
-        response = _activate_reminders(action, selected)
+        try:
+            response = _activate_reminders(action, selected)
+        except Exception:
+            # Never swallow a recognized command: surface the failure and do not
+            # cache a receipt, so the user can retry.
+            try:
+                import logging
+                logging.getLogger("hermes-email-watchdog").exception("reminder activation failed")
+            except Exception:
+                pass
+            return _handled("创建提醒时出错，本次未保存；请稍后重试。", _receipt_key(context, "reminder-error"))
         state["receipts"][receipt] = response
         _atomic(ACTION_FILE, state)
+        return _handled(response, receipt)
+
+    if typed == "@原文" or typed.startswith("@原文\n"):
+        receipt = _receipt_key(context, "original")
+        try:
+            import email_original
+            response = email_original.build_original_reply(action, _transport_uid(action))
+        except Exception:
+            # Read-only fetch; never cache a receipt so the user can retry.
+            try:
+                import logging
+                logging.getLogger("hermes-email-watchdog").exception("original-text fetch failed")
+            except Exception:
+                pass
+            return _handled("获取邮件原文失败，请稍后重试。", _receipt_key(context, "original-error"))
         return _handled(response, receipt)
 
     if typed == "@回复" or raw_typed.startswith("@回复\n"):
@@ -674,9 +873,12 @@ def _handle_inbound_locked(context: dict):
         signature = _signature(action)
         final_body = _render_signature_preview(body, signature)
         draft_key = hashlib.sha256((str(context.get("message_id")) + _fingerprint(reference_text)).encode()).hexdigest()[:24]
+        source_key = _draft_source_key(action)
+        superseded_count = _supersede_pending_drafts(state, source_key, keep_key=draft_key)
+        superseded_note = f"> 已自动作废你之前为这封邮件创建的 {superseded_count} 份草稿。\n\n" if superseded_count else ""
         reply_subject = _subject_with_prefix(action.get("subject"), "Re")
-        preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `{reply_subject}`\n\n**正文**\n\n{final_body}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
-        state["drafts"][draft_key] = {"kind": "reply", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "user_body": body, "signature": signature, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
+        preview = f"### ✉️ 回复草稿\n\n**收件人** `{action.get('from_addr')}`\n\n**主题** `{reply_subject}`\n\n**正文**\n\n{final_body}\n\n{superseded_note}> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
+        state["drafts"][draft_key] = {"kind": "reply", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "body": final_body, "user_body": body, "signature": signature, "mail": action, "source_key": source_key, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-draft-{draft_key}")
 
@@ -691,17 +893,20 @@ def _handle_inbound_locked(context: dict):
         signature = _signature(action) if body.strip() else ""
         final_body = _render_signature_preview(body, signature)
         draft_key = hashlib.sha256((str(context.get("message_id")) + recipient + _fingerprint(reference_text)).encode()).hexdigest()[:24]
+        source_key = _draft_source_key(action)
+        superseded_count = _supersede_pending_drafts(state, source_key, keep_key=draft_key)
+        superseded_note = f"> 已自动作废你之前为这封邮件创建的 {superseded_count} 份草稿。\n\n" if superseded_count else ""
         body_preview = final_body if final_body else "_无附言，将直接转发原邮件及其附件。_"
         subject = str(action.get("subject") or "")
         forward_subject = _subject_with_prefix(subject, "Fwd")
-        preview = f"### ✉️ 转发草稿\n\n**收件人** `{recipient}`\n\n**主题** `{forward_subject}`\n\n**附言**\n\n{body_preview}\n\n> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
-        state["drafts"][draft_key] = {"kind": "forward", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "recipient": recipient, "body": final_body, "user_body": body, "signature": signature, "mail": action, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
+        preview = f"### ✉️ 转发草稿\n\n**收件人** `{recipient}`\n\n**主题** `{forward_subject}`\n\n**附言**\n\n{body_preview}\n\n{superseded_note}> 确认无误后，请引用本草稿回复 `@确认发送`；回复 `@取消` 可放弃。"
+        state["drafts"][draft_key] = {"kind": "forward", "status": "pending", "created_at": datetime.now().astimezone().isoformat(timespec="seconds"), "recipient": recipient, "body": final_body, "user_body": body, "signature": signature, "mail": action, "source_key": source_key, "preview_text": preview, "preview_fingerprint": _fingerprint(preview)}
         _atomic(ACTION_FILE, state)
         return _handled(preview, f"email-forward-draft-{draft_key}")
 
-    if any(typed.startswith(command) for command in ("@回复", "@转发", "@确认发送", "@取消", "@召回")):
+    if any(typed.startswith(command) for command in ("@回复", "@转发", "@原文", "@确认发送", "@取消", "@召回")):
         return _handled(
-            "命令格式无效。回复请使用 `@回复` 后换行输入正文；转发请使用 `@转发 收件邮箱`，下一行可选填附言；确认、取消和召回须分别单独发送 `@确认发送`、`@取消`、`@召回`。",
+            "命令格式无效。回复请使用 `@回复` 后换行输入正文；转发请使用 `@转发 目标邮箱`，下一行可选填附言；查看原文、确认、取消和召回须分别单独发送 `@原文`、`@确认发送`、`@取消`、`@召回`。",
             _receipt_key(context, "mail-command-invalid"),
         )
     return None

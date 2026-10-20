@@ -877,15 +877,12 @@ def finalize_markdown(
     )
     if attachment_lines:
         text += "\n\n**附件**\n" + "\n".join(attachment_lines)
-    schedule_lines = []
-    for item in list(delivery.get("schedule") or [])[:4]:
-        if not isinstance(item, Mapping):
-            continue
-        due = _text(item.get("deadline") or item.get("time"), 120)
-        if due:
-            schedule_lines.append(f"- 已记录提醒：`{due.replace('`', '′')}`（如已完成请忽略）")
-    if schedule_lines:
-        text += "\n\n**提醒**\n" + "\n".join(schedule_lines)
+    # Shared 日程 renderer: header carries 默认不提醒 once, each offered deadline
+    # is a numbered task·time line. A reminder does not exist until the user
+    # quotes the card and replies `@提醒`.
+    sched_lines = email_assistant_composer.render_schedule_section(delivery.get("schedule"))
+    if sched_lines:
+        text += "\n\n" + "\n".join(sched_lines)
     if email is not None:
         text = email_assistant_composer.ensure_card_chrome(text, email, decision, account)
     return {

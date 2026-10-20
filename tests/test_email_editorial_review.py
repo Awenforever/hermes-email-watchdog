@@ -96,6 +96,22 @@ class EditorialReviewTests(unittest.TestCase):
         self.assertIn("**时效**", rendered["text"])
         self.assertIn("状态：**已过期**", rendered["text"])
 
+    def test_offered_schedule_reads_as_schedule_not_active_reminder(self):
+        review = {
+            "publish": True, "model": "deepseek-flash", "review_notes": [],
+            "markdown": "### 📬 新邮件｜USTC\n\n**主题** `测试`",
+        }
+        delivery = {"attachments": [], "schedule": [
+            {"deadline": "2026-10-16T23:30:00+08:00", "title": "x",
+             "label": "提交材料", "status": "offered"},
+        ]}
+        text = editorial.finalize_markdown(review, delivery, decision())["text"]
+        self.assertIn("**日程**（默认**不提醒**）", text)
+        self.assertIn("- 提交材料 · `2026-10-16 23:30`", text)
+        self.assertEqual(text.count("默认**不提醒**"), 1)
+        self.assertNotIn("已记录提醒", text)
+        self.assertNotIn("**提醒**", text)
+
     def test_changed_sender_is_replaced_by_runtime_identity(self):
         email = {"subject": "Hello", "from_addr": "real@example.test", "body": "Hello", "links": []}
         def transport(prompt, settings):

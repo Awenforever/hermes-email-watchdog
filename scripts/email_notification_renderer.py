@@ -124,8 +124,14 @@ def _body_source(email: Mapping[str, Any]) -> str:
     return ""
 
 
-def clean_body(value: Any) -> str:
-    """Deterministically clean real message text without model rewriting."""
+def clean_body(value: Any, join_lines: bool = True) -> str:
+    """Deterministically clean real message text without model rewriting.
+
+    ``join_lines=True`` (default) reflows hard-wrapped short lines into
+    paragraphs for compact notification cards. ``join_lines=False`` preserves the
+    author's original line breaks — used by ``@原文`` so the "original" view keeps
+    its real structure instead of collapsing into walls.
+    """
     text = _text(value)
     if not text:
         return ""
@@ -175,6 +181,8 @@ def clean_body(value: Any) -> str:
         lines.append(line)
     while lines and not lines[-1]:
         lines.pop()
+    if not join_lines:
+        return "\n".join(lines).strip()
     joined: List[str] = []
     for line in lines:
         if (
@@ -649,6 +657,18 @@ def render_notification(
     else:
         append_block(lines, blocks, "发件人", [_sender(email)])
         append_block(lines, blocks, "主题", [subject])
+    # On-demand mailbox disambiguation, mirroring email_assistant_composer: only
+    # when two enabled mailboxes share a domain. No-op otherwise.
+    if email.get("account_domain_shared"):
+        mailbox = _text(
+            email.get("account_email") or (account or {}).get("email") or email.get("to_addr"), 160
+        )
+        if mailbox:
+            if plain_layout:
+                lines.extend(["", f"收件邮箱：{mailbox}"])
+                blocks.append("收件邮箱")
+            else:
+                append_block(lines, blocks, "收件邮箱", [mailbox])
 
     duplicate_suppressions = 0
     summary_fallback = ""

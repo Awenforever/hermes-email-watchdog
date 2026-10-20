@@ -61,7 +61,7 @@ _FORBIDDEN_KEYS = {
 _ALLOWED = {
     "root": {
         "schema_version", "message_key", "classification", "importance", "notification",
-        "action", "deadline", "attachments", "risk", "reminders", "memory_observation", "evidence",
+        "action", "deadline", "deadlines", "attachments", "risk", "reminders", "memory_observation", "evidence",
     },
     "classification": {"category", "label", "confidence"},
     "importance": {"level", "reason"},
@@ -71,6 +71,7 @@ _ALLOWED = {
     },
     "action": {"required", "type", "description", "next_step", "link_ids"},
     "deadline": {"has_deadline", "datetime", "date_text", "confidence"},
+    "deadline_item": {"datetime", "date_text", "label", "venue", "confidence", "evidence"},
     "attachments": {"present", "policy", "important_names", "reason"},
     "risk": {"level", "notes"},
     "reminder": {"time", "kind", "message"},
@@ -182,6 +183,7 @@ def _base_decision(message_key: str) -> Dict[str, Any]:
         },
         "action": {"required": False, "type": "", "description": "", "next_step": "", "link_ids": []},
         "deadline": {"has_deadline": False, "datetime": "", "date_text": "", "confidence": 0.0},
+        "deadlines": [],
         "attachments": {"present": False, "policy": "none", "important_names": [], "reason": ""},
         "risk": {"level": "none", "notes": []},
         "reminders": [],
@@ -207,7 +209,7 @@ def normalize_and_validate(
     source = copy.deepcopy(dict(raw))
     errors = _scan_forbidden(source)
     errors.extend(_unknown_keys(source, _ALLOWED["root"], "root"))
-    for required_key in sorted(_ALLOWED["root"] - set(source.keys())):
+    for required_key in sorted((_ALLOWED["root"] - {"deadlines"}) - set(source.keys())):
         errors.append(f"root: missing field {required_key}")
 
     decision = _base_decision(message_key)
@@ -346,6 +348,49 @@ def normalize_and_validate(
         "date_text": deadline_text,
         "confidence": _confidence(deadline.get("confidence"), 0.0),
     }
+
+    deadlines_value = source.get("deadlines")
+    if deadlines_value is not None and not isinstance(deadlines_value, list):
+        errors.append("deadlines must be a list")
+        deadlines_value = []
+    deadlines: List[Dict[str, Any]] = []
+    for idx, item_raw in enumerate((deadlines_value or [])[:6]):
+        item = _mapping(item_raw)
+        errors.extend(_unknown_keys(item, _ALLOWED["deadline_item"], f"deadlines[{idx}]"))
+        item_datetime = _text(item.get("datetime"), 100)
+        item_text = _text(item.get("date_text"), 160)
+        if not (item_datetime or item_text):
+            continue
+        deadlines.append({
+            "datetime": item_datetime,
+            "date_text": item_text,
+            "label": _text(item.get("label"), 120),
+            "venue": _text(item.get("venue"), 120),
+            "confidence": _confidence(item.get("confidence"), 0.0),
+            "evidence": _text(item.get("evidence"), 240),
+        })
+    if deadlines:
+        # The list is authoritative; keep the singular view aligned with item 0 so
+        # every legacy consumer (renderer/composer/router) sees the primary deadline.
+        primary = deadlines[0]
+        decision["deadline"] = {
+            "has_deadline": True,
+            "datetime": primary["datetime"],
+            "date_text": primary["date_text"],
+            "confidence": primary["confidence"],
+        }
+    elif has_deadline:
+        # Back-compat: a decision that only carries the singular field still yields
+        # a one-item list so the multi-schedule fan-out has something to consume.
+        deadlines.append({
+            "datetime": deadline_datetime,
+            "date_text": deadline_text,
+            "label": "",
+            "venue": "",
+            "confidence": _confidence(deadline.get("confidence"), 0.0),
+            "evidence": "",
+        })
+    decision["deadlines"] = deadlines
 
     attachments = _mapping(source.get("attachments"))
     errors.extend(_unknown_keys(attachments, _ALLOWED["attachments"], "attachments"))
@@ -599,6 +644,18 @@ def conservative_fallback(
         "date_text": _text(deadline_raw.get("date_text"), 160) if has_deadline else "",
         "confidence": _confidence(deadline_raw.get("confidence"), 0.0) if has_deadline else 0.0,
     }
+    decision["deadlines"] = (
+        [{
+            "datetime": decision["deadline"]["datetime"],
+            "date_text": decision["deadline"]["date_text"],
+            "label": "",
+            "venue": "",
+            "confidence": decision["deadline"]["confidence"],
+            "evidence": "",
+        }]
+        if has_deadline
+        else []
+    )
     attachments_present = bool(facts.get("attachments_present"))
     decision["attachments"] = {
         "present": attachments_present,
