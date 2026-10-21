@@ -26,5 +26,16 @@ class OutboxTests(unittest.IsolatedAsyncioTestCase):
   try:
    with mock.patch.object(h,'_call_watchdog') as call: await h._run_once(); call.assert_not_called()
   finally: h._once_lock.release()
+ async def test_03_resubmit_of_delivered_is_noop(self):
+  calls=[]
+  async def send(text,delivery_id=None):
+   calls.append((text,delivery_id)); return type('R',(),{'success':True,'message_id':'m'})()
+  outputs=iter(['PAYLOAD','PAYLOAD'])
+  with mock.patch.object(h,'_call_watchdog',side_effect=lambda:next(outputs)), mock.patch.object(h,'_send_weixin',side_effect=send):
+   await h._run_once()
+   await h._run_once()
+  data=json.loads(h.OUTBOX_FILE.read_text()); self.assertEqual(len(data['entries']),1)
+  entry=next(iter(data['entries'].values()))
+  self.assertEqual(entry['status'],'delivered'); self.assertEqual(entry['attempts'],1); self.assertEqual(len(calls),1)
 if __name__=='__main__':
  suite=unittest.defaultTestLoader.loadTestsFromTestCase(OutboxTests); result=unittest.TextTestRunner(verbosity=2).run(suite); print(f"OUTBOX_IDEMPOTENCY_MATRIX={result.testsRun-len(result.failures)-len(result.errors)}/{result.testsRun}"); raise SystemExit(0 if result.wasSuccessful() else 1)
