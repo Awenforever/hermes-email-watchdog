@@ -51,3 +51,37 @@ Destructive purge requires:
 ```bash
 bash purge.sh --confirm-purge-user-data
 ```
+
+## Platform support
+
+Email Watchdog installs and runs on four targets:
+
+- Docker/NAS (Linux container)
+- Linux native
+- Windows via WSL2 (a real Linux kernel; the same code paths as Linux native)
+- Windows native with the Hermes desktop app
+
+On every target the canonical install and onboarding path is the Hermes plugin
+CLI, which needs no POSIX shell. The guided order is:
+
+```bash
+hermes email-watchdog setup
+hermes email-watchdog himalaya-install --yes
+hermes email-watchdog onboarding-plan  --input-json '<JSON>'
+hermes email-watchdog onboarding-apply --input-json '<JSON>'
+hermes email-watchdog doctor
+hermes email-watchdog run-once
+hermes email-watchdog enable
+```
+
+`install-runtime` and `uninstall-runtime` manage the profile-scoped gateway hook.
+`himalaya-install` downloads the vetted, checksum-pinned Himalaya build for the
+current OS/architecture (Windows `himalaya.exe`, macOS, and Linux are all
+covered) into the Hermes profile; it never uses `curl | sh`.
+
+`bash install.sh` / `verify.sh` / `upgrade.sh` / `uninstall.sh` / `purge.sh` are
+POSIX convenience wrappers for the Docker, Linux, and WSL2 targets. On
+Windows-native Hermes desktop, use the CLI commands above (or run the wrappers
+inside WSL2). Windows notes: file locking uses `msvcrt` byte-range locks, POSIX
+signals are unavailable, and `0600` mode bits are not a confidentiality boundary
+(protection relies on NTFS ACLs).

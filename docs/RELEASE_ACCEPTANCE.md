@@ -99,3 +99,15 @@ deployment gate.
   must be preserved.
 - Production deployment must create a rollback backup before replacing code.
 - `weixin.py` and `hermes-wechat-enhance` must remain byte-identical.
+- Multi-platform verification is recorded for the release. The four supported
+  targets are Docker/NAS, Linux native, Windows via WSL2, and Windows-native
+  Hermes desktop. GitHub Actions must include both an Ubuntu leg (`ci.sh` +
+  lifecycle + full suite) and a Windows leg (Python suite on `windows-latest`,
+  POSIX-only concurrency/signal cases skipped, Windows-native unit tests really
+  executed). Docker/NAS is covered by the fresh-container install from the real
+  tag plus the runtime-uid readability gate; WSL2 by a thin environment smoke on
+  top of Linux; Windows-native Hermes-desktop install and onboarding by a real
+  Windows host (CI-automated or manual-with-evidence). A target must not be
+  claimed accepted on the basis of cross-OS parameter-simulated unit tests
+  alone. See the multi-platform support and verification contract in
+  `DEVELOPMENT_MEMORANDUM.md`.

@@ -293,3 +293,80 @@ fallback silently creates a parallel junk state tree the moment the runtime
 environment is absent (for example during a bare diagnostic import), and the
 stray database is then mistaken for real state. This is a split-brain hazard,
 not a cosmetic one.
+
+## 2026-10-20 — Multi-platform support and verification contract
+
+Email Watchdog is a portable Python plugin plus a hook handler loaded by the
+cross-platform Hermes core. It must install, onboard, run, and be verifiable on
+four deployment targets, and a release must state honestly which were verified.
+
+### Supported targets
+
+- Docker/NAS (Linux container). The gateway is supervised by the container init
+  (s6-overlay on the reference NAS); the plugin is installed into the profile
+  plugins directory and its hook activated. The runtime identity may have no
+  supplementary groups, so the installer must normalize directory modes to 0755
+  (see the installer-permissions invariant above). Himalaya is a Linux binary.
+- Linux native. Hermes runs directly on Linux; the POSIX code paths are active
+  (`fcntl` locking, SIGTERM-then-SIGKILL graceful Himalaya shutdown). Himalaya is
+  a Linux binary.
+- Windows via WSL2. WSL2 provides a real Linux kernel, so it executes the same
+  code paths as Linux native. It is verified as a thin environment smoke layered
+  on the Linux target — scheduler/systemd availability, `/mnt/<drive>` path
+  translation, ext4 case-sensitivity, and no dependency on host-Windows tools —
+  not as a separate full matrix.
+- Windows native (Hermes desktop). The `os.name == "nt"` paths are active:
+  `himalaya.exe` resolution (plus `HERMES_EMAIL_WATCHDOG_HIMALAYA_BIN` and
+  `shutil.which`), `portable_lock` via `msvcrt` byte-range locking rather than
+  `fcntl`, no POSIX signal semantics, and `os.chmod(0o600)` is not a security
+  boundary (confidentiality relies on NTFS ACLs, not mode bits). There is no
+  POSIX shell, so installation and onboarding must go through the Python CLI.
+
+### Hermes-driven install and onboarding is the cross-platform contract path
+
+- The canonical, platform-independent install/enable path is the Hermes plugin
+  CLI (`plugin_cli.py`): `install-runtime`, `himalaya-install --yes`, `setup`,
+  `onboarding-plan`, `onboarding-apply`, `doctor`, `run-once`, `enable`,
+  `disable`, and `uninstall-runtime`. Hermes core must be able to install the
+  plugin and drive the onboarding/configuration bootstrap conversationally on
+  all four targets without a POSIX shell.
+- `install.sh`, `upgrade.sh`, `verify.sh`, `uninstall.sh`, and `purge.sh` are
+  POSIX convenience wrappers for the Docker, Linux, and WSL2 targets. They must
+  never be a hard dependency of Windows-native install or onboarding.
+- Himalaya provisioning must use the vetted, checksum-pinned asset table (which
+  includes windows/x86_64, darwin, and the Linux architectures) through
+  `himalaya-install`; never `curl | sh` and never an unvetted binary. A target
+  with no vetted Himalaya asset must fail closed with a clear message.
+- The onboarding engine is single (`email_onboarding.py`): conversational and
+  non-interactive flows share `status/plan/apply/validate/enable/disable` and
+  must produce identical configuration hashes on every target.
+
+### Verification matrix
+
+- Code-level portability must be verified continuously on both an Ubuntu runner
+  and a Windows runner. The Ubuntu leg runs `scripts/ci.sh` and
+  `tests/test_repository_lifecycle.sh` plus the full `tests/run_suite.py`. The
+  Windows leg runs the Python suite on `windows-latest`, skipping only the
+  POSIX-only concurrency/signal cases by platform. The Windows-native unit tests
+  (`test_windows_himalaya_paths.py`, `test_windows_secret_reader.py`,
+  `test_plugin_cli_portable.py`, `test_hook_portable_import.py`) must actually
+  execute on a Windows runner, not only be simulated from Linux by parameter
+  injection.
+- Docker/NAS is verified by the fresh-container installation from the real tag
+  plus the runtime-uid readability gate.
+- WSL2 is verified by the thin environment smoke described above; its full
+  matrix is inherited from Linux native.
+- Windows-native Hermes-desktop end-to-end (Hermes-driven install, onboarding,
+  enable, and one read-only poll) must be verified on a real Windows host before
+  a release claims that target. Where CI cannot provide a Hermes desktop, this is
+  a documented manual acceptance with retained evidence.
+
+### Claims and degradations
+
+- A release must state exactly which targets were verified and by what means
+  (CI-automated versus manual-with-evidence), and must not imply a target is
+  accepted when only its code paths were unit-simulated from another OS.
+- POSIX-only behaviors that legitimately cannot run on Windows (SIGTERM grace
+  shutdown; `0600` as a confidentiality boundary) must be enumerated as Windows
+  degradations together with the Windows-safe alternative or the documented
+  limitation.
