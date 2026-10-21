@@ -1860,7 +1860,7 @@ def persist_production_observation(
             cache_hit=bool(result.get("cache_hit")),
             error_code=str(result.get("error_code") or ""),
             llm_called=bool(result.get("llm_called")),
-            decision_source=str(result.get("decision_source") or ("fast_lane" if result.get("fast_lane") else "")),
+            decision_source=str(result.get("decision_source") or ""),
             raw_category=str(result.get("raw_category") or ""),
             raw_importance=str(result.get("raw_importance") or ""),
             raw_risk_level=str(result.get("raw_risk_level") or ""),

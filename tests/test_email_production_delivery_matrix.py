@@ -36,8 +36,6 @@ class DeliveryRouteTests(unittest.TestCase):
  def test_01_durable_intelligent_composer_exactly_one_text(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
-       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
-       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
@@ -54,24 +52,9 @@ class DeliveryRouteTests(unittest.TestCase):
    legacy.assert_not_called()
    m['_persist_delivery'].assert_called_once()
    persist.assert_called_once(); self.assertEqual(persist.call_args.kwargs['production_route'],'intelligent_v2')
- def test_02_fast_lane_skips_llm(self):
-  with self.common() as m, \
-       mock.patch('importlib.reload', side_effect=lambda m:m), \
-       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
-       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":True,"kind":"verification_code","reasons":["code"]}), \
-       mock.patch('email_production_router.build_fast_decision',return_value=DECISION), \
-       mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
-       mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
-       mock.patch('email_semantic_engine.analyze_email') as llm, \
-       mock.patch('email_assistant_composer.render_notification',return_value={"ok":True,"text":"FAST"}):
-   m['production_route_enabled'].return_value=True; m['download_attachments'].return_value=[]; m['upsert_schedule'].return_value=[]; m['install_reminder_cron'].return_value=[]
-   r=email_delivery.deliver_email(self.email,self.rule,self.analysis,self.account)
-   self.assertEqual(r['route_lane'],'fast'); llm.assert_not_called(); persist.assert_called_once()
  def test_03_semantic_fallback_uses_lossless_evidence_card(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
-       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
-       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":True,"timeout":True,"error_code":"timeout","decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":False}), \
@@ -83,8 +66,6 @@ class DeliveryRouteTests(unittest.TestCase):
  def test_04_composer_failure_uses_semantic_emergency_not_legacy(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
-       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
-       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}) as persist, \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
@@ -97,8 +78,6 @@ class DeliveryRouteTests(unittest.TestCase):
  def test_05_schedule_permission_failure_keeps_intelligent_message(self):
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
-       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
-       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}), \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
@@ -118,8 +97,6 @@ class DeliveryRouteTests(unittest.TestCase):
   final={"ok":True,"text":"MODEL-EDITED","renderer_version":"model_editorial_gate_v2a","model":"deepseek-flash"}
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
-       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
-       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m","model":"deepseek-flash"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}), \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \
@@ -143,8 +120,6 @@ class DeliveryRouteTests(unittest.TestCase):
   ]
   with self.common() as m, \
        mock.patch('importlib.reload', side_effect=lambda m:m), \
-       mock.patch('email_production_router.extract_features',return_value={"message_key":"m"}), \
-       mock.patch('email_production_router.classify_fast_lane',return_value={"fast_lane":False}), \
        mock.patch('email_semantic_engine.analyze_email',return_value={"ok":True,"schema_valid":True,"fallback_used":False,"timeout":False,"decision":DECISION,"message_key":"m"}), \
        mock.patch('email_semantic_engine.persist_production_observation',return_value={"ok":True}), \
        mock.patch('email_production_router.decision_to_legacy_analysis',return_value={"should_notify":True}), \

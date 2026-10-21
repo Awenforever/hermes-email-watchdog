@@ -6,44 +6,11 @@ This module is deterministic except for the durable semantic call made by
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, Mapping
 
 import email_config
-import email_feature_extractor
-import email_semantic_engine
-import email_semantic_schema
 
 MARKER = "EMAIL_WATCHDOG_PRODUCTION_ROUTER_V1"
-
-_CODE_RE = re.compile(
-    r"(?i)(验证码|校验码|动态口令|一次性密码|登录码|安全码|认证码|短信码|"
-    r"verification code|one[- ]time password|security code|authentication code|"
-    r"auth code|passcode|\byour\s+code\b|\bcode\b|\botp\b|2fa)"
-)
-_SECURITY_RE = re.compile(
-    r"(?i)(可疑登录|异常登录|未经授权|账户被锁|账号被锁|账户入侵|密码重置|"
-    r"立即修改密码|suspicious login|unauthorized|account locked|account compromise|"
-    r"password reset|security alert)"
-)
-_URGENCY_RE = re.compile(
-    r"(?i)(立即|马上|尽快|今天|今日|今晚|分钟后|小时后|有效期\s*\d+\s*分钟|"
-    r"immediately|urgent|within\s+\d+\s+(?:minutes?|hours?)|"
-    r"in\s+\d+\s+(?:minutes?|hours?)|expires?\s+in)"
-)
-_MEETING_RE = re.compile(r"(?i)(会议|例会|活动|讲座|面试|meeting|event|webinar|interview)")
-_DEADLINE_RE = re.compile(r"(?i)(截止|提交|完成|回复|确认|deadline|due|submit|respond|complete)")
-_DEADLINE_TERM_RE = re.compile(r"(?i)(截止|请于|不晚于|deadline|due(?:\s+by)?|before)")
-_ACTION_RE = re.compile(r"(?i)(请.{0,30}(?:提交|完成|回复|确认|填写)|submit|respond|complete|confirm)")
-_TEMPORAL_RE = re.compile(
-    r"(?i)(?:20\d{2}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?|"
-    r"\d{1,2}[-/.月]\d{1,2}日?|\d{1,2}:\d{2}|"
-    r"\d+\s*(?:分钟|小时|minutes?|hours?)\s*(?:后|later)|"
-    r"(?:today|tomorrow|今天|明天|本周|下周))"
-)
-_ANTI_FRAUD_RE = re.compile(
-    r"(?i)(反诈|防骗|诈骗.{0,24}(?:提醒|通知|教育)|anti[- ]?fraud|fraud awareness)"
-)
 
 
 def _text(value: Any, limit: int = 0) -> str:
@@ -59,7 +26,6 @@ def settings() -> Dict[str, Any]:
         "production_route_enabled": bool(cfg.get("production_route_enabled", False)),
         "all_mail_push": bool(cfg.get("all_mail_push", False)),
         "legacy_fallback_enabled": bool(cfg.get("legacy_fallback_enabled", True)),
-        "fast_lane_enabled": bool(cfg.get("fast_lane_enabled", True)),
         "renderer": str(cfg.get("renderer") or "intelligent_v2"),
         "mode": str(cfg.get("mode") or "shadow"),
     }
@@ -68,118 +34,6 @@ def settings() -> Dict[str, Any]:
 def production_enabled() -> bool:
     cfg = settings()
     return bool(cfg["production_route_enabled"] and cfg["mode"] == "production")
-
-
-def extract_features(email: Mapping[str, Any]) -> Dict[str, Any]:
-    return dict(email_feature_extractor.extract_features(dict(email or {})) or {})
-
-
-def classify_fast_lane(email: Mapping[str, Any], features: Mapping[str, Any]) -> Dict[str, Any]:
-    cfg = settings()
-    if not cfg.get("fast_lane_enabled"):
-        return {"fast_lane": False, "kind": "", "reasons": []}
-    subject = _text(email.get("subject"), 800)
-    body = _text(email.get("body"), 6000)
-    scope = subject + "\n" + body
-    hints = features.get("semantic_hints") if isinstance(features.get("semantic_hints"), Mapping) else {}
-    candidates = [
-        _text(item, 16) for item in list(features.get("code_candidates") or [])
-        if re.fullmatch(r"\d{4,8}", _text(item, 16))
-    ]
-    if not candidates and _CODE_RE.search(scope):
-        candidates = [
-            value for value in re.findall(r"(?<!\d)(\d{4,8})(?!\d)", scope)
-            if not (len(value) == 4 and 2000 <= int(value) <= 2100)
-        ][:3]
-    anti_fraud_notice = bool(_ANTI_FRAUD_RE.search(scope))
-    if candidates and not anti_fraud_notice and (_CODE_RE.search(scope) or hints.get("verification_code_phrase")):
-        return {"fast_lane": True, "kind": "verification_code", "reasons": ["grounded_verification_code"], "code": candidates[0]}
-    if not anti_fraud_notice and _SECURITY_RE.search(scope) and _URGENCY_RE.search(scope):
-        return {"fast_lane": True, "kind": "account_security", "reasons": ["urgent_account_security"]}
-    if _URGENCY_RE.search(scope) and _MEETING_RE.search(scope) and _TEMPORAL_RE.search(scope):
-        return {"fast_lane": True, "kind": "meeting_event", "reasons": ["explicit_near_term_meeting"]}
-    if (
-        not anti_fraud_notice
-        and _URGENCY_RE.search(scope)
-        and _DEADLINE_RE.search(scope)
-        and _DEADLINE_TERM_RE.search(scope)
-        and _ACTION_RE.search(scope)
-        and _TEMPORAL_RE.search(scope)
-    ):
-        return {"fast_lane": True, "kind": "task_deadline", "reasons": ["explicit_near_term_deadline"]}
-    return {"fast_lane": False, "kind": "", "reasons": []}
-
-
-def _base_fast_decision(email: Mapping[str, Any], rule_result: Mapping[str, Any], analysis: Mapping[str, Any], features: Mapping[str, Any]) -> Dict[str, Any]:
-    facts = email_semantic_engine._facts(email or {}, features or {})
-    message_key = str(features.get("message_key") or "")
-    decision = email_semantic_schema.conservative_fallback(
-        message_key=message_key,
-        email=email,
-        rule_result=rule_result,
-        analysis=analysis,
-        facts=facts,
-        reason="deterministic_fast_lane",
-    )
-    return decision
-
-
-def build_fast_decision(email: Mapping[str, Any], rule_result: Mapping[str, Any], analysis: Mapping[str, Any], features: Mapping[str, Any], lane: Mapping[str, Any]) -> Dict[str, Any]:
-    kind = str(lane.get("kind") or "")
-    subject = _text(email.get("subject"), 260) or "无主题"
-    body = _text(email.get("body"), 1200)
-    decision = _base_fast_decision(email, rule_result, analysis, features)
-    label = email_semantic_schema.CATEGORIES.get(kind, kind)
-    decision["classification"] = {"category": kind, "label": label, "confidence": 0.99}
-    decision["importance"] = {"level": "critical" if kind == "account_security" else "high", "reason": "确定性及时性通道。"}
-    decision["notification"]["should_notify"] = True
-    decision["evidence"]["uncertainties"] = []
-    decision["evidence"]["source_fields"] = ["subject", "body"]
-
-    if kind == "verification_code":
-        decision["notification"].update({
-            "content_mode": "code_card", "summary_style": "paragraph",
-            "summary": "收到验证码邮件，请核对来源后使用。", "key_points": [],
-            "original_policy": "none", "original_reason": "", "special_card": "code",
-        })
-        decision["action"] = {"required": False, "type": "", "description": "", "next_step": ""}
-        decision["deadline"] = {"has_deadline": False, "datetime": "", "date_text": "", "confidence": 0.0}
-        decision["risk"] = {"level": "none", "notes": []}
-    elif kind == "account_security":
-        decision["notification"].update({
-            "content_mode": "summary_plus_original", "summary_style": "paragraph",
-            "summary": f"账户安全提醒：{subject}", "key_points": [],
-            "original_policy": "excerpt", "original_reason": "需要保留安全通知原文。", "special_card": "none",
-        })
-        decision["action"] = {"required": True, "type": "review_security", "description": "请立即核对该账户安全事件是否由本人触发。", "next_step": "如非本人操作，立即修改密码并检查登录设备。"}
-        decision["deadline"] = {"has_deadline": False, "datetime": "", "date_text": "", "confidence": 0.0}
-        decision["risk"] = {"level": "high", "notes": ["该邮件包含明确的紧急账户安全信号。"]}
-    elif kind == "meeting_event":
-        decision["notification"].update({
-            "content_mode": "event_card", "summary_style": "paragraph",
-            "summary": subject, "key_points": [], "original_policy": "none",
-            "original_reason": "", "special_card": "event",
-        })
-        decision["action"] = {"required": True, "type": "attend", "description": "该会议或活动即将开始。", "next_step": "立即查看原邮件中的时间、地点或会议链接。"}
-        decision["deadline"] = {"has_deadline": True, "datetime": "", "date_text": _text(body or subject, 180), "confidence": 0.9}
-        decision["risk"] = {"level": "none", "notes": []}
-    elif kind == "task_deadline":
-        decision["notification"].update({
-            "content_mode": "deadline_card", "summary_style": "paragraph",
-            "summary": subject, "key_points": [], "original_policy": "none",
-            "original_reason": "", "special_card": "deadline",
-        })
-        decision["action"] = {"required": True, "type": "complete_task", "description": "该事项存在明确的临近处理要求。", "next_step": "立即查看原邮件并完成要求。"}
-        decision["deadline"] = {"has_deadline": True, "datetime": "", "date_text": _text(body or subject, 180), "confidence": 0.9}
-        decision["risk"] = {"level": "none", "notes": []}
-    validated, errors = email_semantic_schema.normalize_and_validate(
-        decision,
-        message_key=str(features.get("message_key") or ""),
-        facts=email_semantic_engine._facts(email or {}, features or {}),
-    )
-    if errors or validated is None:
-        raise RuntimeError("fast decision schema invalid: " + "; ".join(errors[:6]))
-    return validated
 
 
 def decision_to_legacy_analysis(decision: Mapping[str, Any], original: Mapping[str, Any] | None = None) -> Dict[str, Any]:

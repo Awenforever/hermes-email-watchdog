@@ -76,7 +76,7 @@ class ConfigMigrationTests(unittest.TestCase):
         cfg = email_onboarding._sanitize_existing_config(old)
         self.assertEqual(cfg["version"], 7)
         self.assertEqual(cfg["semantic_engine"]["protocol"], "readable_grounded_core_v1x")
-        self.assertFalse(cfg["notification"]["fast_lane_enabled"])
+        self.assertNotIn("fast_lane_enabled", cfg["notification"])
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
         self.assertTrue(cfg["delivery"]["forward_attachments_to_weixin"])
 

@@ -276,8 +276,6 @@ def record_decision(email: dict, rule_result: dict, analysis: dict, delivery: Op
             used_llm = 0
         if "llm disabled" in _json_safe(analysis).lower():
             used_llm = 0
-        if str(delivery.get("route_lane") or "").lower() == "fast":
-            used_llm = 0
 
         key = message_key(email or {})
         now = _now()

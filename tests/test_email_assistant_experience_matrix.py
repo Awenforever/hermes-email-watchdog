@@ -52,7 +52,7 @@ class AssistantExperienceTests(unittest.TestCase):
         self.assertEqual(cfg["semantic_engine"]["provider"], "hermes")
         self.assertEqual(cfg["semantic_engine"]["model"], "")
         self.assertEqual(cfg["semantic_engine"]["fallback_model"], "")
-        self.assertFalse(cfg["notification"]["fast_lane_enabled"])
+        self.assertNotIn("fast_lane_enabled", cfg["notification"])
         self.assertTrue(cfg["delivery"]["auto_download_attachments"])
         self.assertTrue(cfg["delivery"]["forward_attachments"])
 

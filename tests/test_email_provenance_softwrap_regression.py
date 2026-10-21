@@ -112,8 +112,8 @@ class UsedLlmProvenanceRegression(unittest.TestCase):
     def test_04_durable_semantic_delivery_sets_used_llm(self):
         self.assertEqual(self._record(llm_called=True, model="qwen2.5:3b"), 1)
 
-    def test_05_fast_lane_remains_non_llm(self):
-        self.assertEqual(self._record(llm_called=False, model="hermes", route_lane="fast"), 0)
+    def test_05_hermes_non_llm_delivery_remains_non_llm(self):
+        self.assertEqual(self._record(llm_called=False, model="hermes"), 0)
 
 
 if __name__ == "__main__":
