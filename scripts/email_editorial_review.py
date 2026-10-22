@@ -102,6 +102,40 @@ def _canonicalize_message_identity(markdown: str, email: Mapping[str, Any]) -> s
     return f"{identity}\n\n{body}".strip() if body else identity
 
 
+_BODY_BOLD_LABEL_LINE = re.compile(r"^\s*\*{1,2}[^*\n]+\*{1,2}\s*[:：]?\s*$")
+# Any Unicode word character (letters/digits/CJK…), i.e. real content rather
+# than punctuation, symbols or whitespace. Script-agnostic on purpose.
+_BODY_WORD_CHAR = re.compile(r"[^\W_]", re.UNICODE)
+
+
+def _semantic_body(markdown: str) -> str:
+    """The prose that follows the runtime-owned sender/subject identity block."""
+    match = re.search(r"\*\*主题\*\*\s*`[^`]*`", markdown)
+    return markdown[match.end():].strip() if match else markdown.strip()
+
+
+def _body_degenerate(body: str) -> bool:
+    """Whether a non-empty semantic body holds no content beyond decoration.
+
+    Targets the model artifact where a body is emitted but contains only an
+    ellipsis/punctuation or bare bold section labels, which would otherwise be
+    published verbatim and hide the grounded summary the deterministic composer
+    already produced. An empty body is tolerated (runtime chrome and the composer
+    fallback supply the card), and headings count as content so a title-only body
+    is not falsely rejected.
+    """
+    text = (body or "").strip()
+    if not text:
+        return False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or _BODY_BOLD_LABEL_LINE.match(line):
+            continue
+        if _BODY_WORD_CHAR.search(stripped):
+            return False
+    return True
+
+
 def _strip_runtime_owned_sections(markdown: str) -> tuple[str, list[str]]:
     """Drop unverified effect sections; the runtime appends successful effects."""
     owned = re.compile(r"^\s*(?:#{1,6}\s*)?\*{0,2}(快捷操作|时效|附件|提醒)\*{0,2}\s*$")
@@ -364,6 +398,10 @@ def _normalize_result(
     markdown, password_redacted = _redact_account_passwords(markdown)
     markdown, stripped_runtime_sections = _strip_runtime_owned_sections(markdown)
     markdown = _canonicalize_message_identity(markdown, email) if publish else markdown
+    # Judge the model's emitted body before runtime stripping (e.g. stale
+    # relative-time removal) can legitimately empty it; otherwise a correct
+    # strip would be misread as a degenerate model output.
+    body_degenerate = bool(publish) and _body_degenerate(_semantic_body(markdown))
     relative_time_removed = False
     age_days = _message_age_days(email)
     if age_days is not None and age_days > 7 and _RELATIVE_TIME.search(markdown):
@@ -386,6 +424,8 @@ def _normalize_result(
             errors.append("markdown contains an unverified link or placeholder")
         if _NOISE.search(markdown):
             errors.append("markdown contains mail chrome")
+        if body_degenerate:
+            errors.append("markdown body is degenerate")
     selections = []
     seen = set()
     raw_links = raw.get("selected_links") if isinstance(raw.get("selected_links"), list) else []

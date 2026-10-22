@@ -60,7 +60,6 @@
     "legacy_fallback_enabled": true,
     "editorial_review_enabled": true,
     "editorial_review_version": "model_editorial_gate_v2a",
-    "fast_lane_enabled": false,
     "original_policy": "auto",
     "original_max_chars": 900,
     "show_priority": true,

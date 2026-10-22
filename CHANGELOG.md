@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.0 - 2026-10-22
+
+- Remove the deterministic fast lane and its production router: every triage
+  decision now goes through the model, so no hard-coded category short-circuit
+  can misfile mail that the classifier cannot enumerate.
+- Add an editorial-review gate that rejects a degenerate summary (for example a
+  bare "...") and falls back to a grounded draft instead of pushing an empty card.
+- Make re-submitting an already-delivered notification from the outbox an
+  idempotent no-op, ending the chronic re-send of a delivered card.
+- Document multi-platform support and the verification contract across
+  Windows-native, WSL2, Linux-native, and Docker targets.
+
 ## 0.13.5 - 2026-10-20
 
 - Stop advertising `@回复` on unattended automated/notification mailboxes by

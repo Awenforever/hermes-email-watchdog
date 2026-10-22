@@ -94,10 +94,6 @@ DEFAULT_CONFIG = {
         "legacy_fallback_enabled": True,
         "editorial_review_enabled": True,
         "editorial_review_version": "model_editorial_gate_v2a",
-        # Every production semantic decision is made by the configured model.
-        # Deterministic extraction remains a grounding/safety layer, not a
-        # parallel classifier that silently bypasses the selected Hermes model.
-        "fast_lane_enabled": False,
         "original_policy": "auto",
         "original_max_chars": 900,
         "show_priority": True,

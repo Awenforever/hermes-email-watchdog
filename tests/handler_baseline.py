@@ -576,6 +576,15 @@ def _outbox_pending_state() -> dict:
         "next_due_at": min(due_times).isoformat(timespec="seconds") if due_times else None,
     }
 
+def _outbox_already_settled(entry: dict) -> bool:
+    """True when this exact notification is already accepted/delivered; re-sending would be a no-op."""
+    try:
+        stored = (_outbox_load().get("entries") or {}).get(entry.get("delivery_id") or entry.get("id")) or {}
+    except Exception:
+        return False
+    return str(stored.get("status") or "") in {"accepted", "delivered"}
+
+
 def _outbox_mark_attempt(entry: dict) -> None:
     with _state_file_lock(OUTBOX_FILE):
         data = _outbox_load()
@@ -771,24 +780,27 @@ async def _run_once():
                 _restore_seen_snapshot(seen_snapshot)
                 raise
 
-            try:
-                _outbox_mark_attempt(entry)
-                result = await _send_weixin(entry["text"], delivery_id=entry["delivery_id"])
-            except Exception as exc:
-                # Mailbox processing has completed and the exact notification is durable in the outbox.
-                # Defer delivery with bounded backoff; do not suppress future mailbox polling.
-                _outbox_mark_failed(entry, exc)
-                delivery_error = _safe_error_text(exc)
-                status["state"] = "degraded"
+            if _outbox_already_settled(entry):
                 status["last_delivery_id"] = entry["delivery_id"]
-                status["last_delivery_pending_at"] = _now()
-                status["last_delivery_error"] = delivery_error
             else:
-                _outbox_mark_delivered(entry, result)
-                status["last_sent_at"] = _now()
-                status["last_sent_chars"] = len(output)
-                status["last_delivery_id"] = entry["delivery_id"]
-                status["last_delivery_error"] = ""
+                try:
+                    _outbox_mark_attempt(entry)
+                    result = await _send_weixin(entry["text"], delivery_id=entry["delivery_id"])
+                except Exception as exc:
+                    # Mailbox processing has completed and the exact notification is durable in the outbox.
+                    # Defer delivery with bounded backoff; do not suppress future mailbox polling.
+                    _outbox_mark_failed(entry, exc)
+                    delivery_error = _safe_error_text(exc)
+                    status["state"] = "degraded"
+                    status["last_delivery_id"] = entry["delivery_id"]
+                    status["last_delivery_pending_at"] = _now()
+                    status["last_delivery_error"] = delivery_error
+                else:
+                    _outbox_mark_delivered(entry, result)
+                    status["last_sent_at"] = _now()
+                    status["last_sent_chars"] = len(output)
+                    status["last_delivery_id"] = entry["delivery_id"]
+                    status["last_delivery_error"] = ""
 
         pending_state = _outbox_pending_state()
         status.update(pending_state)

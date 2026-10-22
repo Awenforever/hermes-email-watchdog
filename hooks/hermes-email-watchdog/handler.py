@@ -638,6 +638,15 @@ def _outbox_pending_state() -> dict:
         "next_due_at": min(due_times).isoformat(timespec="seconds") if due_times else None,
     }
 
+def _outbox_already_settled(entry: dict) -> bool:
+    """True when this exact notification is already accepted/delivered; re-sending would be a no-op."""
+    try:
+        stored = (_outbox_load().get("entries") or {}).get(entry.get("delivery_id") or entry.get("id")) or {}
+    except Exception:
+        return False
+    return str(stored.get("status") or "") in {"accepted", "delivered"}
+
+
 def _outbox_mark_attempt(entry: dict) -> None:
     with _state_file_lock(OUTBOX_FILE):
         data = _outbox_load()
@@ -837,6 +846,9 @@ async def _run_once():
                 raise
             sent_chars = 0
             for entry in entries:
+                if _outbox_already_settled(entry):
+                    status["last_delivery_id"] = entry["delivery_id"]
+                    continue
                 try:
                     _outbox_mark_attempt(entry)
                     result = await _send_weixin(

@@ -329,7 +329,7 @@ def _migrate_known_v2_assistant_policy(
     semantic["num_predict_standard"] = 1200
     semantic["num_predict_complex"] = 1800
     semantic["num_predict_hard_cap"] = 2048
-    notification["fast_lane_enabled"] = False
+    notification.pop("fast_lane_enabled", None)
     delivery["auto_download_attachments"] = True
     delivery["forward_attachments_to_weixin"] = True
     delivery.setdefault("attachment_max_bytes", 25 * 1024 * 1024)
@@ -463,6 +463,10 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
             route_enabled = bool(notification.get("production_route_enabled", False))
             if renderer in {"adaptive_v1", "adaptive_v1e"} and mode == "shadow" and not route_enabled:
                 migrated = copy.deepcopy(email_config.DEFAULT_CONFIG["notification"])
+                # fast_lane_enabled is preserved here ONLY as the v0.2.x
+                # detection signal for _migrate_known_v2_assistant_policy below;
+                # it is unconditionally stripped at the end of this function so
+                # the dead key never reaches the final config.
                 for key in (
                     "all_mail_push",
                     "legacy_fallback_enabled",
@@ -491,6 +495,11 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     allowed, _ = _migrate_known_v4_presentation_policy(allowed)
     allowed, _ = _migrate_known_v5_storage_policy(allowed)
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
+    # The deterministic fast lane was removed; every production semantic decision
+    # is made by the configured model. Strip the dead key from any historical
+    # config so upgraders land on the same clean, all-LLM contract as production.
+    if isinstance(cfg.get("notification"), dict):
+        cfg["notification"].pop("fast_lane_enabled", None)
     cfg["version"] = 7
     cfg["paths"] = {
         key: cfg.get("paths", {}).get(key, email_config.DEFAULT_CONFIG["paths"][key])
@@ -1082,7 +1091,6 @@ def _plan_internal(input_data: dict[str, Any]) -> dict[str, Any]:
         semantic["fallback_model"] = str(options["semantic_fallback_model"]).strip()
 
     notification = cfg.setdefault("notification", {})
-    notification["fast_lane_enabled"] = False
     policy = str(options.get("notification_policy") or "").strip().lower()
     if policy:
         if policy not in {"actionable", "all"}:

@@ -1610,8 +1610,7 @@ def check_account(acct, pushed_count=None):
                 _record_output_attachments(delivery.get("attachments") or [])
                 _record_output_action(email_data, acct, analysis, delivery, alert)
             if (
-                delivery.get("route_lane") == "fast"
-                or analysis.get("user_relevance") == "urgent"
+                analysis.get("user_relevance") == "urgent"
                 or rule_result.get("priority") == "urgent"
             ):
                 alerts.insert(0, alert)

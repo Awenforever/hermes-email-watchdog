@@ -943,7 +943,7 @@ def upsert_schedule(email: dict, analysis: dict) -> list:
     distinct schedules (e.g. a CFP with separate abstract and full-paper due
     dates). Falls back to the singular ``analysis['deadline']`` — emitting one
     ``:main`` candidate exactly as before — when no list is present, so cached
-    decisions and the heuristic fast lane keep working unchanged.
+    decisions keep working unchanged.
     """
     if not email_store:
         return []
@@ -2091,7 +2091,6 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
 
         import importlib
         import email_production_router
-        import email_feature_extractor
         import email_assistant_composer
         import email_evidence_contract
         import email_editorial_review
@@ -2099,7 +2098,6 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         import email_semantic_engine
 
         email_production_router = importlib.reload(email_production_router)
-        email_feature_extractor = importlib.reload(email_feature_extractor)
         email_assistant_composer = importlib.reload(email_assistant_composer)
         email_evidence_contract = importlib.reload(email_evidence_contract)
         email_editorial_review = importlib.reload(email_editorial_review)
@@ -2114,73 +2112,53 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
         route_reason = []
         evidence_fallback_reason = ""
         try:
-            features = email_production_router.extract_features(email or {})
-            lane = email_production_router.classify_fast_lane(email or {}, features)
-            if lane.get("fast_lane"):
-                route_lane = "fast"
-                route_reason = list(lane.get("reasons") or [])
-                decision = email_production_router.build_fast_decision(
-                    email or {}, rule_result or {}, analysis or {}, features, lane
-                )
-                semantic_meta = {
-                    "ok": True, "schema_valid": True, "fallback_used": False,
-                    "timeout": False, "decision": decision,
-                    "message_key": features.get("message_key") or "",
-                    "model": "hermes", "llm_called": False,
-                    "decision_source": "fast_lane",
-                    "raw_category": "", "validated_category": str((decision.get("classification") or {}).get("category") or ""),
-                    "normalization_repairs": [], "trace_signals": {},
-                    "fast_lane": True, "fast_lane_kind": lane.get("kind") or "",
-                    "core_protocol": "readable_grounded_core_v1x",
-                }
-            else:
-                semantic_meta = email_semantic_engine.analyze_email(
-                    email or {}, rule_result or {}, analysis or {},
-                    settings_override={"mode": "shadow", "cache_by_message_hash": True},
-                )
-                if not semantic_meta.get("ok") or not semantic_meta.get("schema_valid"):
-                    raise RuntimeError("semantic engine did not return a valid decision")
-                decision = semantic_meta.get("decision")
-                if not isinstance(decision, dict):
-                    raise RuntimeError("semantic decision missing")
+            semantic_meta = email_semantic_engine.analyze_email(
+                email or {}, rule_result or {}, analysis or {},
+                settings_override={"mode": "shadow", "cache_by_message_hash": True},
+            )
+            if not semantic_meta.get("ok") or not semantic_meta.get("schema_valid"):
+                raise RuntimeError("semantic engine did not return a valid decision")
+            decision = semantic_meta.get("decision")
+            if not isinstance(decision, dict):
+                raise RuntimeError("semantic decision missing")
 
-                if semantic_meta.get("fallback_used") or semantic_meta.get("timeout"):
-                    evidence_fallback_reason = (
-                        "semantic model routes unavailable: "
-                        + str(semantic_meta.get("error_code") or "unknown")
-                    )
+            if semantic_meta.get("fallback_used") or semantic_meta.get("timeout"):
+                evidence_fallback_reason = (
+                    "semantic model routes unavailable: "
+                    + str(semantic_meta.get("error_code") or "unknown")
+                )
 
-                # A second model pass owns the final editorial judgment and
-                # presentation.  The deterministic composer is supplied only
-                # as a criticizable draft and remains the safe fallback if the
-                # editorial model or its compact contract fails.
-                try:
-                    if evidence_fallback_reason:
-                        raise RuntimeError(evidence_fallback_reason)
-                    editorial_enabled = bool(
-                        email_config.get_notification_settings().get("editorial_review_enabled", True)
-                    )
-                    if not editorial_enabled:
-                        raise RuntimeError("model editorial review disabled by configuration")
-                    draft_meta = email_assistant_composer.render_notification(
-                        email or {}, decision, {"attachments": [], "schedule": []}, account or {}
-                    )
-                    editorial_meta = email_editorial_review.review_notification(
-                        email or {}, decision, str(draft_meta.get("text") or "")
-                    )
-                    if editorial_meta.get("ok"):
-                        decision = email_editorial_review.apply_review(decision, editorial_meta)
-                        semantic_meta["decision"] = decision
-                        semantic_meta["editorial"] = {
-                            key: value for key, value in editorial_meta.items()
-                            if key not in {"markdown", "links"}
-                        }
-                except Exception as editorial_exc:
-                    editorial_meta = {
-                        "ok": False,
-                        "version": "model_editorial_gate_v2a",
-                        "errors": [repr(editorial_exc)[:400]],
+            # A second model pass owns the final editorial judgment and
+            # presentation.  The deterministic composer is supplied only
+            # as a criticizable draft and remains the safe fallback if the
+            # editorial model or its compact contract fails.
+            try:
+                if evidence_fallback_reason:
+                    raise RuntimeError(evidence_fallback_reason)
+                editorial_enabled = bool(
+                    email_config.get_notification_settings().get("editorial_review_enabled", True)
+                )
+                if not editorial_enabled:
+                    raise RuntimeError("model editorial review disabled by configuration")
+                draft_meta = email_assistant_composer.render_notification(
+                    email or {}, decision, {"attachments": [], "schedule": []}, account or {}
+                )
+                editorial_meta = email_editorial_review.review_notification(
+                    email or {}, decision, str(draft_meta.get("text") or "")
+                )
+                if editorial_meta.get("ok"):
+                    decision = email_editorial_review.apply_review(decision, editorial_meta)
+                    semantic_meta["decision"] = decision
+                    semantic_meta["editorial"] = {
+                        key: value for key, value in editorial_meta.items()
+                        if key not in {"markdown", "links"}
                     }
+            except Exception as editorial_exc:
+                editorial_meta = {
+                    "ok": False,
+                    "version": "model_editorial_gate_v2a",
+                    "errors": [repr(editorial_exc)[:400]],
+                }
 
             prod_analysis = email_production_router.decision_to_legacy_analysis(decision, analysis or {})
             # A semantic outage cannot be allowed to make the suppression
