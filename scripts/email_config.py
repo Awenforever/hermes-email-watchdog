@@ -21,6 +21,25 @@ STATE_ROOT = Path(
 )
 CONFIG_PATH = os.environ.get("EMAIL_WATCHDOG_CONFIG", str(STATE_ROOT / "config.json"))
 
+_STATE_ROOT_FROM_ENV = "HERMES_EMAIL_WATCHDOG_STATE_ROOT" in os.environ
+
+
+def _state_path(*parts: str) -> str:
+    """Join a state-root-relative path with platform-correct separators.
+
+    An explicitly-pinned ``HERMES_EMAIL_WATCHDOG_STATE_ROOT`` is a real host
+    path, so it is joined with ``os.path.join`` (native separators on every OS,
+    matching ``pathlib``).  The built-in default instead stays a portable,
+    forward-slash ``~``-literal so ``DEFAULT_CONFIG`` matches the checked-in
+    hermetic template (``references/email_watchdog_config.template.json``)
+    byte-for-byte on every platform.
+    """
+    base = STATE_ROOT_RAW.rstrip("/\\")
+    if _STATE_ROOT_FROM_ENV:
+        return os.path.join(base, *parts)
+    return "/".join([base, *parts])
+
+
 _WARNED = False
 _CACHE = None
 
@@ -29,12 +48,12 @@ DEFAULT_CONFIG = {
     "default_account": "",
     "accounts": [],
     "paths": {
-        "db": STATE_ROOT_RAW.rstrip("/\\") + "/email.db",
-        "seen": STATE_ROOT_RAW.rstrip("/\\") + "/seen.json",
-        "cache_dir": STATE_ROOT_RAW.rstrip("/\\") + "/email_cache",
-        "threads": STATE_ROOT_RAW.rstrip("/\\") + "/email_threads.json",
-        "contacts": STATE_ROOT_RAW.rstrip("/\\") + "/email_contacts.json",
-        "attachment_dir": STATE_ROOT_RAW.rstrip("/\\") + "/attachments",
+        "db": _state_path("email.db"),
+        "seen": _state_path("seen.json"),
+        "cache_dir": _state_path("email_cache"),
+        "threads": _state_path("email_threads.json"),
+        "contacts": _state_path("email_contacts.json"),
+        "attachment_dir": _state_path("attachments"),
     },
     "watchdog": {
         "lookback": 5,
@@ -124,7 +143,7 @@ DEFAULT_CONFIG = {
         "create_reminders": True,
         "managed_cron": True,
         "reminder_offsets_minutes": [1440, 60],
-        "calendar_path": STATE_ROOT_RAW.rstrip("/\\") + "/calendar/email-watchdog.ics",
+        "calendar_path": _state_path("calendar", "email-watchdog.ics"),
         "timezone": "auto",
         "target": {
             "platform": "",

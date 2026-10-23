@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-from zoneinfo import ZoneInfo
 
 import email_evidence_contract
 import email_identity
@@ -23,6 +22,21 @@ import email_identity
 
 COMPOSER_VERSION = "intelligent_v5.0"
 MARKER = "EMAIL_WATCHDOG_EVIDENCE_BOUND_COMPOSER_V5"
+
+
+def _beijing_tz():
+    """Asia/Shanghai with a fixed +08:00 fallback when zoneinfo/tzdata is absent.
+
+    ``zoneinfo`` needs the tzdata package on hosts without a system tz database
+    (notably Windows); Asia/Shanghai is a fixed UTC+8 with no DST since 1991, so
+    the fallback offset keeps timestamps correct everywhere.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Asia/Shanghai")
+    except Exception:
+        return timezone(timedelta(hours=8))
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -115,7 +129,7 @@ def _format_time(value: Any) -> str:
             dt = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
         except Exception:
             dt = parsedate_to_datetime(candidate)
-        shanghai = ZoneInfo("Asia/Shanghai")
+        shanghai = _beijing_tz()
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=shanghai)
         return dt.astimezone(shanghai).strftime("%Y-%m-%d %H:%M")
@@ -770,13 +784,13 @@ def _deadline_display(deadline: Mapping[str, Any], email: Mapping[str, Any]) -> 
                 year_match = re.match(r"(20\d{2})", sent)
                 year = int(year_match.group(1)) if year_match else datetime.now().year
             try:
-                parsed = datetime(year, int(match.group(2)), int(match.group(3)), int(match.group(4) or 23), int(match.group(5) or 59), tzinfo=ZoneInfo("Asia/Shanghai"))
+                parsed = datetime(year, int(match.group(2)), int(match.group(3)), int(match.group(4) or 23), int(match.group(5) or 59), tzinfo=_beijing_tz())
             except Exception:
                 parsed = None
     if parsed is not None:
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
-        expired = parsed.astimezone(ZoneInfo("Asia/Shanghai")) < datetime.now(ZoneInfo("Asia/Shanghai"))
+            parsed = parsed.replace(tzinfo=_beijing_tz())
+        expired = parsed.astimezone(_beijing_tz()) < datetime.now(_beijing_tz())
         return display, expired
     # A relative deadline belongs to the message's send time, not to the
     # moment at which an old message is replayed.  When an old message says
@@ -809,7 +823,7 @@ def _stale_message(email: Mapping[str, Any], days: int = 60) -> bool:
             sent = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
         except Exception:
             sent = parsedate_to_datetime(candidate)
-        zone = ZoneInfo("Asia/Shanghai")
+        zone = _beijing_tz()
         if sent.tzinfo is None:
             sent = sent.replace(tzinfo=zone)
         return (datetime.now(zone) - sent.astimezone(zone)).days >= days

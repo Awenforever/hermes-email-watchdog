@@ -20,7 +20,6 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
-from zoneinfo import ZoneInfo
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
@@ -1032,6 +1031,28 @@ def install_reminder_cron(schedule_items: list) -> list:
     return entries
 
 
+def _zone_or_beijing(name="Asia/Shanghai"):
+    """``ZoneInfo(name)`` with a safe fallback when tzdata is absent (e.g. Windows).
+
+    ``zoneinfo`` needs the tzdata package on hosts without a system tz database.
+    Asia/Shanghai (and common aliases) is a fixed UTC+8 with no DST since 1991,
+    so it maps to a fixed offset; an unrecognised zone falls back to UTC rather
+    than crashing the reminder/render path.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(name)
+    except Exception:
+        norm = str(name or "").strip().casefold()
+        if norm in {
+            "asia/shanghai", "shanghai", "prc", "asia/chongqing",
+            "asia/harbin", "asia/urumqi", "etc/gmt-8", "gmt+8", "utc+8",
+        }:
+            return timezone(timedelta(hours=8))
+        return timezone.utc
+
+
 def _parse_datetime(value, tz_name="Asia/Shanghai"):
     raw = str(value or "").strip()
     if not raw:
@@ -1042,7 +1063,7 @@ def _parse_datetime(value, tz_name="Asia/Shanghai"):
         return None
     if dt.tzinfo is None:
         try:
-            dt = dt.replace(tzinfo=ZoneInfo(_effective_timezone_name(tz_name)))
+            dt = dt.replace(tzinfo=_zone_or_beijing(_effective_timezone_name(tz_name)))
         except Exception:
             dt = dt.replace(tzinfo=timezone(timedelta(hours=8)))
     return dt
@@ -1097,7 +1118,7 @@ def _resolve_deadline_value(value, message_date="", tz_name="auto"):
                 sent = None
         if amount > 0 and sent is not None:
             if sent.tzinfo is None:
-                sent = sent.replace(tzinfo=ZoneInfo(_effective_timezone_name(tz_name)))
+                sent = sent.replace(tzinfo=_zone_or_beijing(_effective_timezone_name(tz_name)))
             unit = relative.group(2).casefold()
             if unit in {"小时", "hour", "hours"}:
                 delta = timedelta(hours=amount)
@@ -1124,7 +1145,7 @@ def _resolve_deadline_value(value, message_date="", tz_name="auto"):
     # interaction contract uses 09:00 in the active Hermes profile timezone.
     hour, minute = int(match.group(4) or 9), int(match.group(5) or 0)
     try:
-        return datetime(year, month, day, hour, minute, tzinfo=ZoneInfo(_effective_timezone_name(tz_name))).isoformat(timespec="minutes")
+        return datetime(year, month, day, hour, minute, tzinfo=_zone_or_beijing(_effective_timezone_name(tz_name))).isoformat(timespec="minutes")
     except Exception:
         return raw
 
@@ -1222,7 +1243,7 @@ def collect_due_reminder_notifications(now=None):
             action = " ".join(
                 str(item.get("action_needed") or reminder.get("message") or "请及时处理").split()
             )
-            deadline_text = deadline.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") if deadline else str(item.get("deadline") or "")
+            deadline_text = deadline.astimezone(_zone_or_beijing("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") if deadline else str(item.get("deadline") or "")
             alerts.append(
                 "### ⏰ 邮件待办提醒\n\n"
                 f"**{title}**\n\n"

@@ -13,16 +13,32 @@ from __future__ import annotations
 import copy
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Dict, Mapping
 from urllib.parse import unquote, urlparse
-from zoneinfo import ZoneInfo
 
 import email_assistant_composer
 import email_semantic_engine
 
 EDITOR_VERSION = "model_editorial_gate_v2o"
+
+
+def _beijing_tz():
+    """Asia/Shanghai with a fixed +08:00 fallback when zoneinfo/tzdata is absent.
+
+    ``zoneinfo`` needs the tzdata package on hosts without a system tz database
+    (notably Windows); Asia/Shanghai is a fixed UTC+8 with no DST since 1991, so
+    the fallback offset keeps timestamps correct everywhere.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Asia/Shanghai")
+    except Exception:
+        return timezone(timedelta(hours=8))
+
+
 _NOISE = re.compile(
     r"(?i)forwarded message|original message|\[image(?::[^\]]*)?\]|"
     r"unsubscribe|manage preferences|举报退订"
@@ -58,7 +74,7 @@ def _message_age_days(email: Mapping[str, Any]) -> float | None:
     try:
         sent = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         if sent.tzinfo is None:
-            sent = sent.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+            sent = sent.replace(tzinfo=_beijing_tz())
         return max(0.0, (datetime.now(sent.tzinfo) - sent).total_seconds() / 86400.0)
     except Exception:
         return None
@@ -256,7 +272,7 @@ def _prompt(
     links: list[dict[str, Any]],
     attachments: list[dict[str, Any]],
 ) -> str:
-    now = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="minutes")
+    now = datetime.now(_beijing_tz()).isoformat(timespec="minutes")
     category = _text(
         (decision.get("classification") or {}).get("category")
         if isinstance(decision.get("classification"), Mapping) else "",
@@ -631,7 +647,7 @@ def _critic_prompt(
     email: Mapping[str, Any], review: Mapping[str, Any], links: list[dict[str, Any]]
 ) -> str:
     payload = {
-        "current_time": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="minutes"),
+        "current_time": datetime.now(_beijing_tz()).isoformat(timespec="minutes"),
         "sent_at": _text(email.get("date_sent") or email.get("date") or email.get("sent_at"), 120),
         "sender": _sender(email), "subject": _text(email.get("subject"), 300),
         "body": _text(email.get("body") or email.get("body_plain") or email.get("text"), 12000),

@@ -1,5 +1,5 @@
 name: hermes-email-watchdog
-version: 0.14.0
+version: 0.14.1
 manifest_version: 1
 api_version: 1
 description: Read-only email triage with grounded classification and actionable messaging alerts.
@@ -8,6 +8,14 @@ license: MIT
 homepage: https://github.com/Awenforever/hermes-email-watchdog
 tags: [email, imap, triage, gateway]
 requires_hermes: ">=0.21.3,<0.22"
+# Windows CPython ships no system tz database, so zoneinfo needs the tzdata
+# package to resolve non-Beijing profile timezones (e.g. Europe/Berlin). Hermes
+# surfaces this as an install hint and never auto-installs plugin dependencies,
+# so Windows users pip-install tzdata for correct local-time deadlines; without
+# it the code degrades to a fixed offset. Linux/macOS/WSL2/Docker have a system
+# tz database and need nothing.
+python_dependencies:
+  - "tzdata>=2024.1; sys_platform == 'win32'"
 config_schema:
   enabled:
     type: bool

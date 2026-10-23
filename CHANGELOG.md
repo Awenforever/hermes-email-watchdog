@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.14.1 - 2026-10-24
+
+- Render correct local-time deadlines on Windows-native hosts, whose CPython
+  ships no system tz database: zoneinfo lookups now fall back to a fixed UTC+8
+  offset for the default Beijing profile instead of crashing with
+  ZoneInfoNotFoundError.
+- Declare `tzdata` as a Windows-only plugin dependency so a non-Beijing profile
+  timezone (for example Europe/Berlin) resolves to its real offset. Hermes
+  surfaces this as an install hint and never auto-installs plugin dependencies,
+  so Windows users pip-install `tzdata`; without it the code degrades to the
+  fixed-offset fallback and the non-Beijing deadline test skips rather than
+  failing. Linux, macOS, WSL2, and Docker already carry a system tz database.
+- Build state paths with `os.path.join` when the state root is set from the
+  environment, so a Windows backslash path is no longer concatenated with a
+  forward slash.
+- Resolve the interpreter portably in `setup.sh` (`python3 || python || py`) so
+  the POSIX wrapper runs on hosts where only `python` or `py` is on PATH.
+- Add a native Windows CI leg that runs the full suite on `windows-latest`
+  across both states of the declared `tzdata` dependency (absent and present),
+  proving the fallbacks and the real-offset resolution on a bare Windows host.
+- Skip the POSIX-only onboarding matrix fixture on Windows-native, where its
+  shebang stub cannot be exec'd by CreateProcess and the matrix drives
+  `bash setup.sh`; the product code it exercises remains nt-correct and the
+  fixture still runs fully on Linux, WSL2, and Docker.
+
 ## 0.14.0 - 2026-10-22
 
 - Remove the deterministic fast lane and its production router: every triage
