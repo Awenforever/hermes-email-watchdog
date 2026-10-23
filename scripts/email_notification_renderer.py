@@ -16,7 +16,6 @@ import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
 import os
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -28,6 +27,21 @@ except Exception:  # pragma: no cover - defensive import for isolated tests
 import email_identity
 
 MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G"
+
+
+def _beijing_tz():
+    """Asia/Shanghai with a fixed +08:00 fallback when zoneinfo/tzdata is absent.
+
+    ``zoneinfo`` needs the tzdata package on hosts without a system tz database
+    (notably Windows); Asia/Shanghai is a fixed UTC+8 with no DST since 1991, so
+    the fallback offset keeps timestamps correct everywhere.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Asia/Shanghai")
+    except Exception:
+        return timezone(timedelta(hours=8))
 RENDERER_VERSION = "adaptive_v1g"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 STATE_ROOT = Path(
@@ -251,7 +265,7 @@ def _format_time(value: Any) -> str:
             dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except Exception:
             dt = parsedate_to_datetime(raw)
-        shanghai = ZoneInfo("Asia/Shanghai")
+        shanghai = _beijing_tz()
         # Semantic output without an offset is already expressed in the
         # configured user timezone.  Treating it as host-local UTC caused an
         # extra eight-hour shift in production.

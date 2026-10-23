@@ -151,6 +151,16 @@ class EmailQuoteActionTests(unittest.TestCase):
 
     @patch.dict("os.environ", {"HERMES_TIMEZONE": "Europe/Berlin"}, clear=False)
     def test_date_only_deadline_uses_nine_in_profile_timezone(self):
+        try:
+            from zoneinfo import ZoneInfo
+
+            ZoneInfo("Europe/Berlin")
+        except Exception:
+            self.skipTest(
+                "Europe/Berlin needs the tzdata package (declared in plugin.yaml "
+                "python_dependencies for Windows); without a tz database the stdlib "
+                "cannot resolve a non-Beijing profile timezone, so this is skipped."
+            )
         value = email_delivery._resolve_deadline_value("2030-03-04", "2029-01-01", "auto")
         self.assertIn("2030-03-04T09:00", value)
         self.assertIn("+01:00", value)

@@ -138,6 +138,14 @@ def import_handler(env: dict[str, str], name: str):
 
 
 def main() -> None:
+    if os.name == "nt":
+        # The fake-himalaya fixture is a POSIX shebang stub that Windows
+        # CreateProcess cannot exec, and the matrix drives `bash setup.sh`.
+        # The product code (email_onboarding.py) is already nt-correct, but this
+        # fixture is POSIX-only, so skip on Windows-native; it runs fully on
+        # Linux/WSL2/Docker.
+        print("ONBOARDING_MATRIX_SKIP=windows-native POSIX-only fixture")
+        return
     with tempfile.TemporaryDirectory(prefix="email-onboarding-matrix-") as raw:
         root = Path(raw)
         fake = write_fake_himalaya(root)
