@@ -4,6 +4,8 @@
 
 Email Watchdog 以只读方式持续理解新邮件。它不是机械地“总结每封邮件”，而是判断这封信与你有什么关系、现在是否需要行动，以及在你现有的 Hermes 消息渠道里怎样呈现最合适。
 
+> **跨项目协作**：所有权、append-only 开发日志与 residual 清单在私有 [`hermes-collab-center`](https://github.com/Awenforever/hermes-collab-center/blob/main/projects/plugins/email-watchdog/PROJECT.md) 仓库（`projects/plugins/email-watchdog/PROJECT.md` + `LOG.md`，需访问权限）。
+
 [![Hermes](https://img.shields.io/badge/Hermes-%E2%89%A50.21.3-111827)](https://github.com/NousResearch/hermes-agent)
 [![Mailbox](https://img.shields.io/badge/mailbox-read--only-16a34a)](#安全边界)
 [![Model](https://img.shields.io/badge/model-inherit%20Hermes-7c3aed)](#理解而不是套模板)
