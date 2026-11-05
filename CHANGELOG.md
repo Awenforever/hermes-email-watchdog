@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0 - 2026-11-06
+
+- Two-phase delivery: the envelope loop now only parses and persists, then the
+   semantic decisions for that batch are pre-warmed concurrently (bounded by
+   `watchdog.analysis_workers`, default 3), and delivery runs serially afterwards.
+- The pre-warm writes only the observation cache; mailbox state, delivery rows and
+   outbox entries stay on the single serial path, so dedupe and ordering are
+   unchanged. A pre-warm failure falls back to inline analysis.
+- Guard the semantic-core reload with a lock so concurrent pre-warm calls cannot
+   race module initialisation.
+
 ## 0.14.3 - 2026-11-05
 
 - Sync the packaged `VERSION` file with `plugin.yaml` and `SKILL.md`;

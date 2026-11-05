@@ -15,7 +15,8 @@
     "sleep_start": 0,
     "sleep_end": 6,
     "max_cached": 200,
-    "seen_max_entries": 5000
+    "seen_max_entries": 5000,
+    "analysis_workers": 3
   },
   "llm": {
     "enabled": false,
@@ -82,13 +83,29 @@
     "auto_forward_safe_attachments": true,
     "attachment_max_bytes": 26214400,
     "attachment_safe_extensions": [
-      ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp",
-      ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx",
-      ".ppt", ".pptx", ".zip", ".7z"
+      ".pdf",
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".gif",
+      ".webp",
+      ".txt",
+      ".csv",
+      ".doc",
+      ".docx",
+      ".xls",
+      ".xlsx",
+      ".ppt",
+      ".pptx",
+      ".zip",
+      ".7z"
     ],
     "create_reminders": true,
     "managed_cron": true,
-    "reminder_offsets_minutes": [1440, 60],
+    "reminder_offsets_minutes": [
+      1440,
+      60
+    ],
     "calendar_path": "~/.hermes/plugin-data/hermes-email-watchdog/calendar/email-watchdog.ics",
     "timezone": "auto",
     "target": {

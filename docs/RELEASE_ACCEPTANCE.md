@@ -1,5 +1,22 @@
 # Release acceptance
 
+## 0.15.0 two-phase delivery acceptance (2026-11-06)
+
+`0.15.0` splits the poll into two phases: the envelope loop only parses and
+persists, then the semantic decisions for that batch are pre-warmed
+concurrently (bounded by `watchdog.analysis_workers`, default 3) before the
+serial delivery pass. Only the observation cache is written concurrently.
+
+| Target | Evidence |
+| --- | --- |
+| T1 container | `python:3.11-slim`, `--network none`, `--tmpfs /opt/data`, source `:ro`: `INSTALL_OK`, `CHECKSUMS_OK`, `VERIFY_OK`, `VERSION=0.15.0` |
+| T2 Ubuntu 22.04 / py3.10 | `INSTALL_OK version=0.15.0`, `VERIFY_OK`, **652 tests OK** |
+| T3 WSL2 Ubuntu-24.04 / py3.12 | `CHECKSUMS_OK`, `VERIFY_OK`, **652 tests OK** |
+| T4 Windows native / py3.12.7 | **652 tests OK (5 POSIX-only skips)**; full plugin CLI E2E still blocked by the `<0.22` Hermes pin (R21) |
+
+New regression tests: `tests/test_email_watch_concurrency.py` (worker clamp,
+pre-warm failure inertness, shadow-cache settings).
+
 ## 0.14.3 multi-platform acceptance (2026-11-06)
 
 `0.14.3` carries the incremental notification delivery introduced in `0.14.2`
