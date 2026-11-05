@@ -12,6 +12,7 @@ import subprocess
 import shutil
 import tempfile
 from html import unescape
+import threading
 import sys
 from datetime import datetime, timedelta, timezone
 from email import policy as email_policy
@@ -2074,6 +2075,25 @@ if _ew_phase3_deliver_for_shadow_wrap is not None and not getattr(_ew_phase3_del
 # durable semantic decisions both feed Adaptive Renderer V1b. Any failure calls
 # the legacy base delivery exactly once. The existing scheduler/outbox remains
 # the sole Weixin delivery owner.
+def prepare_delivery_semantics(email, rule_result, analysis):
+    """Warm the semantic decision cache for one email, with no side effects.
+
+    The concurrent pre-warm path calls this before the serial delivery pass.
+    Only the observation cache is written here: mailbox state, delivery rows
+    and outbox entries remain on the single serial path.
+    """
+    try:
+        # No reload here: the serial delivery wrapper reloads modules for source
+        # upgrades, and reloading inside a concurrent pre-warm would race.
+        import email_semantic_engine
+        return email_semantic_engine.analyze_email(
+            email or {}, rule_result or {}, analysis or {},
+            settings_override={"mode": "shadow", "cache_by_message_hash": True},
+        )
+    except Exception:
+        return {}
+
+
 def production_route_enabled():
     try:
         import email_production_router

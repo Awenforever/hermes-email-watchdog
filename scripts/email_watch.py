@@ -1408,9 +1408,136 @@ def _ambiguous_mail_domains():
 
 
 # ── Process single account ──────────────────────────────────────
+def _analysis_workers():
+    """Bounded parallelism for the semantic pre-warm (1 disables it)."""
+    try:
+        value = int(email_config.get_watchdog_settings().get("analysis_workers", 3))
+    except Exception:
+        value = 3
+    return max(1, min(6, value))
+
+
+def _prewarm_semantics(jobs):
+    """Warm the semantic decision cache for several emails in parallel.
+
+    Only the cache is written here; mailbox state, delivery rows and outbox
+    entries stay on the single serial path. A failure is non-fatal: the
+    delivery call simply computes that email inline as before.
+    """
+    helper = getattr(email_delivery, "prepare_delivery_semantics", None)
+    workers = _analysis_workers()
+    if not callable(helper) or workers < 2 or len(jobs) < 2:
+        return
+    try:
+        route_on = bool(
+            HAS_V3 and hasattr(email_delivery, "production_route_enabled")
+            and email_delivery.production_route_enabled()
+        )
+    except Exception:
+        route_on = False
+    if not route_on:
+        return
+
+    def warm(job):
+        try:
+            pre = email_llm.fallback_analysis(job["email_data"], job["rule_result"], "") if HAS_V3 else {}
+            helper(job["email_data"], job["rule_result"], dict(pre or {}))
+        except Exception:
+            return
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+        list(pool.map(warm, jobs))
+
+
+def _deliver_and_notify(job):
+    """Run analysis, delivery and alert construction for one parsed email.
+
+    The envelope loop only parses and persists; this helper runs after the
+    concurrent semantic pre-warm so the expensive model work of several
+    emails overlaps instead of stacking serially.
+    """
+    email_data = job["email_data"]
+    rule_result = job["rule_result"]
+    acct = job["acct"]
+    subject = job["subject"]
+    production_route_active = bool(
+        HAS_V3
+        and hasattr(email_delivery, "production_route_enabled")
+        and email_delivery.production_route_enabled()
+    )
+    if rule_result.get("action") == "simple_code":
+        analysis = _simple_code_analysis(email_data, rule_result)
+    elif production_route_active:
+        # The new durable production route owns semantic analysis. The legacy
+        # analysis is retained only as a safe formatter fallback input.
+        analysis = email_llm.fallback_analysis(
+            email_data, rule_result, ""
+        ) if HAS_V3 else {}
+        analysis = dict(analysis or {})
+        analysis["llm_notes"] = ""
+        analysis["should_notify"] = True
+        analysis["production_semantic_route_pending"] = True
+    elif HAS_V3 and email_llm.should_use_llm(rule_result, email_data):
+        analysis = email_llm.analyze_email(email_data, rule_result)
+    else:
+        analysis = email_llm.fallback_analysis(email_data, rule_result, "llm unavailable") if HAS_V3 else {}
+
+    if HAS_V3:
+        delivery = email_delivery.deliver_email(email_data, rule_result, analysis, acct)
+        # EMAIL_WATCHDOG_SHADOW_LEARNING_LOGGER_V1
+        # The active production route records its canonical semantic decision
+        # inside email_delivery. Do not overwrite it here with the legacy
+        # placeholder analysis retained only for fallback formatting.
+        if HAS_LEARNING and not _delivery_owns_learning_record(delivery):
+            try:
+                email_learning.record_decision(email_data, rule_result, analysis, delivery, acct)
+            except Exception:
+                pass
+        alert = delivery.get("notification_text", "")
+        semantic_meta = delivery.get("semantic") if isinstance(delivery, dict) else {}
+        editorial_meta = delivery.get("editorial") if isinstance(delivery, dict) else {}
+        if (
+            isinstance(semantic_meta, dict)
+            and delivery.get("route_lane") == "durable"
+            and not delivery.get("legacy_fallback_used")
+        ):
+            final_model = (
+                editorial_meta.get("model")
+                if isinstance(editorial_meta, dict) and editorial_meta.get("ok")
+                else semantic_meta.get("model")
+            )
+            _record_output_model(final_model)
+    else:
+        alert = rule_result.get("summary") or subject
+
+    if alert:
+        if HAS_V3:
+            _record_output_attachments(delivery.get("attachments") or [])
+            _record_output_action(email_data, acct, analysis, delivery, alert)
+            action = _LAST_OUTPUT_ACTIONS[-1] if _LAST_OUTPUT_ACTIONS else {}
+            _spool_alert(alert, {
+                "model_name": str(action.get("model_name") or "hermes"),
+                "model_generated": bool(action.get("model_generated")),
+                "attachments": list(action.get("attachments") or [])[:12],
+                "mail_actions": [action] if action else [],
+            })
+        if (
+            analysis.get("user_relevance") == "urgent"
+            or rule_result.get("priority") == "urgent"
+        ):
+            urgent = True
+        else:
+            urgent = False
+        return alert, urgent
+    return "", False
+
+
+
 def check_account(acct, pushed_count=None):
     """Check one account for new emails. Returns list of notification strings."""
     alerts = []
+    jobs = []
     acct_name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
     acct_email = str(acct.get("email") or "").strip()
     acct_domain = acct_email.lower().split("@", 1)[1] if "@" in acct_email.lower() else ""
@@ -1582,66 +1709,25 @@ def check_account(acct, pushed_count=None):
                         pass
             continue
 
-        if rule_result.get("action") == "simple_code":
-            analysis = _simple_code_analysis(email_data, rule_result)
-        elif production_route_active:
-            # The new durable production route owns semantic analysis. The legacy
-            # analysis is retained only as a safe formatter fallback input.
-            analysis = email_llm.fallback_analysis(
-                email_data, rule_result, ""
-            ) if HAS_V3 else {}
-            analysis = dict(analysis or {})
-            analysis["llm_notes"] = ""
-            analysis["should_notify"] = True
-            analysis["production_semantic_route_pending"] = True
-        elif HAS_V3 and email_llm.should_use_llm(rule_result, email_data):
-            analysis = email_llm.analyze_email(email_data, rule_result)
-        else:
-            analysis = email_llm.fallback_analysis(email_data, rule_result, "llm unavailable") if HAS_V3 else {}
+        jobs.append({
+            "email_data": email_data,
+            "rule_result": rule_result,
+            "acct": acct,
+            "subject": subject,
+        })
 
-        if HAS_V3:
-            delivery = email_delivery.deliver_email(email_data, rule_result, analysis, acct)
-            # EMAIL_WATCHDOG_SHADOW_LEARNING_LOGGER_V1
-            # The active production route records its canonical semantic decision
-            # inside email_delivery. Do not overwrite it here with the legacy
-            # placeholder analysis retained only for fallback formatting.
-            if HAS_LEARNING and not _delivery_owns_learning_record(delivery):
-                try:
-                    email_learning.record_decision(email_data, rule_result, analysis, delivery, acct)
-                except Exception:
-                    pass
-            alert = delivery.get("notification_text", "")
-            semantic_meta = delivery.get("semantic") if isinstance(delivery, dict) else {}
-            editorial_meta = delivery.get("editorial") if isinstance(delivery, dict) else {}
-            if (
-                isinstance(semantic_meta, dict)
-                and delivery.get("route_lane") == "durable"
-                and not delivery.get("legacy_fallback_used")
-            ):
-                final_model = (
-                    editorial_meta.get("model")
-                    if isinstance(editorial_meta, dict) and editorial_meta.get("ok")
-                    else semantic_meta.get("model")
-                )
-                _record_output_model(final_model)
-        else:
-            alert = rule_result.get("summary") or subject
-
-        if alert:
-            if HAS_V3:
-                _record_output_attachments(delivery.get("attachments") or [])
-                _record_output_action(email_data, acct, analysis, delivery, alert)
-                action = _LAST_OUTPUT_ACTIONS[-1] if _LAST_OUTPUT_ACTIONS else {}
-                _spool_alert(alert, {
-                    "model_name": str(action.get("model_name") or "hermes"),
-                    "model_generated": bool(action.get("model_generated")),
-                    "attachments": list(action.get("attachments") or [])[:12],
-                    "mail_actions": [action] if action else [],
-                })
-            if (
-                analysis.get("user_relevance") == "urgent"
-                or rule_result.get("priority") == "urgent"
-            ):
+    if jobs:
+        _prewarm_semantics(jobs)
+        for job in jobs:
+            try:
+                alert, urgent = _deliver_and_notify(job)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("email processing failed: %r", exc)
+                continue
+            if not alert:
+                continue
+            if urgent:
                 alerts.insert(0, alert)
             else:
                 alerts.append(alert)

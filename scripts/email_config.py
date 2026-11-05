@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
         "sleep_end": 6,
         "max_cached": 200,
         "seen_max_entries": 5000,
+        "analysis_workers": 3,
     },
     "llm": {
         "enabled": False,

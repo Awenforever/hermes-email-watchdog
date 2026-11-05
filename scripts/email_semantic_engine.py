@@ -37,6 +37,8 @@ except Exception:  # Import safety: delivery wrapper catches and logs failures.
     email_semantic_core = None
 
 MARKER = "EMAIL_WATCHDOG_SEMANTIC_ENGINE_READABLE_GROUNDED_CORE_ADAPTIVE_OUTPUT_BUDGET_SHADOW_V1"
+_CORE_RELOAD_LOCK = threading.Lock()
+
 PROMPT_VERSION = "semantic_v2_assistant_actions_evidence_bound_20261005"
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
 STATE_ROOT = Path(
@@ -1550,10 +1552,12 @@ def analyze_email(
     # Source upgrades must take effect without a container restart. The delivery
     # wrapper reloads this engine on each delivery; reload the core explicitly too.
     if email_semantic_core is not None:
-        try:
-            email_semantic_core = importlib.reload(email_semantic_core)
-        except Exception:
-            pass
+        # Concurrent pre-warm calls must not race this reload.
+        with _CORE_RELOAD_LOCK:
+            try:
+                email_semantic_core = importlib.reload(email_semantic_core)
+            except Exception:
+                pass
     if not settings.get("enabled"):
         return {"ok": True, "skipped": True, "reason": "semantic engine disabled", "settings": settings}
     if settings.get("mode") != "shadow":
