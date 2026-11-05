@@ -37,6 +37,8 @@ TRUST_DOWNLOAD_TLDS = (".edu.cn", ".ac.cn", ".gov.cn", ".com", ".org", ".net", "
 SUSPICIOUS_TLDS = (".tk", ".ml", ".ga", ".cf", ".gq", ".xyz", ".top", ".club")
 
 
+from email_timeutil import parse_datetime
+
 def deliver_email(email: dict, rule_result: dict, analysis: dict, account: dict, semantic: dict = None) -> dict:
     """Apply delivery decision and side effects. Returns notification payload."""
     analysis = analysis or {}
@@ -320,7 +322,7 @@ def format_notification(email: dict, analysis: dict, attachments: list, schedule
             from email.utils import parsedate_to_datetime
             s = raw.replace("Z", "+00:00")
             try:
-                d = datetime.fromisoformat(s)
+                d = parse_datetime(s)
             except Exception:
                 d = parsedate_to_datetime(raw)
             if d.tzinfo is None:
@@ -1058,7 +1060,7 @@ def _parse_datetime(value, tz_name="Asia/Shanghai"):
     if not raw:
         return None
     try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        dt = parse_datetime(raw)
     except Exception:
         return None
     if dt.tzinfo is None:
@@ -1784,7 +1786,7 @@ def _ew_v4_time(value):
         from email.utils import parsedate_to_datetime
         s = raw.replace("Z", "+00:00")
         try:
-            d = datetime.fromisoformat(s)
+            d = parse_datetime(s)
         except Exception:
             d = parsedate_to_datetime(raw)
         if d.tzinfo is None:

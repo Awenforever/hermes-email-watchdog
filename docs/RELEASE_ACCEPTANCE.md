@@ -1,5 +1,47 @@
 # Release acceptance
 
+## 0.14.3 multi-platform acceptance (2026-11-06)
+
+`0.14.3` carries the incremental notification delivery introduced in `0.14.2`
+plus two Python 3.10 defects that only T2 could expose. Acceptance ran on the
+release branch tree (commit `074e74b`, merged before tagging).
+
+| Target | Host / runtime | Evidence |
+| --- | --- | --- |
+| T1 container | `python:3.11-slim`, `--network none`, `--tmpfs /opt/data`, source mounted `:ro`, tree expanded from `git archive` | `INSTALL_OK version=0.14.3`, `CHECKSUMS_OK`, `REPOSITORY_CONTRACT_OK`, `VERIFY_OK`, installed `VERSION` = `0.14.3` |
+| T2 Linux native | Ubuntu 22.04, Python 3.10.12, native `install.sh` + `verify.sh` | `VERIFY_OK`; **649 tests OK** on 3.10 after the two fixes below |
+| T3 WSL2 | Ubuntu-24.04 on the operator host, kernel `3.6.5-...`, Python 3.12.3, systemd `running`, `/mnt/c` reachable, NAT egress with the stale proxy disabled | `CHECKSUMS_OK`, install + `VERIFY_OK`, **649 tests OK** |
+| T4 Windows native | `win11-test` (`DESKTOP-GB7NLMT`), Python 3.12.7, no bash | **649 tests OK, 5 POSIX-only skips**; full `plugin_cli` E2E **not run** |
+
+### Defects found by T2 and fixed in this release
+
+1. `scripts/email_onboarding.py` imported `tomllib` unconditionally. Ubuntu
+   22.04 ships Python 3.10, so a native install aborted with
+   `ModuleNotFoundError: No module named 'tomllib'`. The import now falls back
+   to `tomli`, and `plugin.yaml` declares
+   `tomli>=1.1; python_version < '3.11'` the same way it already declared
+   `tzdata` for Windows.
+2. `datetime.fromisoformat` was applied to real header shapes such as
+   `2026-06-06 15:34 +0800`. Python 3.11 accepts them; 3.10 rejects them, which
+   silently disabled the stale-mail guard. All ten call sites now parse through
+   `scripts/email_timeutil.parse_datetime`, which keeps the strict ISO path and
+   adds the pre-3.11 formats.
+
+### T4 gap
+
+`plugin.yaml` pins `requires_hermes: ">=0.21.3,<0.22"`, while `win11-test`
+carries Hermes Agent 0.22.2 and that installation currently fails to import
+`hermes_bootstrap`. Windows-native code paths are covered by the suite above,
+but the full plugin-CLI E2E must wait for the 0.22 compatibility branch. No
+four-platform claim is made for T4 beyond the native test suite.
+
+### Gate status
+
+- version synced across `VERSION`, `plugin.yaml`, `SKILL.md`, `PACKAGE_VERSION`;
+- `checksums/SHA256SUMS` regenerated and verified;
+- `mailbox_read_only=true`, `weixin_modified=false` in every target;
+- production deployment is a separate gated window and is not implied here.
+
 ## 0.14.1 Windows-native compatibility acceptance
 
 The `0.14.1` production candidate completed four-platform acceptance on

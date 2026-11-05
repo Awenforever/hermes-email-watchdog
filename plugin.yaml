@@ -1,5 +1,5 @@
 name: hermes-email-watchdog
-version: 0.14.2
+version: 0.14.3
 manifest_version: 1
 api_version: 1
 description: Read-only email triage with grounded classification and actionable messaging alerts.
@@ -16,6 +16,7 @@ requires_hermes: ">=0.21.3,<0.22"
 # tz database and need nothing.
 python_dependencies:
   - "tzdata>=2024.1; sys_platform == 'win32'"
+  - "tomli>=1.1; python_version < '3.11'"
 config_schema:
   enabled:
     type: bool

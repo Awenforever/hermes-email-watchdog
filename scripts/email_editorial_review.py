@@ -24,6 +24,8 @@ import email_semantic_engine
 EDITOR_VERSION = "model_editorial_gate_v2o"
 
 
+from email_timeutil import parse_datetime
+
 def _beijing_tz():
     """Asia/Shanghai with a fixed +08:00 fallback when zoneinfo/tzdata is absent.
 
@@ -72,7 +74,7 @@ def _message_age_days(email: Mapping[str, Any]) -> float | None:
     if not raw:
         return None
     try:
-        sent = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        sent = parse_datetime(raw)
         if sent.tzinfo is None:
             sent = sent.replace(tzinfo=_beijing_tz())
         return max(0.0, (datetime.now(sent.tzinfo) - sent).total_seconds() / 86400.0)
@@ -179,7 +181,7 @@ def _same_message_time(value: str, source_value: str) -> bool:
     try:
         def parse(raw: str):
             try:
-                return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                return parse_datetime(raw)
             except Exception:
                 return parsedate_to_datetime(raw)
         left, right = parse(value), parse(source_value)
