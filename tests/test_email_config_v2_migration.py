@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import copy
+import importlib
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -14,6 +16,37 @@ import email_onboarding
 
 
 class ConfigMigrationTests(unittest.TestCase):
+    """Config-migration checks must not inherit another module's env leaks.
+
+    Sibling test modules pin HERMES_EMAIL_WATCHDOG_STATE_ROOT at import time.
+    Those values are process-global, so a later module observes a hard-coded
+    temp root where this suite asserts the shipped default layout. Each test
+    here therefore runs with the state-root variables cleared and the config
+    modules reloaded, then restores exactly what it found.
+    """
+
+    _ENV_KEYS = ("HERMES_EMAIL_WATCHDOG_STATE_ROOT", "EMAIL_WATCHDOG_CONFIG")
+
+    def setUp(self):
+        self._saved_env = {key: os.environ.get(key) for key in self._ENV_KEYS}
+        for key in self._ENV_KEYS:
+            os.environ.pop(key, None)
+        self._reload_config_modules()
+
+    def tearDown(self):
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        self._reload_config_modules()
+
+    @staticmethod
+    def _reload_config_modules():
+        import email_config
+        importlib.reload(email_config)
+        importlib.reload(email_onboarding)
+
     def test_known_v1_defaults_move_to_production_backend(self):
         old = {
             "version": 1,
