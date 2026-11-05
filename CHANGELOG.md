@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.3 - 2026-11-05
+
+- Sync the packaged `VERSION` file with `plugin.yaml` and `SKILL.md`;
+   the installer prints `version=` from `VERSION`, so a stale value made
+   an upgraded 0.14.2 tree report 0.14.1.
+- Make the config-migration suite hermetic: each test clears the state-root
+   environment leaked by sibling modules and reloads the config modules,
+   so a full-suite run no longer fails on order.
+- Add regression tests for the incremental notification spool.
+
 ## 0.14.2 - 2026-11-05
 
 - Deliver notifications incrementally: the scan now writes each notification to
