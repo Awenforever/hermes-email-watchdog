@@ -810,6 +810,53 @@ async def _loop():
 
 
 
+async def _drain_spool(path, state):
+    """Send notifications that the scan has already produced.
+
+    Returns the number of records handled in this pass. Delivery is idempotent:
+    the outbox identity hash is the same one the end-of-scan path uses, so a
+    record drained here is skipped there.
+    """
+    try:
+        if not path.exists():
+            return 0
+        with open(path, 'r', encoding='utf-8', errors='replace') as fh:
+            fh.seek(state.get('offset') or 0)
+            chunk = fh.read()
+            state['offset'] = fh.tell()
+    except Exception:
+        return 0
+    handled = 0
+    for line in (chunk or '').splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        text = str(record.get('text') or '')
+        metadata = record.get('metadata') if isinstance(record.get('metadata'), dict) else {}
+        if not text:
+            continue
+        try:
+            entry = _outbox_prepare(text, metadata)
+            if _outbox_already_settled(entry):
+                continue
+            _outbox_mark_attempt(entry)
+            result = await _send_weixin(text, delivery_id=entry['delivery_id'], attribution=metadata)
+        except Exception as exc:
+            try:
+                _outbox_mark_failed(entry, exc)
+            except Exception:
+                pass
+            state['failed'] = (state.get('failed') or 0) + 1
+            continue
+        _outbox_mark_delivered(entry, result)
+        state['sent'] = (state.get('sent') or 0) + 1
+        handled += 1
+    return handled
+
+
 async def _run_once():
     if _once_lock.locked():
         logger.warning("Hermes Email Watchdog: previous run still active; skip overlap")
@@ -826,7 +873,25 @@ async def _run_once():
             )
 
         seen_snapshot = _read_seen_snapshot()
-        output = await asyncio.to_thread(_call_watchdog)
+        spool_path = STATE_ROOT / 'notify-spool.jsonl'
+        try:
+            spool_path.write_text('', encoding='utf-8')
+        except Exception:
+            pass
+        os.environ['EMAIL_WATCHDOG_NOTIFY_SPOOL'] = str(spool_path)
+        drain_state = {'offset': 0, 'sent': 0, 'failed': 0}
+
+        async def _drain_until_done():
+            while True:
+                await _drain_spool(spool_path, drain_state)
+                if scan_task.done():
+                    break
+                await asyncio.sleep(0.5)
+
+        scan_task = asyncio.create_task(asyncio.to_thread(_call_watchdog))
+        await asyncio.gather(scan_task, _drain_until_done())
+        await _drain_spool(spool_path, drain_state)
+        output = scan_task.result()
         status = {
             "state": "running",
             "last_run_at": _now(),
