@@ -23,6 +23,8 @@ MAX_BLOCK_CHARS = 1600
 _SENTENCE_ENDS = ("。", "！", "？", "!", "?", "；", ";", "\n", ".", " ")
 
 
+from email_timeutil import parse_datetime
+
 def _max_chars() -> int:
     try:
         import email_config
@@ -114,7 +116,7 @@ def _parse_date(text: str):
     except Exception:
         pass
     try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parse_datetime(text)
     except Exception:
         return None
 

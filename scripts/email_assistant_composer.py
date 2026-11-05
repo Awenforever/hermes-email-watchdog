@@ -24,6 +24,8 @@ COMPOSER_VERSION = "intelligent_v5.0"
 MARKER = "EMAIL_WATCHDOG_EVIDENCE_BOUND_COMPOSER_V5"
 
 
+from email_timeutil import parse_datetime
+
 def _beijing_tz():
     """Asia/Shanghai with a fixed +08:00 fallback when zoneinfo/tzdata is absent.
 
@@ -126,7 +128,7 @@ def _format_time(value: Any) -> str:
     candidate = re.sub(r"\s+SGT$", " +0800", raw, flags=re.I)
     try:
         try:
-            dt = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            dt = parse_datetime(candidate)
         except Exception:
             dt = parsedate_to_datetime(candidate)
         shanghai = _beijing_tz()
@@ -774,7 +776,7 @@ def _deadline_display(deadline: Mapping[str, Any], email: Mapping[str, Any]) -> 
     candidate = raw_datetime or raw_text
     parsed = None
     try:
-        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        parsed = parse_datetime(candidate)
     except Exception:
         match = re.search(r"(?:(20\d{2})\D+)?(\d{1,2})\D+(\d{1,2})(?:\D+(\d{1,2})[:：](\d{2}))?", candidate)
         if match:
@@ -820,7 +822,7 @@ def _stale_message(email: Mapping[str, Any], days: int = 60) -> bool:
     candidate = re.sub(r"\s+SGT$", " +0800", raw, flags=re.I)
     try:
         try:
-            sent = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+            sent = parse_datetime(candidate)
         except Exception:
             sent = parsedate_to_datetime(candidate)
         zone = _beijing_tz()

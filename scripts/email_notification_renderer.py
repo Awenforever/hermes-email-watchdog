@@ -29,6 +29,8 @@ import email_identity
 MARKER = "EMAIL_WATCHDOG_ADAPTIVE_RENDERER_V1G"
 
 
+from email_timeutil import parse_datetime
+
 def _beijing_tz():
     """Asia/Shanghai with a fixed +08:00 fallback when zoneinfo/tzdata is absent.
 
@@ -262,7 +264,7 @@ def _format_time(value: Any) -> str:
         return ""
     try:
         try:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            dt = parse_datetime(raw)
         except Exception:
             dt = parsedate_to_datetime(raw)
         shanghai = _beijing_tz()
