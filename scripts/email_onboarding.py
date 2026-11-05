@@ -23,11 +23,27 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # Python 3.10 (Ubuntu 22.04 default)
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        tomllib = None  # type: ignore[assignment]
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+def _toml_loads(text: str) -> dict:
+    """Parse TOML, or fail with an actionable message on Python < 3.11."""
+    if tomllib is None:
+        raise RuntimeError(
+            "TOML config import needs Python 3.11+ or the tomli package; "
+            "install tomli (pip install tomli) or upgrade Python"
+        )
+    return tomllib.loads(text)
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -833,7 +849,7 @@ def _normalize_account(account: dict[str, Any]) -> dict[str, Any]:
 
 def _accounts_from_himalaya(path: Path) -> list[dict[str, Any]]:
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = _toml_loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
     source = data.get("accounts") if isinstance(data, dict) else {}
@@ -866,7 +882,7 @@ def _accounts_from_himalaya(path: Path) -> list[dict[str, Any]]:
 
 def _himalaya_has_send_backend(path: str | Path) -> bool:
     try:
-        data = tomllib.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+        data = _toml_loads(Path(path).expanduser().read_text(encoding="utf-8"))
     except Exception:
         return False
     accounts = data.get("accounts") if isinstance(data, dict) else {}
@@ -885,7 +901,7 @@ def _audit_himalaya_secret_commands(path: str | Path) -> dict[str, Any]:
     """Audit credential commands in an existing Himalaya config without executing them."""
     config_path = Path(path).expanduser()
     try:
-        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        data = _toml_loads(config_path.read_text(encoding="utf-8"))
     except Exception as exc:
         raise OnboardingError(f"cannot audit Himalaya credential policy: {config_path.name}") from exc
     accounts = data.get("accounts") if isinstance(data, dict) else {}
