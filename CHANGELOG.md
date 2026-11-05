@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.2 - 2026-11-05
+
+- Deliver notifications incrementally: the scan now writes each notification to
+  a spool as soon as its analysis finishes, and the hook drains that spool while
+  the scan is still running. Previously every notification waited for the end of
+  the whole batch, which added minutes when several emails arrived together.
+- Remove the last fast-lane legacy: the known-v2 config migration no longer
+  keys off `fast_lane_enabled`, and the dead key is gone from code and tests.
+- Bump the packaged SKILL.md version to the release version.
+
 ## 0.14.1 - 2026-10-24
 
 - Render correct local-time deadlines on Windows-native hosts, whose CPython

@@ -91,6 +91,28 @@ def _reset_output_metadata():
     _LAST_OUTPUT_ACTIONS.clear()
     _LAST_OUTPUT_NOTIFICATIONS.clear()
 
+def _spool_alert(notification_text, metadata):
+    """Append one notification to the incremental spool consumed by the hook.
+
+    The hook drains this file while the scan is still running, so each email is
+    delivered as soon as its analysis finishes instead of at the end of the
+    whole batch. The spool is best-effort: a write failure must never block
+    mailbox processing (the end-of-scan path still carries the notification).
+    """
+    import json as _json
+    path = str(os.environ.get("EMAIL_WATCHDOG_NOTIFY_SPOOL") or "").strip()
+    if not path or not notification_text:
+        return
+    try:
+        payload = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "text": str(notification_text), "metadata": metadata or {}}
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(payload, ensure_ascii=False) + chr(10))
+            fh.flush()
+            os.fsync(fh.fileno())
+    except Exception:
+        pass
+
+
 def _record_output_model(model):
     value = str(model or "").strip()
     if value and value.lower() != "hermes":
@@ -1609,6 +1631,13 @@ def check_account(acct, pushed_count=None):
             if HAS_V3:
                 _record_output_attachments(delivery.get("attachments") or [])
                 _record_output_action(email_data, acct, analysis, delivery, alert)
+                action = _LAST_OUTPUT_ACTIONS[-1] if _LAST_OUTPUT_ACTIONS else {}
+                _spool_alert(alert, {
+                    "model_name": str(action.get("model_name") or "hermes"),
+                    "model_generated": bool(action.get("model_generated")),
+                    "attachments": list(action.get("attachments") or [])[:12],
+                    "mail_actions": [action] if action else [],
+                })
             if (
                 analysis.get("user_relevance") == "urgent"
                 or rule_result.get("priority") == "urgent"
