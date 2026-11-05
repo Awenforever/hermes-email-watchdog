@@ -70,7 +70,7 @@ class ConfigMigrationTests(unittest.TestCase):
                 "model": "deepseek-flash", "fallback_model": "qwen3.6-chat",
                 "protocol": "readable_grounded_core_v1u",
             },
-            "notification": {"fast_lane_enabled": True},
+            "notification": {},
             "delivery": {"auto_download_attachments": False},
         }
         cfg = email_onboarding._sanitize_existing_config(old)
@@ -171,7 +171,7 @@ class ConfigMigrationTests(unittest.TestCase):
                 "fallback_model": "organization/fallback-model",
                 "protocol": "readable_grounded_core_v1u",
             },
-            "notification": {"fast_lane_enabled": True},
+            "notification": {},
             "delivery": {
                 "auto_download_attachments": False,
                 "target": {"platform": "weixin", "chat_id": "secret-chat"},
@@ -194,7 +194,7 @@ class ConfigMigrationTests(unittest.TestCase):
                 "fallback_model": "qwen3.6-chat",
                 "protocol": "my-custom-protocol",
             },
-            "notification": {"fast_lane_enabled": True},
+            "notification": {},
             "delivery": {"auto_download_attachments": False},
         }
         migrated, changed = email_onboarding._migrate_known_v2_assistant_policy(raw)
