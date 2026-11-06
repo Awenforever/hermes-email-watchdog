@@ -1,5 +1,19 @@
 # Release acceptance
 
+## 0.16.0 editorial policy acceptance (2026-11-06)
+
+`0.16.0` retires the second model configuration, skips the editorial pass for
+verification codes, forces code cards to carry no deadline, and gives the
+editorial pass a 300 s budget instead of the 120 s semantic timeout that was
+forcing slow-but-valid reviews into a second fallback call.
+
+| Target | Evidence |
+| --- | --- |
+| T1 container | `python:3.11-slim`, `--network none`, `--tmpfs /opt/data`: `INSTALL_OK version=0.16.0`, `CHECKSUMS_OK`, `VERIFY_OK` |
+| T2 Ubuntu 22.04 / py3.10 | native `INSTALL_OK version=0.16.0`, `CHECKSUMS_OK`, `VERIFY_OK`, **652 tests OK** |
+| T3 WSL2 Ubuntu-24.04 / py3.12 | `INSTALL_OK version=0.16.0`, `VERIFY_OK`, **652 tests OK** |
+| T4 Windows native | **not run for 0.16.0**: `win11-test` was unreachable on both the tailnet and LAN addresses during the acceptance window. No T4 claim is made for this release. |
+
 ## 0.15.0 two-phase delivery acceptance (2026-11-06)
 
 `0.15.0` splits the poll into two phases: the envelope loop only parses and
