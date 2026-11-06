@@ -63,16 +63,6 @@ DEFAULT_CONFIG = {
         "seen_max_entries": 5000,
         "analysis_workers": 3,
     },
-    "llm": {
-        "enabled": False,
-        "endpoint": "",
-        "api_key_env": "",
-        "model": "",
-        "temperature": 0.1,
-        "max_tokens": 2000,
-        "timeout_seconds": 90,
-        "max_body_chars": 12000,
-    },
     # EMAIL_WATCHDOG_READABLE_GROUNDED_CORE_CONFIG_SHADOW_V1
     "semantic_engine": {
         "enabled": True,
@@ -344,7 +334,25 @@ def get_watchdog_settings() -> dict:
 
 
 def get_llm_settings() -> dict:
-    return load_config().get("llm", {})
+    """Legacy view of the ONE model configuration.
+
+    `semantic_engine` is the only model configuration the plugin keeps. The old
+    `llm` block is retired: legacy callers read the same model/provider/timeout
+    values, while the legacy analysis path stays disabled (the durable route
+    owns analysis). Keeping this as a derived view is what prevents a second,
+    silently divergent model setting from existing again.
+    """
+    semantic = dict(load_config().get("semantic_engine") or {})
+    return {
+        "enabled": False,
+        "provider": semantic.get("provider", "hermes"),
+        "model": semantic.get("model", ""),
+        "fallback_model": semantic.get("fallback_model", ""),
+        "temperature": semantic.get("temperature", 0.1),
+        "max_tokens": int(semantic.get("num_predict_standard") or 1200),
+        "timeout_seconds": int(semantic.get("timeout_seconds") or 300),
+        "max_body_chars": int(semantic.get("max_body_chars") or 16000),
+    }
 
 
 def get_semantic_engine_settings() -> dict:

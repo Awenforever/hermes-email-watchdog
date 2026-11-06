@@ -504,6 +504,15 @@ def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     allowed, _ = _migrate_known_v4_presentation_policy(allowed)
     allowed, _ = _migrate_known_v5_storage_policy(allowed)
     cfg = _deep_merge(email_config.DEFAULT_CONFIG, allowed)
+    # v7 model-config consolidation: one effective model setting only.
+    legacy_llm = cfg.get("llm") if isinstance(cfg.get("llm"), dict) else None
+    if legacy_llm:
+        semantic = cfg.get("semantic_engine") if isinstance(cfg.get("semantic_engine"), dict) else {}
+        legacy_model = str(legacy_llm.get("model") or "").strip()
+        if legacy_model and not str(semantic.get("model") or "").strip():
+            semantic["model"] = legacy_model
+            cfg["semantic_engine"] = semantic
+        cfg.pop("llm", None)
     cfg["version"] = 7
     cfg["paths"] = {
         key: cfg.get("paths", {}).get(key, email_config.DEFAULT_CONFIG["paths"][key])

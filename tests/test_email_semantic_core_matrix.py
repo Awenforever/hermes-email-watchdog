@@ -815,7 +815,7 @@ class EngineIntegrationTests(unittest.TestCase):
         self.assertEqual(settings["num_predict_complex"], 1800)
         self.assertEqual(settings["num_predict_hard_cap"], 2048)
         self.assertEqual(settings["mode"], "shadow")
-        self.assertFalse(email_config.DEFAULT_CONFIG["llm"]["enabled"])
+        self.assertNotIn("llm", email_config.DEFAULT_CONFIG)
 
     def test_23_engine_settings(self):
         # Installation preflight runs before the production runtime config is
