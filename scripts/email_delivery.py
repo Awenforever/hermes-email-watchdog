@@ -2171,6 +2171,19 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                     + str(semantic_meta.get("error_code") or "unknown")
                 )
 
+            # A verification code is a credential, not a task: a deadline would
+            # present the code's validity window as something the user must act
+            # on later. Force it off for code cards before any renderer sees it.
+            _classification = decision.get("classification")
+            _notification = decision.get("notification")
+            _category = str((_classification or {}).get("category") or "") if isinstance(_classification, dict) else ""
+            _content_mode = str((_notification or {}).get("content_mode") or "") if isinstance(_notification, dict) else ""
+            _is_code_card = _category == "verification_code" or _content_mode == "code_card"
+            if _is_code_card:
+                decision = dict(decision)
+                decision["deadline"] = {"has_deadline": False, "datetime": "", "date_text": "", "confidence": 0.0}
+                semantic_meta["decision"] = decision
+
             # A second model pass owns the final editorial judgment and
             # presentation.  The deterministic composer is supplied only
             # as a criticizable draft and remains the safe fallback if the
@@ -2183,11 +2196,14 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 )
                 if not editorial_enabled:
                     raise RuntimeError("model editorial review disabled by configuration")
+                if _is_code_card:
+                    raise RuntimeError("editorial skipped: verification code card")
                 draft_meta = email_assistant_composer.render_notification(
                     email or {}, decision, {"attachments": [], "schedule": []}, account or {}
                 )
                 editorial_meta = email_editorial_review.review_notification(
-                    email or {}, decision, str(draft_meta.get("text") or "")
+                    email or {}, decision, str(draft_meta.get("text") or ""),
+                    settings_override={"timeout_seconds": 300},
                 )
                 if editorial_meta.get("ok"):
                     decision = email_editorial_review.apply_review(decision, editorial_meta)

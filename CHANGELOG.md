@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.0 - 2026-11-06
+
+- One model configuration: the retired `llm` block is removed from the shipped
+   defaults and folded into `semantic_engine` on migration. Legacy callers read a
+   derived view, so the plugin can no longer hold two divergent model settings.
+- Verification codes skip the editorial model pass: a credential card needs no
+   second critique, and the pass was costing 6-15s on exactly the latency-critical
+   messages.
+- Code cards can no longer carry a deadline: the model sometimes turned the code
+   validity window ("5 分钟内有效") into a task deadline.
+- The editorial pass runs with a 300s budget instead of inheriting the 120s
+   semantic timeout, which was forcing a slow-but-valid review into a second
+   fallback call.
+
 ## 0.15.1 - 2026-11-06
 
 - Add observability for incremental delivery: the scan logs each spool write,

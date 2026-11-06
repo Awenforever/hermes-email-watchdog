@@ -342,7 +342,7 @@ class SemanticEngineTests(unittest.TestCase):
     def test_30_config_defaults_are_shadow_and_legacy_llm_unchanged(self):
         self.assertTrue(email_config.DEFAULT_CONFIG["semantic_engine"]["enabled"])
         self.assertEqual(email_config.DEFAULT_CONFIG["semantic_engine"]["mode"], "shadow")
-        self.assertFalse(email_config.DEFAULT_CONFIG["llm"]["enabled"])
+        self.assertNotIn("llm", email_config.DEFAULT_CONFIG)
 
 
 if __name__ == "__main__":
