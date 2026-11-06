@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.1 - 2026-11-06
+
+- Add observability for incremental delivery: the scan logs each spool write,
+   a spool write failure is no longer swallowed, and the hook logs every
+   notification it delivers from the spool. A batch that only reaches the
+   outbox at scan end is now diagnosable from the gateway log.
+
 ## 0.15.0 - 2026-11-06
 
 - Two-phase delivery: the envelope loop now only parses and persists, then the

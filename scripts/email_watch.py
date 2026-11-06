@@ -109,8 +109,21 @@ def _spool_alert(notification_text, metadata):
             fh.write(_json.dumps(payload, ensure_ascii=False) + chr(10))
             fh.flush()
             os.fsync(fh.fileno())
-    except Exception:
-        pass
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Hermes Email Watchdog: spooled notification chars=%s", len(str(notification_text))
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Hermes Email Watchdog: spool write failed: %r", exc
+            )
+        except Exception:
+            pass
 
 
 def _record_output_model(model):
