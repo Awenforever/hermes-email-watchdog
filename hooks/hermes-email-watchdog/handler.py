@@ -854,6 +854,10 @@ async def _drain_spool(path, state):
         _outbox_mark_delivered(entry, result)
         state['sent'] = (state.get('sent') or 0) + 1
         handled += 1
+        logger.warning(
+            "Hermes Email Watchdog: incremental delivery chars=%s delivery_id=%s",
+            len(text), entry['delivery_id'],
+        )
     return handled
 
 
