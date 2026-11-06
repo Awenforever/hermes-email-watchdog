@@ -249,6 +249,32 @@ class ConfigMigrationTests(unittest.TestCase):
         self.assertEqual(migrated["semantic_engine"]["model"], "organization/main-model")
         self.assertEqual(migrated["semantic_engine"]["fallback_model"], "organization/fallback-model")
 
+    def test_v06_single_model_policy_folds_legacy_model_and_drops_block(self):
+        legacy = {
+            "version": 7,
+            "llm": {"enabled": False, "model": "legacy-model", "timeout_seconds": 90},
+            "semantic_engine": {"model": ""},
+        }
+        cfg, changed = email_onboarding._migrate_known_v6_single_model_policy(legacy)
+        self.assertTrue(changed)
+        self.assertNotIn("llm", cfg)
+        self.assertEqual(cfg["semantic_engine"]["model"], "legacy-model")
+
+        pinned = {
+            "version": 7,
+            "llm": {"enabled": False, "model": "legacy-model"},
+            "semantic_engine": {"model": "pinned-model"},
+        }
+        cfg2, changed2 = email_onboarding._migrate_known_v6_single_model_policy(pinned)
+        self.assertTrue(changed2)
+        self.assertNotIn("llm", cfg2)
+        self.assertEqual(cfg2["semantic_engine"]["model"], "pinned-model")
+
+        clean = {"version": 7, "semantic_engine": {"model": "x"}}
+        cfg3, changed3 = email_onboarding._migrate_known_v6_single_model_policy(clean)
+        self.assertFalse(changed3)
+        self.assertEqual(cfg3, clean)
+
 
 if __name__ == "__main__":
     unittest.main()
