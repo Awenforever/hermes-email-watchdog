@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.1 - 2026-11-06
+
+- Wire the single-model consolidation into `migrate-current`: 0.16.0 removed
+   the legacy block from defaults and from the sanitizer, but the installer
+   path only runs the known v2-v5 policy migrations, so an upgraded config
+   kept the dead `llm` block on disk. The v6 migration now folds a custom
+   legacy model into `semantic_engine.model` (only when that is empty) and
+   removes the block, with a backup written by the migration transaction.
+
 ## 0.16.0 - 2026-11-06
 
 - One model configuration: the retired `llm` block is removed from the shipped

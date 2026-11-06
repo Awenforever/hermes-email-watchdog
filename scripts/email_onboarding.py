@@ -444,6 +444,27 @@ def _migrate_known_v5_storage_policy(
     return source, True
 
 
+def _migrate_known_v6_single_model_policy(data: dict) -> tuple[dict, bool]:
+    """Fold the retired `llm` block into `semantic_engine` and drop it.
+
+    The plugin keeps one model configuration. A config that still carries the
+    legacy block is migrated in place: a custom legacy model moves to
+    `semantic_engine.model` only when that field is empty, then the dead block
+    is removed. This is what makes `migrate-current` actually retire it.
+    """
+    if not isinstance(data, dict) or "llm" not in data:
+        return data, False
+    cfg = copy.deepcopy(data)
+    legacy = cfg.get("llm") if isinstance(cfg.get("llm"), dict) else {}
+    semantic = cfg.get("semantic_engine") if isinstance(cfg.get("semantic_engine"), dict) else {}
+    legacy_model = str((legacy or {}).get("model") or "").strip()
+    if legacy_model and not str((semantic or {}).get("model") or "").strip():
+        semantic["model"] = legacy_model
+        cfg["semantic_engine"] = semantic
+    cfg.pop("llm", None)
+    return cfg, True
+
+
 def _sanitize_existing_config(data: dict[str, Any] | None) -> dict[str, Any]:
     source = data if isinstance(data, dict) else {}
     try:
@@ -1374,7 +1395,8 @@ def migrate_current_config() -> dict[str, Any]:
         migrated, changed_v3 = _migrate_known_v3_assistant_policy(migrated)
         migrated, changed_v4 = _migrate_known_v4_presentation_policy(migrated)
         migrated, changed_v5 = _migrate_known_v5_storage_policy(migrated)
-        changed = changed_v2 or changed_v3 or changed_v4 or changed_v5
+        migrated, changed_v6 = _migrate_known_v6_single_model_policy(migrated)
+        changed = changed_v2 or changed_v3 or changed_v4 or changed_v5 or changed_v6
         if not changed:
             return {
                 "passed": True,
