@@ -56,7 +56,7 @@ class ImapSession:
         self._lock = threading.RLock()
         self._conn = None
         self.key = key
-        self.stats: Dict[str, Any] = {"connects": 0, "logins": 0, "lists": 0, "reads": 0, "errors": 0}
+        self.stats: Dict[str, Any] = {"connects": 0, "logins": 0, "lists": 0, "reads": 0, "errors": 0, "wakes": 0}
 
     # -- connection -------------------------------------------------
     def _open(self):
@@ -159,6 +159,64 @@ class ImapSession:
             envelopes.append(_envelope(uid, raw, _size_from_meta(meta), _has_attachment(meta)))
         self.stats["lists"] += 1
         return envelopes
+
+    def count(self):
+        """Number of messages in the mailbox, over the shared connection."""
+        return self._run(self._count_messages)
+
+    def _count_messages(self, conn):
+        typ, data = conn.uid("search", None, "ALL")
+        if typ != "OK":
+            raise RuntimeError("search failed: %s" % typ)
+        return len((data[0] or b"").split())
+
+    # -- watch (same connection, no second login) --------------------
+    def start_watcher(self, wake=None, interval=5.0):
+        if getattr(self, "_watch_thread", None) is not None and self._watch_thread.is_alive():
+            return
+        self._watch_stop = threading.Event()
+        self._watch_thread = threading.Thread(
+            target=self._watch_loop, args=(wake, max(1.0, float(interval))),
+            name="imap-watch", daemon=True,
+        )
+        self._watch_thread.start()
+
+    def stop_watcher(self):
+        stop = getattr(self, "_watch_stop", None)
+        if stop is not None:
+            stop.set()
+        thread = getattr(self, "_watch_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5)
+        self._watch_thread = None
+
+    def _watch_loop(self, wake, interval):
+        baseline = None
+        while not self._watch_stop.is_set():
+            if self._watch_stop.wait(interval):
+                break
+            if self.key and throttled_until(self.key) > time.time():
+                continue
+            try:
+                current = self.count()
+            except Exception as exc:
+                if _is_throttle(exc):
+                    if self.key:
+                        mark_throttled(self.key)
+                self._close()
+                if self._watch_stop.wait(min(60.0, interval * 4)):
+                    break
+                continue
+            if baseline is None:
+                baseline = current
+            elif current > baseline:
+                baseline = current
+                self.stats["wakes"] = int(self.stats.get("wakes") or 0) + 1
+                if wake:
+                    try:
+                        wake()
+                    except Exception:
+                        pass
 
     def read_raw(self, uid):
         """Raw RFC 822 bytes, fetched with BODY.PEEK so nothing is marked read."""
