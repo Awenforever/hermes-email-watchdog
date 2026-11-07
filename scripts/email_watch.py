@@ -1652,6 +1652,7 @@ def check_account(acct, pushed_count=None):
         except Exception:
             acct_alias = ""
     seen = load_seen()
+    budget_key = str(acct.get('id') or acct.get('label') or acct.get('name') or 'account')
     session = _imap_session_for(acct) if acct.get('direct_imap', True) else None
     if session is not None:
         try:
@@ -1668,7 +1669,7 @@ def check_account(acct, pushed_count=None):
             session = None
             if HAS_IMAP_SESSION:
                 try:
-                    email_imap_session.reserve_login(acct_name)
+                    email_imap_session.reserve_login(budget_key)
                 except Exception as exc:
                     try:
                         import logging
@@ -1684,7 +1685,7 @@ def check_account(acct, pushed_count=None):
     else:
         if HAS_IMAP_SESSION:
             try:
-                email_imap_session.reserve_login(acct_name)
+                email_imap_session.reserve_login(budget_key)
             except Exception as exc:
                 try:
                     import logging
@@ -1891,6 +1892,15 @@ def check_account(acct, pushed_count=None):
 
     if updated:
         save_seen(seen)
+    try:
+        import logging
+        logging.getLogger(__name__).warning(
+            'Hermes Email Watchdog: %s path=%s budget=%d/20',
+            acct_name, 'session' if session is not None else 'himalaya',
+            email_imap_session.login_count(budget_key) if HAS_IMAP_SESSION else 0,
+        )
+    except Exception:
+        pass
     if session is not None:
         try:
             import logging
