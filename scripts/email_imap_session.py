@@ -19,11 +19,21 @@ import imaplib
 import re
 import ssl
 import threading
+import time
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 
 _DEFAULT_PORT = 993
 _HEADER_FIELDS = "FROM TO SUBJECT DATE MESSAGE-ID"
+
+
+def _is_throttle(exc):
+    text = str(exc or '').lower()
+    hints = tuple(globals().get('_THROTTLE_HINTS') or ())
+    for hint in hints:
+        if hint in text:
+            return True
+    return False
 
 
 class ImapSessionError(RuntimeError):
@@ -35,7 +45,7 @@ class ImapSession:
 
     def __init__(self, host: str, port: int = _DEFAULT_PORT, username: str = "",
                  password: str = "", folder: str = "INBOX", timeout: float = 60.0,
-                 connector=None) -> None:
+                 connector=None, key: str = "") -> None:
         self.host = host
         self.port = int(port or _DEFAULT_PORT)
         self.username = username
@@ -45,6 +55,7 @@ class ImapSession:
         self._connector = connector or imaplib.IMAP4_SSL
         self._lock = threading.RLock()
         self._conn = None
+        self.key = key
         self.stats: Dict[str, Any] = {"connects": 0, "logins": 0, "lists": 0, "reads": 0, "errors": 0}
 
     # -- connection -------------------------------------------------
@@ -53,6 +64,8 @@ class ImapSession:
         conn = self._connector(self.host, self.port, ssl_context=ctx, timeout=self.timeout)
         conn.login(self.username, self.password)
         self.stats["logins"] += 1
+        if self.key:
+            _LOGIN_TIMES.setdefault(self.key, []).append(time.time())
         self._announce(conn)
         try:
             conn.select(self.folder, readonly=True)
@@ -108,6 +121,10 @@ class ImapSession:
                     return fn(self._connection(), *args)
                 except Exception as exc:
                     self.stats["errors"] += 1
+                    if _is_throttle(exc):
+                        if self.key:
+                            mark_throttled(self.key)
+                        raise ImapThrottled(str(exc)[:200])
                     self._close()
                     if attempt == 2:
                         raise ImapSessionError(str(exc)[:200])
@@ -259,3 +276,63 @@ def _message(uid, raw: bytes) -> Dict[str, Any]:
         "has_attachment": bool(attachments),
         "attachments": attachments,
     }
+
+_SESSIONS = {}
+_THROTTLED_UNTIL = {}
+_LOGIN_TIMES = {}
+_THROTTLE_HINTS = ("too many simultaneous", "rate limit", "throttl", "too many connections", "unavailable")
+DEFAULT_THROTTLE_SECONDS = 180.0
+DEFAULT_LOGIN_BUDGET = 20
+
+
+class ImapThrottled(ImapSessionError):
+    """The provider is refusing new sessions; do not open another one yet."""
+
+
+def throttled_until(key):
+    return float(_THROTTLED_UNTIL.get(str(key), 0.0))
+
+
+def mark_throttled(key, seconds=DEFAULT_THROTTLE_SECONDS):
+    _THROTTLED_UNTIL[str(key)] = time.time() + float(seconds)
+
+
+def clear_throttle(key):
+    _THROTTLED_UNTIL.pop(str(key), None)
+
+
+def reset_sessions():
+    for session in list(_SESSIONS.values()):
+        try:
+            session.close()
+        except Exception:
+            pass
+    _SESSIONS.clear()
+    _THROTTLED_UNTIL.clear()
+    _LOGIN_TIMES.clear()
+
+
+def get_session(key, host, port, username, password, folder="INBOX",
+                budget_per_hour=DEFAULT_LOGIN_BUDGET, connector=None):
+    """One session per account for the life of the process.
+
+    The hook reloads email_watch every cycle but not this module, so this cache
+    outlives a scan. A throttled provider is remembered too: while the cooldown
+    is active no new login is attempted at all.
+    """
+    key = str(key)
+    now = time.time()
+    if _THROTTLED_UNTIL.get(key, 0) > now:
+        raise ImapThrottled("throttled cooldown active for %s" % key)
+    cached = _SESSIONS.get(key)
+    if cached is not None:
+        return cached
+    if budget_per_hour:
+        recent = [t for t in _LOGIN_TIMES.get(key, []) if now - t < 3600]
+        _LOGIN_TIMES[key] = recent
+        if len(recent) >= int(budget_per_hour):
+            raise ImapThrottled("login budget exhausted for %s (%d/hour)" % (key, budget_per_hour))
+    session = ImapSession(host, port, username, password, folder=folder, connector=connector)
+    session.key = key
+    _SESSIONS[key] = session
+    return session

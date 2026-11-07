@@ -757,17 +757,11 @@ def list_himalaya(config_path, account=None):
     data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30, account=account)
     return _unwrap_himalaya_list(data)
 
-_IMAP_SESSIONS = {}
-
-
 def _imap_session_for(acct):
     """Return a cached long-lived session for an IMAP account."""
     if not HAS_IMAP_SESSION:
         return None
     key = str(acct.get('id') or acct.get('label') or '')
-    existing = _IMAP_SESSIONS.get(key)
-    if existing is not None:
-        return existing
     cfg = acct.get('himalaya_config') or acct.get('config')
     if not cfg:
         return None
@@ -800,8 +794,7 @@ def _imap_session_for(acct):
             password = ''
     if not (host and login and password):
         return None
-    session = email_imap_session.ImapSession(host, port, login, password)
-    _IMAP_SESSIONS[key] = session
+    session = email_imap_session.get_session(key, host, port, login, password)
     return session
 
 

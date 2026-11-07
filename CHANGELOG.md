@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.0 - 2026-11-07
+
+Rate limiting is now handled as a first-class constraint rather than one path
+at a time.
+
+- The IMAP session cache moved into email_imap_session, which the hook does not
+  reload. Sessions and their connections now live for the whole process, so a
+  scan no longer pays a login per cycle. Previously every scan rebuilt the
+  session because email_watch is reloaded each run.
+- Throttle answers are classified in the session: a provider that reports too
+  many simultaneous connections is remembered for 180s and no further login is
+  attempted during that window, instead of retrying twice immediately.
+- A per-account login budget (20 per hour) bounds any remaining churn, and the
+  idle watcher now honours the same cooldown instead of reconnecting into it.
 ## 0.18.3 - 2026-11-07
 
 - The module writes state with json, not _json, so both the throttle pause and the per-account scan times were silently dropped by a swallowed NameError. Persistence now actually happens.
