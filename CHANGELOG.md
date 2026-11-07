@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.1 - 2026-11-07
+
+- Fix a 0.16.0 regression: skipping the editorial pass for verification
+  codes routed the card into the evidence-only fallback renderer, which keeps
+  links but drops the credential itself, so the card said verification code
+  without showing one. A policy skip now renders through the deterministic
+  composer and keeps the code.
 ## 0.17.0 - 2026-11-07
 
 - Persistent IMAP watcher (opt-in per account via idle_watch): one long-lived
