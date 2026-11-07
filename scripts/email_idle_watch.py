@@ -43,6 +43,25 @@ def _is_throttle(exc):
     return False
 
 
+class SessionWatcher:
+    """Wake the scan from the shared session instead of opening another login."""
+
+    def __init__(self, session, wake=None, interval=DEFAULT_INTERVAL):
+        self.session = session
+        self.wake = wake
+        self.interval = max(1.0, float(interval))
+
+    @property
+    def stats(self):
+        return self.session.stats
+
+    def start(self):
+        self.session.start_watcher(self.wake, self.interval)
+
+    def stop(self):
+        self.session.stop_watcher()
+
+
 class PersistentImapWatcher:
     """Watch one mailbox over a single long-lived IMAP connection."""
 
@@ -188,8 +207,17 @@ def watcher_from_account(account: Dict[str, Any], wake=None, connector=None):
     password = _password_from_cmd(cmd) if cmd else ""
     if not host or not login or not password:
         return None
-    return PersistentImapWatcher(
-        host, port, login, password, wake=wake,
+    try:
+        import email_imap_session
+        key = str(account.get('id') or account.get('label') or account.get('name') or '')
+        session = email_imap_session.get_session(key, host, port, login, password)
+        return SessionWatcher(
+            session, wake=wake,
+            interval=float(account.get('idle_interval') or DEFAULT_INTERVAL),
+        )
+    except Exception:
+        pass
+    return PersistentImapWatcher(        host, port, login, password, wake=wake,
         interval=float(account.get("idle_interval") or DEFAULT_INTERVAL),
         connector=connector,
     )

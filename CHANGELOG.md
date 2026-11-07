@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.0 - 2026-11-07
+
+- One connection per account. The idle watcher used to hold its own connection
+  for the NOOP loop while fetches opened another, so every account cost two.
+  The wait now runs on the same authenticated session: one login, one socket,
+  and the scan still gets woken the moment the mailbox grows.
+- The watch loop honours the throttle cooldown and reconnects through the same
+  path as fetches, so a hiccup cannot multiply into extra logins.
 ## 0.19.3 - 2026-11-07
 
 - Attachment downloads fetch the raw message over the shared session and decode
