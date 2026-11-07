@@ -794,6 +794,12 @@ def _imap_session_for(acct):
             password = ''
     if not (host and login and password):
         return None
+    try:
+        db_path = email_config.get_path('db')
+        if db_path:
+            email_imap_session.set_state_path(Path(db_path).parent / 'login_budget.json')
+    except Exception:
+        pass
     session = email_imap_session.get_session(key, host, port, login, password)
     return session
 
