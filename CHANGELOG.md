@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.1 - 2026-11-07
+
+- Fix a regression from 0.19.2: the login-budget guard was placed before the
+  account dispatch instead of inside the himalaya fallback, so every scan spent
+  one unit of the budget even when the cached session was used. After twenty
+  scans (about fifteen minutes) the account was skipped entirely and stopped
+  noticing mail. The guard now sits only on the path that actually logs in.
 ## 0.20.0 - 2026-11-07
 
 - One connection per account. The idle watcher used to hold its own connection
