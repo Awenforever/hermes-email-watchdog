@@ -95,7 +95,12 @@ class PersistentImapWatcher:
             try:
                 conn = self._connect()
                 conn.login(self.username, self.password)
-                conn.select("INBOX", readonly=True)
+                try:
+                    conn.select("INBOX", readonly=True)
+                except Exception:
+                    # Some servers reject EXAMINE; fall back to SELECT so the
+                    # watcher does not flap between connect and retry forever.
+                    conn.select("INBOX")
                 self.stats["connects"] += 1
                 baseline = self._count(conn)
                 self.stats["baseline"] = baseline
