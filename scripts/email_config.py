@@ -61,7 +61,13 @@ DEFAULT_CONFIG = {
         "sleep_end": 6,
         "max_cached": 200,
         "seen_max_entries": 5000,
-        "analysis_workers": 3,
+        
+            "backfill_page_size": 20,
+            "backfill_max_pages": 4,
+            "scan_batch_limit": 6,
+            "throttle_backoff_seconds": 180,
+            "login_budget_per_hour": 60,
+            "analysis_workers": 3,
     },
     # EMAIL_WATCHDOG_READABLE_GROUNDED_CORE_CONFIG_SHADOW_V1
     "semantic_engine": {
