@@ -759,7 +759,7 @@ def list_himalaya_backfill(config_path, seen_keys, prefix, account=None, page_si
     contains a message already recorded, so normal scans still cost one page.
     """
     size = int(page_size or _WATCHDOG_SETTINGS.get("backfill_page_size", 20))
-    limit = int(max_pages or _WATCHDOG_SETTINGS.get("backfill_max_pages", 10))
+    limit = int(max_pages or _WATCHDOG_SETTINGS.get("backfill_max_pages", 4))
     collected = []
     for page in range(1, max(1, limit) + 1):
         data = _run_himalaya_json(
@@ -1599,7 +1599,7 @@ def check_account(acct, pushed_count=None):
             acct_alias = ""
     seen = load_seen()
     envelopes = list_himalaya_backfill(
-        hconfig, seen, "{acct_name}:", account=acct_alias,
+        hconfig, seen, f"{acct_name}:", account=acct_alias,
     )
 
     if not envelopes:

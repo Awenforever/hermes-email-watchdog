@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.5 - 2026-11-07
+
+- Fix the backfill prefix: it was passed as a literal {acct_name}: instead of an
+  f-string, so the already-recorded check never matched. Every scan then paged
+  to the cap, opening up to ten mailbox connections per account per cycle and
+  feeding the very throttle 0.17.4 was working around.
+- backfill_max_pages default is now 4 (80 messages), which bounds a scan while
+  still covering any realistic burst.
 ## 0.17.4 - 2026-11-07
 
 - Connection throttling is now survivable: when a provider rejects a login with
