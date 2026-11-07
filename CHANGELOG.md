@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.7 - 2026-11-07
+
+- The idle watcher fell back to a writable SELECT when a server rejects the
+  read-only EXAMINE form, instead of reconnecting in a loop every retry.
 ## 0.17.6 - 2026-11-07
 
 - Fix a crash from 0.17.4: the throttle path called a module logger that
