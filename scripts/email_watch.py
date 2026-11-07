@@ -1663,6 +1663,18 @@ def check_account(acct, pushed_count=None):
             envelopes = list_himalaya_backfill(
                 hconfig, seen, f"{acct_name}:", account=acct_alias,
             )
+        if HAS_IMAP_SESSION:
+            try:
+                email_imap_session.reserve_login(acct_name)
+            except Exception as exc:
+                try:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        'Hermes Email Watchdog: %s login budget spent (%s); skipping this scan', acct_name, exc
+                    )
+                except Exception:
+                    pass
+                return alerts
     else:
         envelopes = list_himalaya_backfill(
             hconfig, seen, f"{acct_name}:", account=acct_alias,

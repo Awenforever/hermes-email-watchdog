@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.2 - 2026-11-07
+
+- The login budget now covers the himalaya fallback too. That path cannot share
+  the cached session, so without this an account left on it still paid one login
+  per scan; at a 45s interval that is 80 logins an hour against a provider that
+  answers with NO once it is unhappy. Exhausting the allowance skips the scan
+  instead of pushing the provider harder.
 ## 0.19.1 - 2026-11-07
 
 - The original-message command now reads through the shared session instead of starting a fresh himalaya login.

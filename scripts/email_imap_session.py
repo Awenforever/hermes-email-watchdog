@@ -336,3 +336,25 @@ def get_session(key, host, port, username, password, folder="INBOX",
     session.key = key
     _SESSIONS[key] = session
     return session
+
+def reserve_login(key, budget_per_hour=DEFAULT_LOGIN_BUDGET):
+    """Account for one login on a path that does not use a session.
+
+    The himalaya fallback authenticates per command; it cannot share the cached
+    session, so it must at least share the budget. Raises ImapThrottled when the
+    hourly allowance is spent.
+    """
+    key = str(key)
+    now = time.time()
+    recent = [t for t in _LOGIN_TIMES.get(key, []) if now - t < 3600]
+    if budget_per_hour and len(recent) >= int(budget_per_hour):
+        _LOGIN_TIMES[key] = recent
+        raise ImapThrottled("login budget exhausted for %s (%d/hour)" % (key, budget_per_hour))
+    recent.append(now)
+    _LOGIN_TIMES[key] = recent
+    return len(recent)
+
+
+def login_count(key):
+    now = time.time()
+    return len([t for t in _LOGIN_TIMES.get(str(key), []) if now - t < 3600])
