@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.2 - 2026-11-07
+
+- Persist per-account scan timestamps next to the database. The hook reloads the module every cycle, so min_interval_seconds was forgotten and every account was scanned at the global interval anyway.
+
 ## 0.18.1 - 2026-11-07
 
 - Send an IMAP ID before SELECT on providers that require it (163/126/yeah), so the direct session can actually open the mailbox.

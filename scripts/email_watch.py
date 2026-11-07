@@ -1998,6 +1998,30 @@ def _save_throttle_state(state):
     except Exception:
         pass
 
+def _scan_state_path():
+    try:
+        db = email_config.get_path('db')
+    except Exception:
+        db = ''
+    base = Path(db).parent if db else Path(os.path.expanduser('~/.hermes'))
+    return base / 'scan_state.json'
+
+
+def _load_scan_state():
+    try:
+        return _json.loads(_scan_state_path().read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def _save_scan_state(state):
+    try:
+        _scan_state_path().parent.mkdir(parents=True, exist_ok=True)
+        _scan_state_path().write_text(_json.dumps(state), encoding='utf-8')
+    except Exception:
+        pass
+
+
 def _should_emit_check_failure(name, exc):
     """Debounce + rate-limit the 检查失败 card per account.
 
@@ -2083,12 +2107,20 @@ def main():
         _THROTTLE_UNTIL.update({k: v for k, v in _load_throttle_state().items() if v > _now})
     except Exception:
         pass
+    try:
+        _LAST_ACCOUNT_SCAN.update(_load_scan_state())
+    except Exception:
+        pass
     for acct in ACCOUNTS:
         _pause_name = str(acct.get('label') or acct.get('name') or acct.get('id') or 'account')
         _min_interval = float(acct.get('min_interval_seconds') or 0)
         if _min_interval and (time.time() - _LAST_ACCOUNT_SCAN.get(_pause_name, 0)) < _min_interval:
             continue
         _LAST_ACCOUNT_SCAN[_pause_name] = time.time()
+        try:
+            _save_scan_state(_LAST_ACCOUNT_SCAN)
+        except Exception:
+            pass
         if _THROTTLE_UNTIL.get(_pause_name, 0) > time.time():
             continue
         name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
