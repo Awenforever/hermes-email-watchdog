@@ -113,7 +113,7 @@ def _spool_alert(notification_text, metadata):
     try:
         payload = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "text": str(notification_text), "metadata": metadata or {}}
         with open(path, "a", encoding="utf-8") as fh:
-            fh.write(_json.dumps(payload, ensure_ascii=False) + chr(10))
+            fh.write(json.dumps(payload, ensure_ascii=False) + chr(10))
             fh.flush()
             os.fsync(fh.fileno())
         try:
@@ -1986,7 +1986,7 @@ def _throttle_state_path():
 
 def _load_throttle_state():
     try:
-        return _json.loads(_throttle_state_path().read_text(encoding='utf-8'))
+        return json.loads(_throttle_state_path().read_text(encoding='utf-8'))
     except Exception:
         return {}
 
@@ -1994,7 +1994,7 @@ def _load_throttle_state():
 def _save_throttle_state(state):
     try:
         _throttle_state_path().parent.mkdir(parents=True, exist_ok=True)
-        _throttle_state_path().write_text(_json.dumps(state), encoding='utf-8')
+        _throttle_state_path().write_text(json.dumps(state), encoding='utf-8')
     except Exception:
         pass
 
@@ -2009,7 +2009,7 @@ def _scan_state_path():
 
 def _load_scan_state():
     try:
-        return _json.loads(_scan_state_path().read_text(encoding='utf-8'))
+        return json.loads(_scan_state_path().read_text(encoding='utf-8'))
     except Exception:
         return {}
 
@@ -2017,7 +2017,7 @@ def _load_scan_state():
 def _save_scan_state(state):
     try:
         _scan_state_path().parent.mkdir(parents=True, exist_ok=True)
-        _scan_state_path().write_text(_json.dumps(state), encoding='utf-8')
+        _scan_state_path().write_text(json.dumps(state), encoding='utf-8')
     except Exception:
         pass
 
