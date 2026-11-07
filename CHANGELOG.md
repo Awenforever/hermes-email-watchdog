@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.3 - 2026-11-07
+
+- The module writes state with json, not _json, so both the throttle pause and the per-account scan times were silently dropped by a swallowed NameError. Persistence now actually happens.
+
 ## 0.18.2 - 2026-11-07
 
 - Persist per-account scan timestamps next to the database. The hook reloads the module every cycle, so min_interval_seconds was forgotten and every account was scanned at the global interval anyway.
