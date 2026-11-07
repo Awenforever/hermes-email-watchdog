@@ -201,13 +201,23 @@ class ImapSession:
             try:
                 current = self.count()
             except Exception as exc:
+                self.stats["watch_errors"] = int(self.stats.get("watch_errors") or 0) + 1
                 if _is_throttle(exc):
                     if self.key:
                         mark_throttled(self.key)
                 self._close()
-                if self._watch_stop.wait(min(60.0, interval * 4)):
+                streaks = int(self.stats.get("watch_streak") or 0) + 1
+                self.stats["watch_streak"] = streaks
+                if streaks >= 5:
+                    # Five failed attempts is a server that does not want this
+                    # check. Hammering it only spends the login budget, so the
+                    # watch stops and the scan keeps the account covered.
+                    self.stats["watch_gave_up"] = 1
+                    break
+                if self._watch_stop.wait(min(300.0, interval * (2 ** streaks))):
                     break
                 continue
+            self.stats["watch_streak"] = 0
             if baseline is None:
                 baseline = current
             elif current > baseline:
@@ -354,7 +364,7 @@ _THROTTLED_UNTIL = {}
 _LOGIN_TIMES = {}
 _THROTTLE_HINTS = ("too many simultaneous", "rate limit", "throttl", "too many connections", "unavailable")
 DEFAULT_THROTTLE_SECONDS = 180.0
-DEFAULT_LOGIN_BUDGET = 20
+DEFAULT_LOGIN_BUDGET = 60
 
 
 class ImapThrottled(ImapSessionError):
