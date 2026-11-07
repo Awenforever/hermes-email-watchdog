@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.19.1 - 2026-11-07
+
+- The original-message command now reads through the shared session instead of starting a fresh himalaya login.
+
 ## 0.19.0 - 2026-11-07
 
 Rate limiting is now handled as a first-class constraint rather than one path

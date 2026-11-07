@@ -219,7 +219,14 @@ def _fetch_with_deadline(config_path: str, uid: str, alias: str | None, deadline
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     try:
-        future = pool.submit(email_watch.read_himalaya, config_path, uid, account=alias)
+        reader = email_watch.read_himalaya
+        try:
+            direct = email_watch._imap_session_for({'id': alias, 'himalaya_config': config_path, 'direct_imap': True})
+        except Exception:
+            direct = None
+        if direct is not None:
+            reader = lambda _cfg, _uid, account=None: direct.read_message(_uid)
+        future = pool.submit(reader, config_path, uid, account=alias)
         return future.result(timeout=deadline)
     except concurrent.futures.TimeoutError:
         raise TimeoutError(f"original-text fetch exceeded {deadline}s") from None
