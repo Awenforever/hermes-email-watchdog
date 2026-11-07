@@ -1819,6 +1819,7 @@ def _due_reminder_alerts() -> list:
 # success (#130 + the 2026-10-19 alert-frequency regression). A genuinely new
 # failure class still surfaces at once.
 _THROTTLE_UNTIL = {}
+_LAST_ACCOUNT_SCAN = {}
 
 _CHECK_FAILURE_COOLDOWN_SECONDS = int(
     os.getenv("HERMES_EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN", "900") or "900"
@@ -1967,6 +1968,10 @@ def main():
 
     for acct in ACCOUNTS:
         _pause_name = str(acct.get('label') or acct.get('name') or acct.get('id') or 'account')
+        _min_interval = float(acct.get('min_interval_seconds') or 0)
+        if _min_interval and (time.time() - _LAST_ACCOUNT_SCAN.get(_pause_name, 0)) < _min_interval:
+            continue
+        _LAST_ACCOUNT_SCAN[_pause_name] = time.time()
         if _THROTTLE_UNTIL.get(_pause_name, 0) > time.time():
             continue
         name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
@@ -1980,7 +1985,13 @@ def main():
             pause = _throttle_seconds(e)
             if pause:
                 _THROTTLE_UNTIL[name] = time.time() + pause
-                logger.warning('Hermes Email Watchdog: throttled, pausing %.0fs', pause)
+                try:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        'Hermes Email Watchdog: %s throttled, pausing %.0fs', name, pause
+                    )
+                except Exception:
+                    pass
             if _should_emit_check_failure(name, e):
                 all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
             accounts_seen.add(name)
