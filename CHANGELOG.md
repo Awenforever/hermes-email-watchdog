@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0 - 2026-11-07
+
+- The login budget is now stored in login_budget.json next to the database.
+  It used to exist only in memory, so every restart handed the same account a
+  fresh allowance and the same provider could be pushed past its limit again.
+  Entries older than an hour are dropped on load and on save.
 ## 0.20.1 - 2026-11-07
 
 - Fix a regression from 0.19.2: the login-budget guard was placed before the

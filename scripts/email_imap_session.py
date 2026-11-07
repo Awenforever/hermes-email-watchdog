@@ -66,6 +66,7 @@ class ImapSession:
         self.stats["logins"] += 1
         if self.key:
             _LOGIN_TIMES.setdefault(self.key, []).append(time.time())
+            _save_login_times()
         self._announce(conn)
         try:
             conn.select(self.folder, readonly=True)
@@ -383,6 +384,59 @@ def reset_sessions():
     _LOGIN_TIMES.clear()
 
 
+_STATE_PATH = None
+
+
+def set_state_path(path):
+    """Point the budget at a file next to the database, then prime from it."""
+    global _STATE_PATH
+    try:
+        from pathlib import Path as _Path
+        _STATE_PATH = _Path(str(path)) if path else None
+    except Exception:
+        _STATE_PATH = None
+    _load_login_times()
+
+
+def _load_login_times():
+    if _STATE_PATH is None:
+        return
+    try:
+        import json as _json
+        data = _json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    now = time.time()
+    for key, times in (data.get("logins") or {}).items():
+        keep = []
+        for value in times:
+            try:
+                stamp = float(value)
+            except Exception:
+                continue
+            if now - stamp < 3600:
+                keep.append(stamp)
+        if keep:
+            _LOGIN_TIMES[str(key)] = keep
+
+
+def _save_login_times():
+    if _STATE_PATH is None:
+        return
+    try:
+        import json as _json
+        now = time.time()
+        pruned = {}
+        for key, times in _LOGIN_TIMES.items():
+            keep = [t for t in times if now - t < 3600]
+            if keep:
+                pruned[key] = keep
+        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _STATE_PATH.write_text(_json.dumps({"logins": pruned}), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def get_session(key, host, port, username, password, folder="INBOX",
                 budget_per_hour=DEFAULT_LOGIN_BUDGET, connector=None):
     """One session per account for the life of the process.
@@ -423,6 +477,7 @@ def reserve_login(key, budget_per_hour=DEFAULT_LOGIN_BUDGET):
         raise ImapThrottled("login budget exhausted for %s (%d/hour)" % (key, budget_per_hour))
     recent.append(now)
     _LOGIN_TIMES[key] = recent
+    _save_login_times()
     return len(recent)
 
 
