@@ -785,9 +785,56 @@ async def _flush_outbox(limit: int = 3) -> dict:
     summary.update(_outbox_pending_state())
     return summary
 
+_WAKE_EVENT = None
+
+
+def _wake_scan():
+    event = _WAKE_EVENT
+    if event is not None:
+        event.set()
+
+
+def _build_watchers(loop):
+    watchers = []
+    try:
+        import sys
+        scripts = str(SKILL_DIR / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import email_idle_watch
+    except Exception as exc:
+        logger.warning("Hermes Email Watchdog: idle watcher unavailable: %r", exc)
+        return watchers
+    try:
+        raw = Path(CONFIG_PATH).read_text(encoding="utf-8") if Path(CONFIG_PATH).is_file() else "{}"
+        config = json.loads(raw)
+    except Exception:
+        return watchers
+    for account in (config.get("accounts") or []):
+        try:
+            watcher = email_idle_watch.watcher_from_account(
+                account, wake=lambda: loop.call_soon_threadsafe(_wake_scan)
+            )
+        except Exception as exc:
+            logger.warning("Hermes Email Watchdog: idle watcher build failed: %r", exc)
+            continue
+        if watcher is not None:
+            watcher.start()
+            watchers.append(watcher)
+            logger.warning("Hermes Email Watchdog: idle watcher started for %s", account.get("label"))
+    return watchers
+
+
 async def _loop():
+    global _WAKE_EVENT
+    _WAKE_EVENT = asyncio.Event()
     startup_delay = int(os.getenv("HERMES_EMAIL_WATCHDOG_STARTUP_DELAY_SECONDS", "15") or "15")
     await asyncio.sleep(max(0, startup_delay))
+
+    try:
+        _build_watchers(asyncio.get_running_loop())
+    except Exception as exc:
+        logger.warning("Hermes Email Watchdog: watcher startup failed: %r", exc)
 
     while _enabled():
         started = time.time()
@@ -803,7 +850,18 @@ async def _loop():
             })
 
         elapsed = time.time() - started
-        await asyncio.sleep(max(5, _interval_seconds() - int(elapsed)))
+        logger.warning("Hermes Email Watchdog: scan finished duration=%.1fs", elapsed)
+        wait_seconds = max(5, _interval_seconds() - int(elapsed))
+        event = _WAKE_EVENT
+        if event is not None:
+            try:
+                await asyncio.wait_for(event.wait(), timeout=wait_seconds)
+                event.clear()
+                logger.warning("Hermes Email Watchdog: woken early by imap watcher")
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(wait_seconds)
 
     _write_status({"state": "disabled", "disabled_at": _now()})
     logger.warning("Hermes Email Watchdog: disabled; loop exited")

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.0 - 2026-11-07
+
+- Persistent IMAP watcher (opt-in per account via idle_watch): one long-lived
+  read-only connection with a NOOP+COUNT check replaces per-poll re-login and
+  wakes the scan immediately when the mailbox count grows. Gmail throttles
+  repeated logins (Too many simultaneous connections); this avoids that churn.
+- Scan observability: each cycle logs its duration, each account logs fetch
+  seconds, and an early wake is logged, so a multi-minute discovery gap can be
+  attributed instead of guessed.
 ## 0.16.1 - 2026-11-06
 
 - Wire the single-model consolidation into `migrate-current`: 0.16.0 removed
