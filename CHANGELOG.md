@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.2 - 2026-11-07
+
+- The watch loop now backs off exponentially and stops after five consecutive
+  failures. A server that rejects the count check used to be retried every
+  twenty seconds, which quietly spent the login budget on a mailbox that was
+  never going to answer.
+- Default login budget raised to 60/hour: the previous 20 was calibrated for
+  reconnect-only traffic and starved accounts that still authenticate per scan.
 ## 0.21.1 - 2026-11-07
 
 - One budget key per account. The session used the lowercase id while the
