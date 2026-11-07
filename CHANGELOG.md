@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.0 - 2026-11-07
+
+- Scans now list and read mail over one long-lived IMAP session instead of one
+  himalaya CLI call per operation. Each call used to authenticate again, so a
+  scan with six new messages cost seven logins per cycle, which is what
+  providers throttle (Gmail: too many simultaneous connections).
+- Bodies are fetched with BODY.PEEK, so no flag is set and nothing is marked
+  read. On any session error the account falls back to the previous himalaya
+  path for that scan, so this cannot make mail less reliable than before.
+- Opt out per account with direct_imap: false.
 ## 0.17.9 - 2026-11-07
 
 - Keep the throttle pause next to the database instead of a guessed home directory.
