@@ -145,7 +145,7 @@ class ImapSession:
         window = uids[-max(1, limit):]
         typ, fetched = conn.uid(
             "fetch", ",".join(u.decode() if isinstance(u, bytes) else str(u) for u in window),
-            "(BODY.PEEK[HEADER.FIELDS (%s)] RFC822.SIZE BODYSTRUCTURE)" % _HEADER_FIELDS,
+            "(UID BODY.PEEK[HEADER.FIELDS (%s)] RFC822.SIZE BODYSTRUCTURE)" % _HEADER_FIELDS,
         )
         if typ != "OK":
             raise RuntimeError("fetch failed: %s" % typ)
@@ -157,6 +157,11 @@ class ImapSession:
             if isinstance(meta, str):
                 meta = meta.encode()
             uid = _uid_from_meta(meta)
+            if not uid:
+                # Never key an envelope on an empty id: the read path would
+                # ask the server for message '' and fail the whole account.
+                self.stats["missing_uid"] = int(self.stats.get("missing_uid") or 0) + 1
+                continue
             envelopes.append(_envelope(uid, raw, _size_from_meta(meta), _has_attachment(meta)))
         self.stats["lists"] += 1
         return envelopes

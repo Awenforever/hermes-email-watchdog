@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.3 - 2026-11-07
+
+- Fix a silent per-account failure introduced with the direct session: the
+  envelope fetch did not request UID, and servers that omit it returned an
+  empty id. Reading a message by an empty id always failed, so that account
+  stopped producing notifications while every scan still reported success.
+  UID is now requested explicitly and an envelope without one is dropped
+  instead of being keyed on an empty string.
 ## 0.21.2 - 2026-11-07
 
 - The watch loop now backs off exponentially and stops after five consecutive

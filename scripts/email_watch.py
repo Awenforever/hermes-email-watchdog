@@ -1895,7 +1895,7 @@ def check_account(acct, pushed_count=None):
     try:
         import logging
         logging.getLogger(__name__).warning(
-            'Hermes Email Watchdog: %s path=%s budget=%d/20',
+            'Hermes Email Watchdog: %s path=%s budget=%d',
             acct_name, 'session' if session is not None else 'himalaya',
             email_imap_session.login_count(budget_key) if HAS_IMAP_SESSION else 0,
         )
