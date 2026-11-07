@@ -53,12 +53,30 @@ class ImapSession:
         conn = self._connector(self.host, self.port, ssl_context=ctx, timeout=self.timeout)
         conn.login(self.username, self.password)
         self.stats["logins"] += 1
+        self._announce(conn)
         try:
             conn.select(self.folder, readonly=True)
         except Exception:
             conn.select(self.folder)
         self.stats["connects"] += 1
         return conn
+
+    def _announce(self, conn):
+        """Some providers require an IMAP ID before they allow SELECT."""
+        host = (self.host or '').lower()
+        need = False
+        for marker in ('163', '126', 'yeah'):
+            if marker in host:
+                need = True
+                break
+        if not need:
+            return
+        payload = '"name" "hermes-email-watchdog" "version" "1.0" "vendor" "dsh")'
+        try:
+            conn.xatom('ID', payload)
+        except Exception:
+            pass
+
 
     def _connection(self):
         if self._conn is None:
