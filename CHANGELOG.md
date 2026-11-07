@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.1 - 2026-11-07
+
+- Send an IMAP ID before SELECT on providers that require it (163/126/yeah), so the direct session can actually open the mailbox.
+
 ## 0.18.0 - 2026-11-07
 
 - Scans now list and read mail over one long-lived IMAP session instead of one
