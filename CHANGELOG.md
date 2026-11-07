@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.3 - 2026-11-07
+
+- Fix silent mail loss under bursts: a scan listed only the newest page, so
+  when several messages arrived between scans (or a scan failed and retried
+  later) anything older was pushed out of the window and never processed.
+  Scans now page back until they reach an already-recorded message, bounded by
+  backfill_page_size (20) and backfill_max_pages (10). Normal scans still cost
+  one page.
+
+- Measured cause: 24 test mails in one hour, all present in the mailbox, 7
+  never reached the database.
 ## 0.17.2 - 2026-11-07
 
 - Persistent IMAP watch is on by default for every IMAP account (opt out per

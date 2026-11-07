@@ -750,6 +750,40 @@ def list_himalaya(config_path, account=None):
     data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30, account=account)
     return _unwrap_himalaya_list(data)
 
+def list_himalaya_backfill(config_path, seen_keys, prefix, account=None, page_size=None, max_pages=None):
+    """List envelopes newest-first, paging back until a known message is reached.
+
+    A single page is not enough. When several messages arrive between scans, or
+    a scan fails and retries later, a fixed page silently pushes older mail out
+    of the window and it is never processed. Paging stops as soon as a page
+    contains a message already recorded, so normal scans still cost one page.
+    """
+    size = int(page_size or _WATCHDOG_SETTINGS.get("backfill_page_size", 20))
+    limit = int(max_pages or _WATCHDOG_SETTINGS.get("backfill_max_pages", 10))
+    collected = []
+    for page in range(1, max(1, limit) + 1):
+        data = _run_himalaya_json(
+            config_path,
+            ["envelope", "list", "--page", str(page), "--page-size", str(size), "--output", "json"],
+            timeout=30,
+            account=account,
+        )
+        page_rows = _unwrap_himalaya_list(data)
+        if not page_rows:
+            break
+        collected.extend(page_rows)
+        if len(page_rows) < size:
+            break
+        if seen_keys:
+            known = any(
+                (prefix + str(row.get("id") or row.get("message_id", ""))) in seen_keys
+                for row in page_rows
+            )
+            if known:
+                break
+    return collected
+
+
 def _html_to_text(value):
     text = str(value or "")
     text = text.replace("\\n", "\n").replace("\\t", "\t")
@@ -1563,12 +1597,14 @@ def check_account(acct, pushed_count=None):
             acct_alias = email_config._himalaya_aliases(hconfig)[1]
         except Exception:
             acct_alias = ""
-    envelopes = list_himalaya(hconfig, account=acct_alias)
+    seen = load_seen()
+    envelopes = list_himalaya_backfill(
+        hconfig, seen, "{acct_name}:", account=acct_alias,
+    )
 
     if not envelopes:
         return alerts
 
-    seen = load_seen()
     prefix = f"{acct_name}:"
     updated = False
 
