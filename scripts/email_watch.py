@@ -59,6 +59,13 @@ try:
 except ImportError:
     HAS_MODULES = False
 
+try:
+    import email_gmail_api  # optional Gmail REST provider
+    HAS_GMAIL_API = True
+except Exception:
+    email_gmail_api = None
+    HAS_GMAIL_API = False
+
 # ── Configuration ───────────────────────────────────────────────
 
 if HAS_V3:
@@ -1563,7 +1570,15 @@ def check_account(acct, pushed_count=None):
             acct_alias = email_config._himalaya_aliases(hconfig)[1]
         except Exception:
             acct_alias = ""
-    envelopes = list_himalaya(hconfig, account=acct_alias)
+    account_backend = str(acct.get("backend") or "imap").strip().lower()
+    gmail_service = None
+    if account_backend == "gmail_api":
+        if not HAS_GMAIL_API or not email_gmail_api.is_configured():
+            raise RuntimeError("account backend=gmail_api but the Gmail API is not configured")
+        gmail_service = email_gmail_api.build_service(acct.get("api_proxy"))
+        envelopes = email_gmail_api.list_messages(gmail_service, max_results=LOOKBACK)
+    else:
+        envelopes = list_himalaya(hconfig, account=acct_alias)
 
     if not envelopes:
         return alerts
@@ -1584,7 +1599,10 @@ def check_account(acct, pushed_count=None):
         if key in seen:
             continue
 
-        msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
+        if gmail_service is not None:
+            msg = email_gmail_api.read_message(gmail_service, msg_id)
+        else:
+            msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
 
         if msg is None:
             seen[key] = True
