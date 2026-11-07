@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.4 - 2026-11-07
+
+- Connection throttling is now survivable: when a provider rejects a login with
+  "Too many simultaneous connections" the account pauses (throttle_backoff_seconds,
+  180) instead of retrying on the normal interval into the same wall. Observed
+  live: one account accumulated 24 consecutive failed scans and stopped noticing
+  new mail while the retry loop kept the throttle warm.
+- A scan now fetches at most scan_batch_limit (6) new messages, so a burst no
+  longer opens one connection per message and trips the limit itself. Remaining
+  messages are picked up on later scans, which the 0.17.3 backfill guarantees
+  are still listed.
 ## 0.17.3 - 2026-11-07
 
 - Fix silent mail loss under bursts: a scan listed only the newest page, so

@@ -1608,7 +1608,11 @@ def check_account(acct, pushed_count=None):
     prefix = f"{acct_name}:"
     updated = False
 
+    batch_limit = int(_WATCHDOG_SETTINGS.get("scan_batch_limit", 6))
+    processed = 0
     for env in envelopes:
+        if processed >= batch_limit:
+            break
         msg_id = str(env.get("id") or env.get("message_id", ""))
         key = f"{prefix}{msg_id}"
         # Account-scoped storage identity. Himalaya envelope ids are per-mailbox
@@ -1619,6 +1623,8 @@ def check_account(acct, pushed_count=None):
 
         if key in seen:
             continue
+
+        processed += 1
 
         msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
 
@@ -1812,6 +1818,8 @@ def _due_reminder_alerts() -> list:
 # cooldown memory), so a flapping account no longer re-alerts on every fail-after-
 # success (#130 + the 2026-10-19 alert-frequency regression). A genuinely new
 # failure class still surfaces at once.
+_THROTTLE_UNTIL = {}
+
 _CHECK_FAILURE_COOLDOWN_SECONDS = int(
     os.getenv("HERMES_EMAIL_WATCHDOG_CHECK_FAILURE_COOLDOWN", "900") or "900"
 )
@@ -1861,6 +1869,20 @@ def _failure_signature(exc):
         return klass
     norm = re.sub(r"\d+", "#", text)[:200]
     return "unknown:" + hashlib.sha256(norm.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _throttle_seconds(exc):
+    """A provider that rejects logins needs a longer pause, not a faster retry.
+
+    Gmail answers a burst of new connections with "Too many simultaneous
+    connections". Retrying on the normal interval just re-enters the throttle,
+    so the account never catches up; a longer pause lets the slots drain.
+    """
+    text = str(exc or "").lower()
+    for needle in ("too many simultaneous", "rate limit", "throttl"):
+        if needle in text:
+            return int(_WATCHDOG_SETTINGS.get("throttle_backoff_seconds", 180))
+    return 0
 
 
 def _should_emit_check_failure(name, exc):
@@ -1944,6 +1966,9 @@ def main():
     accounts_seen = set()
 
     for acct in ACCOUNTS:
+        _pause_name = str(acct.get('label') or acct.get('name') or acct.get('id') or 'account')
+        if _THROTTLE_UNTIL.get(_pause_name, 0) > time.time():
+            continue
         name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
         try:
             acct_alerts = check_account(acct)
@@ -1952,6 +1977,10 @@ def main():
                 accounts_seen.add(name)
             _note_check_success(name)
         except Exception as e:
+            pause = _throttle_seconds(e)
+            if pause:
+                _THROTTLE_UNTIL[name] = time.time() + pause
+                logger.warning('Hermes Email Watchdog: throttled, pausing %.0fs', pause)
             if _should_emit_check_failure(name, e):
                 all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
             accounts_seen.add(name)
