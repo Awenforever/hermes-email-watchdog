@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.2 - 2026-11-07
+
+- Persistent IMAP watch is on by default for every IMAP account (opt out per
+  account with idle_watch: false; gmail_api backends are unaffected). Users no
+  longer need to discover and enable it themselves.
+- install.sh now also refreshes an existing plugin-tree copy: the hook resolves
+  its scripts from plugins/ before skills/, so an install that only updated
+  skills/ used to leave the running hook on stale code.
 ## 0.17.1 - 2026-11-07
 
 - Fix a 0.16.0 regression: skipping the editorial pass for verification
