@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.8 - 2026-11-07
+
+- Persist the throttle pause. The hook reloads the module each cycle, so an
+  in-memory pause was forgotten immediately and the account retried every scan,
+  keeping the provider throttle warm. The pause now lives in
+  throttle_state.json and is re-read at the start of each scan.
 ## 0.17.7 - 2026-11-07
 
 - The idle watcher fell back to a writable SELECT when a server rejects the

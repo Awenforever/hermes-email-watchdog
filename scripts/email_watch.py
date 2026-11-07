@@ -1886,6 +1886,26 @@ def _throttle_seconds(exc):
     return 0
 
 
+def _throttle_state_path():
+    root = os.environ.get('HERMES_EMAIL_WATCHDOG_STATE_ROOT') or ''
+    base = Path(root) if root else Path(os.path.expanduser('~/.hermes'))
+    return base / 'throttle_state.json'
+
+
+def _load_throttle_state():
+    try:
+        return _json.loads(_throttle_state_path().read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def _save_throttle_state(state):
+    try:
+        _throttle_state_path().parent.mkdir(parents=True, exist_ok=True)
+        _throttle_state_path().write_text(_json.dumps(state), encoding='utf-8')
+    except Exception:
+        pass
+
 def _should_emit_check_failure(name, exc):
     """Debounce + rate-limit the 检查失败 card per account.
 
@@ -1966,6 +1986,11 @@ def main():
     all_alerts = list(due_alerts)
     accounts_seen = set()
 
+    try:
+        _now = time.time()
+        _THROTTLE_UNTIL.update({k: v for k, v in _load_throttle_state().items() if v > _now})
+    except Exception:
+        pass
     for acct in ACCOUNTS:
         _pause_name = str(acct.get('label') or acct.get('name') or acct.get('id') or 'account')
         _min_interval = float(acct.get('min_interval_seconds') or 0)
@@ -1985,6 +2010,7 @@ def main():
             pause = _throttle_seconds(e)
             if pause:
                 _THROTTLE_UNTIL[name] = time.time() + pause
+                _save_throttle_state(_THROTTLE_UNTIL)
                 try:
                     import logging
                     logging.getLogger(__name__).warning(
