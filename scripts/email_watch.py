@@ -59,6 +59,13 @@ try:
 except ImportError:
     HAS_MODULES = False
 
+try:
+    import email_imap_session
+    HAS_IMAP_SESSION = True
+except Exception:
+    email_imap_session = None
+    HAS_IMAP_SESSION = False
+
 # ── Configuration ───────────────────────────────────────────────
 
 if HAS_V3:
@@ -749,6 +756,54 @@ def _run_himalaya_json(config_path, args, timeout=30, account=None):
 def list_himalaya(config_path, account=None):
     data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30, account=account)
     return _unwrap_himalaya_list(data)
+
+_IMAP_SESSIONS = {}
+
+
+def _imap_session_for(acct):
+    """Return a cached long-lived session for an IMAP account."""
+    if not HAS_IMAP_SESSION:
+        return None
+    key = str(acct.get('id') or acct.get('label') or '')
+    existing = _IMAP_SESSIONS.get(key)
+    if existing is not None:
+        return existing
+    cfg = acct.get('himalaya_config') or acct.get('config')
+    if not cfg:
+        return None
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
+    try:
+        data = tomllib.loads(Path(cfg).read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    alias = str(acct.get('himalaya_account') or '').strip()
+    accounts = data.get('accounts') or {}
+    entry = accounts.get(alias) if alias else None
+    if entry is None:
+        entry = next((v for v in accounts.values() if isinstance(v, dict)), None)
+    if not isinstance(entry, dict):
+        return None
+    backend = entry.get('backend') or {}
+    host = str(backend.get('host') or '')
+    port = int(backend.get('port') or 993)
+    login = str(backend.get('login') or '')
+    auth = (backend.get('auth') or {})
+    cmd = str(auth.get('cmd') or '')
+    password = ''
+    if cmd:
+        try:
+            password = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=20).stdout.strip()
+        except Exception:
+            password = ''
+    if not (host and login and password):
+        return None
+    session = email_imap_session.ImapSession(host, port, login, password)
+    _IMAP_SESSIONS[key] = session
+    return session
+
 
 def list_himalaya_backfill(config_path, seen_keys, prefix, account=None, page_size=None, max_pages=None):
     """List envelopes newest-first, paging back until a known message is reached.
@@ -1598,9 +1653,27 @@ def check_account(acct, pushed_count=None):
         except Exception:
             acct_alias = ""
     seen = load_seen()
-    envelopes = list_himalaya_backfill(
-        hconfig, seen, f"{acct_name}:", account=acct_alias,
-    )
+    session = _imap_session_for(acct) if acct.get('direct_imap', True) else None
+    if session is not None:
+        try:
+            size = int(_WATCHDOG_SETTINGS.get('backfill_page_size', 20)) * int(_WATCHDOG_SETTINGS.get('backfill_max_pages', 4))
+            envelopes = session.list_recent(size)
+        except Exception as exc:
+            try:
+                import logging
+                logging.getLogger(__name__).warning(
+                    'Hermes Email Watchdog: %s direct imap failed (%r); falling back to himalaya', acct_name, exc
+                )
+            except Exception:
+                pass
+            session = None
+            envelopes = list_himalaya_backfill(
+                hconfig, seen, f"{acct_name}:", account=acct_alias,
+            )
+    else:
+        envelopes = list_himalaya_backfill(
+            hconfig, seen, f"{acct_name}:", account=acct_alias,
+        )
 
     if not envelopes:
         return alerts
@@ -1626,7 +1699,13 @@ def check_account(acct, pushed_count=None):
 
         processed += 1
 
-        msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
+        if session is not None:
+            try:
+                msg = session.read_message(msg_id)
+            except Exception:
+                msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
+        else:
+            msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
 
         if msg is None:
             seen[key] = True
@@ -1789,6 +1868,16 @@ def check_account(acct, pushed_count=None):
 
     if updated:
         save_seen(seen)
+    if session is not None:
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                'Hermes Email Watchdog: %s direct imap stats connects=%s logins=%s lists=%s reads=%s',
+                acct_name, session.stats.get('connects'), session.stats.get('logins'),
+                session.stats.get('lists'), session.stats.get('reads'),
+            )
+        except Exception:
+            pass
     return alerts
 
 def _due_reminder_alerts() -> list:
