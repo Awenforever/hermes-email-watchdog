@@ -160,6 +160,19 @@ class ImapSession:
         self.stats["lists"] += 1
         return envelopes
 
+    def read_raw(self, uid):
+        """Raw RFC 822 bytes, fetched with BODY.PEEK so nothing is marked read."""
+        return self._run(self._read_raw, uid)
+
+    def _read_raw(self, conn, uid):
+        typ, data = conn.uid("fetch", str(uid), "(BODY.PEEK[])")
+        if typ != "OK":
+            raise RuntimeError("fetch failed: %s" % typ)
+        for item in data or []:
+            if isinstance(item, tuple) and len(item) >= 2:
+                return item[1]
+        return None
+
     def read_message(self, uid) -> Optional[Dict[str, Any]]:
         return self._run(self._read_message, uid)
 

@@ -604,7 +604,10 @@ def download_attachments(email: dict, analysis: dict, account: dict) -> list:
     if account.get("type") == "himalaya":
         cfg = account.get("himalaya_config") or account.get("config")
         if cfg:
-            saved_paths = _download_himalaya_with_retry(cfg, _transport_uid(email), save_dir)
+            saved_paths = _download_himalaya_with_retry(
+                cfg, _transport_uid(email), save_dir,
+                account_key=str(account.get('id') or account.get('label') or 'account'),
+            )
 
     saved_paths = [_normalize_extensionless_attachment(path) for path in saved_paths]
     result = []
@@ -1337,7 +1340,7 @@ _ATTACHMENT_DOWNLOAD_ATTEMPTS = 3
 _ATTACHMENT_DOWNLOAD_BACKOFF_SECONDS = 2.0
 
 
-def _download_himalaya_with_retry(config_path, msg_id, save_dir):
+def _download_himalaya_with_retry(config_path, msg_id, save_dir, account_key=None):
     """Bounded-retry wrapper around :func:`_download_himalaya`.
 
     Retries the whole download a bounded number of times with a short linear
@@ -1352,7 +1355,7 @@ def _download_himalaya_with_retry(config_path, msg_id, save_dir):
     log = logging.getLogger(__name__)
     for attempt in range(1, _ATTACHMENT_DOWNLOAD_ATTEMPTS + 1):
         try:
-            saved = _download_himalaya(config_path, msg_id, save_dir)
+            saved = _download_himalaya(config_path, msg_id, save_dir, account_key=account_key)
         except FileNotFoundError:
             log.warning(
                 "Hermes Email Watchdog attachment download: himalaya binary unavailable (uid=%s)", msg_id,
@@ -1379,12 +1382,57 @@ def _download_himalaya_with_retry(config_path, msg_id, save_dir):
     return []
 
 
-def _download_himalaya(config_path, msg_id, save_dir):
+def _download_from_session(account_key, config_path, msg_id, save_dir):
+    """Fetch the raw message over the shared session and decode its MIME parts."""
+    try:
+        import email_watch
+        session = email_watch._imap_session_for(
+            {'id': account_key, 'himalaya_config': config_path, 'direct_imap': True}
+        )
+    except Exception:
+        return None
+    if session is None:
+        return None
+    try:
+        raw = session.read_raw(msg_id)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        return _decode_attachments_from_bytes(raw, save_dir)
+    except Exception:
+        return None
+
+
+def _decode_attachments_from_bytes(raw, save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+    import email as _email
+    msg = _email.message_from_bytes(raw)
+    saved = []
+    for part in msg.walk():
+        filename = part.get_filename()
+        if not filename:
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        target = Path(save_dir) / os.path.basename(filename)
+        target.write_bytes(payload)
+        saved.append(str(target))
+    return sorted(saved)
+
+
+def _download_himalaya(config_path, msg_id, save_dir, account_key=None):
     os.makedirs(save_dir, exist_ok=True)
     # Himalaya v1.2.0's attachment download command can corrupt arbitrary
     # binary payloads. Exporting the original RFC 822 message and decoding its
     # MIME parts in Python preserves bytes exactly and also gives us one
     # portable implementation across Windows, Linux, WSL and Docker.
+    if account_key:
+        direct = _download_from_session(account_key, config_path, msg_id, save_dir)
+        if direct:
+            return direct
     exported = _download_himalaya_from_raw_message(config_path, msg_id, save_dir)
     if exported is not None:
         return exported

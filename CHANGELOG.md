@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.3 - 2026-11-07
+
+- Attachment downloads fetch the raw message over the shared session and decode
+  the MIME parts in Python, instead of exporting through himalaya (one login per
+  attachment request). The himalaya export remains as the fallback.
 ## 0.19.2 - 2026-11-07
 
 - The login budget now covers the himalaya fallback too. That path cannot share
