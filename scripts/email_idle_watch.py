@@ -216,8 +216,8 @@ def watcher_from_account(account: Dict[str, Any], wake=None, connector=None):
             interval=float(account.get('idle_interval') or DEFAULT_INTERVAL),
         )
     except Exception:
-        pass
-    return PersistentImapWatcher(        host, port, login, password, wake=wake,
-        interval=float(account.get("idle_interval") or DEFAULT_INTERVAL),
-        connector=connector,
-    )
+        # Never fall back to a watcher that logs in on its own: it would bypass
+        # the shared budget and quietly reopen the connection churn this whole
+        # design exists to prevent. Without a session, scanning still covers it.
+        return None
+    return None

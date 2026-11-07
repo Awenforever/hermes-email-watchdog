@@ -56,12 +56,17 @@ class ImapSession:
         self._lock = threading.RLock()
         self._conn = None
         self.key = key
+        self.budget_per_hour = 0
         self.stats: Dict[str, Any] = {"connects": 0, "logins": 0, "lists": 0, "reads": 0, "errors": 0, "wakes": 0}
 
     # -- connection -------------------------------------------------
     def _open(self):
         ctx = ssl.create_default_context()
         conn = self._connector(self.host, self.port, ssl_context=ctx, timeout=self.timeout)
+        if self.key and self.budget_per_hour:
+            _recent = [x for x in _LOGIN_TIMES.get(self.key, []) if time.time() - x < 3600]
+            if len(_recent) >= int(self.budget_per_hour):
+                raise ImapThrottled('login budget exhausted for %s (%d/hour)' % (self.key, self.budget_per_hour))
         conn.login(self.username, self.password)
         self.stats["logins"] += 1
         if self.key:
@@ -85,7 +90,7 @@ class ImapSession:
                 break
         if not need:
             return
-        payload = '"name" "hermes-email-watchdog" "version" "1.0" "vendor" "dsh")'
+        payload = '("name" "hermes-email-watchdog" "version" "1.0" "vendor" "dsh")'
         try:
             conn.xatom('ID', payload)
         except Exception:
@@ -473,6 +478,7 @@ def get_session(key, host, port, username, password, folder="INBOX",
         if len(recent) >= int(budget_per_hour):
             raise ImapThrottled("login budget exhausted for %s (%d/hour)" % (key, budget_per_hour))
     session = ImapSession(host, port, username, password, folder=folder, connector=connector)
+    session.budget_per_hour = int(budget_per_hour or 0)
     session.key = key
     _SESSIONS[key] = session
     return session

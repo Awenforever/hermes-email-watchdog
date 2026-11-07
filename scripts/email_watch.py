@@ -405,6 +405,7 @@ def _is_cap_failure(rc, stdout="", stderr=""):
 
 # EMAIL_WATCHDOG_HIMALAYA_GRACEFUL_TIMEOUT_V1
 def _run_himalaya_subprocess(cmd, timeout, cwd):
+    _charge_himalaya_login()
     """Run himalaya, letting it close the IMAP session cleanly on timeout.
 
     ``subprocess.run(timeout=...)`` SIGKILLs immediately, so himalaya never sends
@@ -753,15 +754,31 @@ def _run_himalaya_json(config_path, args, timeout=30, account=None):
     raise HimalayaCommandError(args, attempts)
 
 
+_HIMALAYA_BUDGET_KEY = None
+
+
+def _charge_himalaya_login():
+    """Every himalaya invocation authenticates once; account for it."""
+    key = _HIMALAYA_BUDGET_KEY
+    if not key or not HAS_IMAP_SESSION:
+        return
+    email_imap_session.reserve_login(key)
+
+
 def list_himalaya(config_path, account=None):
     data = _run_himalaya_json(config_path, ["envelope", "list", "--page-size", str(LOOKBACK), "--output", "json"], timeout=30, account=account)
     return _unwrap_himalaya_list(data)
+
+def _account_key(acct):
+    """Stable per-account identity for session, budget and cooldown keys."""
+    return str(acct.get('id') or acct.get('label') or acct.get('name') or 'account')
+
 
 def _imap_session_for(acct):
     """Return a cached long-lived session for an IMAP account."""
     if not HAS_IMAP_SESSION:
         return None
-    key = str(acct.get('id') or acct.get('label') or '')
+    key = _account_key(acct)
     cfg = acct.get('himalaya_config') or acct.get('config')
     if not cfg:
         return None
@@ -800,7 +817,8 @@ def _imap_session_for(acct):
             email_imap_session.set_state_path(Path(db_path).parent / 'login_budget.json')
     except Exception:
         pass
-    session = email_imap_session.get_session(key, host, port, login, password)
+    _budget = int(_WATCHDOG_SETTINGS.get('login_budget_per_hour', 60))
+    session = email_imap_session.get_session(key, host, port, login, password, budget_per_hour=_budget)
     return session
 
 
@@ -1652,7 +1670,9 @@ def check_account(acct, pushed_count=None):
         except Exception:
             acct_alias = ""
     seen = load_seen()
-    budget_key = str(acct.get('id') or acct.get('label') or acct.get('name') or 'account')
+    budget_key = _account_key(acct)
+    global _HIMALAYA_BUDGET_KEY
+    _HIMALAYA_BUDGET_KEY = budget_key
     session = _imap_session_for(acct) if acct.get('direct_imap', True) else None
     if session is not None:
         try:
@@ -1669,7 +1689,7 @@ def check_account(acct, pushed_count=None):
             session = None
             if HAS_IMAP_SESSION:
                 try:
-                    email_imap_session.reserve_login(budget_key)
+                    email_imap_session.reserve_login(budget_key, budget_per_hour=int(_WATCHDOG_SETTINGS.get('login_budget_per_hour', 60)))
                 except Exception as exc:
                     try:
                         import logging
@@ -1678,14 +1698,14 @@ def check_account(acct, pushed_count=None):
                         )
                     except Exception:
                         pass
-                    return alerts
+                    raise email_imap_session.ImapThrottled(str(exc))
             envelopes = list_himalaya_backfill(
                 hconfig, seen, f"{acct_name}:", account=acct_alias,
             )
     else:
         if HAS_IMAP_SESSION:
             try:
-                email_imap_session.reserve_login(budget_key)
+                email_imap_session.reserve_login(budget_key, budget_per_hour=int(_WATCHDOG_SETTINGS.get('login_budget_per_hour', 60)))
             except Exception as exc:
                 try:
                     import logging
@@ -1694,7 +1714,7 @@ def check_account(acct, pushed_count=None):
                     )
                 except Exception:
                     pass
-                return alerts
+                raise email_imap_session.ImapThrottled(str(exc))
         envelopes = list_himalaya_backfill(
             hconfig, seen, f"{acct_name}:", account=acct_alias,
         )
@@ -1905,9 +1925,9 @@ def check_account(acct, pushed_count=None):
         try:
             import logging
             logging.getLogger(__name__).warning(
-                'Hermes Email Watchdog: %s direct imap stats connects=%s logins=%s lists=%s reads=%s',
+                'Hermes Email Watchdog: %s direct imap stats connects=%s logins=%s lists=%s reads=%s dropped=%s',
                 acct_name, session.stats.get('connects'), session.stats.get('logins'),
-                session.stats.get('lists'), session.stats.get('reads'),
+                session.stats.get('lists'), session.stats.get('reads'), session.stats.get('missing_uid'),
             )
         except Exception:
             pass
