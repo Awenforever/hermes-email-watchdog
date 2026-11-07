@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.1 - 2026-11-07
+
+- One budget key per account. The session used the lowercase id while the
+  fallback path used the display label, so the same mailbox was counted twice
+  and neither counter was accurate.
+- Each scan now logs the path that served it (session or himalaya) and the
+  account's current login count, because which path ran was previously only
+  inferable from indirect evidence.
 ## 0.21.0 - 2026-11-07
 
 - The login budget is now stored in login_budget.json next to the database.
