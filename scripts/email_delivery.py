@@ -2179,6 +2179,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
             _category = str((_classification or {}).get("category") or "") if isinstance(_classification, dict) else ""
             _content_mode = str((_notification or {}).get("content_mode") or "") if isinstance(_notification, dict) else ""
             _is_code_card = _category == "verification_code" or _content_mode == "code_card"
+            editorial_skipped = False
             if _is_code_card:
                 decision = dict(decision)
                 decision["deadline"] = {"has_deadline": False, "datetime": "", "date_text": "", "confidence": 0.0}
@@ -2197,6 +2198,7 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                 if not editorial_enabled:
                     raise RuntimeError("model editorial review disabled by configuration")
                 if _is_code_card:
+                    editorial_skipped = True
                     raise RuntimeError("editorial skipped: verification code card")
                 draft_meta = email_assistant_composer.render_notification(
                     email or {}, decision, {"attachments": [], "schedule": []}, account or {}
@@ -2274,6 +2276,14 @@ if _ew_prod_previous_deliver_email is not None and not getattr(_ew_prod_previous
                         {"attachments": attachments, "schedule": schedule},
                         decision,
                         email or {},
+                        account or {},
+                    )
+                elif editorial_skipped:
+                    # A skipped review is a policy decision, not an outage: the
+                    # evidence-only fallback would drop the credential itself.
+                    renderer_meta = email_assistant_composer.render_notification(
+                        email or {}, decision,
+                        {"attachments": attachments, "schedule": schedule},
                         account or {},
                     )
                 elif email_evidence_contract.has_publishable_evidence(
