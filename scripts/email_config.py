@@ -267,6 +267,13 @@ def _normalize_account(account):
             _aliases, default_alias = _himalaya_aliases(cfg)
             if default_alias:
                 acct["himalaya_account"] = default_alias
+    # One long-lived read-only IMAP connection per account, with a NOOP
+    # count check, replaces a fresh login every poll. Mail providers
+    # throttle repeated logins (Gmail: too many simultaneous connections).
+    # Opt out per account with idle_watch: false.
+    if str(acct.get("backend") or "imap").strip().lower() == "imap":
+        acct.setdefault("idle_watch", True)
+        acct.setdefault("idle_interval", 5)
     acct.setdefault("display_name", acct.get("name") or acct.get("label") or acct.get("email", ""))
     return acct
 

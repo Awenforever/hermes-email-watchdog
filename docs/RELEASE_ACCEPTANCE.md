@@ -1,5 +1,21 @@
 # Release acceptance
 
+## 0.17.2 persistent-watch acceptance (2026-11-07)
+
+0.17.2 turns the persistent IMAP watcher on by default for every IMAP
+account and teaches install.sh to refresh an existing plugin-tree copy.
+
+| Target | Evidence |
+| --- | --- |
+| T1 container | python:3.11-slim, --network none, --tmpfs /opt/data: INSTALL_OK version=0.17.2, CHECKSUMS_OK, VERIFY_OK |
+| T2 Ubuntu 22.04 / py3.10 | INSTALL_OK version=0.17.2, VERIFY_OK, 658 tests OK |
+| T3 WSL2 Ubuntu-24.04 / py3.12 | CHECKSUMS_OK, INSTALL_OK version=0.17.2, VERIFY_OK, 658 tests OK |
+| T4 Windows native / py3.12 | 658 tests OK (5 POSIX-only skips) |
+
+Runtime evidence on the NAS (2026-11-07): three accounts each log
+idle watcher started, a test message from agently reached WeChat in 27s
+(Gmail received 17:20:57, watcher wake 17:21:04, push 17:21:21), and every
+cycle logs its duration.
 ## 0.16.0 editorial policy acceptance (2026-11-06)
 
 `0.16.0` retires the second model configuration, skips the editorial pass for

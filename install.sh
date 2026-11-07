@@ -101,6 +101,17 @@ fi
 find "${SKILL_DIR}" -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod 0755 {} +
 find "${SKILL_DIR}" -type d -exec chmod 0755 {} +
 
+# The hook resolves its scripts from ${HERMES_HOME}/plugins/... before
+# skills/... . When a plugin-tree copy exists, sync it too: an install that
+# only updated skills/ would leave the running hook on the old code.
+PLUGIN_DIR="${HERMES_HOME_DIR}/plugins/hermes-email-watchdog"
+plugin_real="$(cd "${PLUGIN_DIR}" 2>/dev/null && pwd -P || true)"
+if [[ -d "${PLUGIN_DIR}" && "${plugin_real}" != "${root_real}" ]]; then
+  ( cd "${ROOT}" && tar --exclude=./.git --exclude=*/__pycache__ --exclude=*.pyc -cf - . ) | tar -C "${PLUGIN_DIR}" -xf -
+  python3 "${PLUGIN_DIR}/scripts/verify_checksums.py" "${PLUGIN_DIR}" "${PLUGIN_DIR}/checksums/SHA256SUMS"
+  printf 'plugin_tree_synced=%s\n' "${PLUGIN_DIR}"
+fi
+
 install -d -m 0755 "${ACTIVE_DIR}"
 install -m 0644 "${SKILL_DIR}/hooks/hermes-email-watchdog/handler.py" "${ACTIVE_DIR}/.handler.py.tmp.$$"
 install -m 0644 "${SKILL_DIR}/hooks/hermes-email-watchdog/HOOK.yaml" "${ACTIVE_DIR}/.HOOK.yaml.tmp.$$"
