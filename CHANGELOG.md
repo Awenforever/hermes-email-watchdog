@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.6 - 2026-11-07
+
+- Fix a crash from 0.17.4: the throttle path called a module logger that
+  email_watch does not define, so the handler raised NameError and killed the
+  whole scan. One throttled account stopped every account from being checked.
+- Add min_interval_seconds per account, because each mailbox command costs a
+  fresh login and login rate is what providers throttle.
 ## 0.17.5 - 2026-11-07
 
 - Fix the backfill prefix: it was passed as a literal {acct_name}: instead of an
