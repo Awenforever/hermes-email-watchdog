@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.17.9 - 2026-11-07
+
+- Keep the throttle pause next to the database instead of a guessed home directory.
+
 ## 0.17.8 - 2026-11-07
 
 - Persist the throttle pause. The hook reloads the module each cycle, so an

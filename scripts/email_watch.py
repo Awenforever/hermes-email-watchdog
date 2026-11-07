@@ -1887,8 +1887,11 @@ def _throttle_seconds(exc):
 
 
 def _throttle_state_path():
-    root = os.environ.get('HERMES_EMAIL_WATCHDOG_STATE_ROOT') or ''
-    base = Path(root) if root else Path(os.path.expanduser('~/.hermes'))
+    try:
+        db = email_config.get_path('db')
+    except Exception:
+        db = ''
+    base = Path(db).parent if db else Path(os.path.expanduser('~/.hermes'))
     return base / 'throttle_state.json'
 
 
