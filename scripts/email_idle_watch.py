@@ -35,6 +35,14 @@ def _password_from_cmd(cmd: str) -> str:
         return ""
 
 
+def _is_throttle(exc):
+    text = str(exc or '').lower()
+    for hint in ("too many simultaneous", "rate limit", "throttl", "too many connections"):
+        if hint in text:
+            return True
+    return False
+
+
 class PersistentImapWatcher:
     """Watch one mailbox over a single long-lived IMAP connection."""
 
@@ -122,6 +130,19 @@ class PersistentImapWatcher:
                                 logger.exception("imap watcher wake callback failed")
             except Exception as exc:
                 self.stats["errors"] += 1
+                self.stats["last_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
+                if _is_throttle(exc):
+                    # A throttled provider must not be re-entered by a reconnect loop:
+                    # every attempt is another login and keeps the throttle warm.
+                    try:
+                        import email_imap_session
+                        email_imap_session.mark_throttled(self.username)
+                        wait = email_imap_session.DEFAULT_THROTTLE_SECONDS
+                    except Exception:
+                        wait = DEFAULT_MAX_BACKOFF
+                    if self._stop.wait(wait):
+                        break
+                    continue
                 self.stats["last_error"] = "%s: %s" % (type(exc).__name__, str(exc)[:200])
                 logger.warning("imap watcher %s:%s reconnect after error: %s", self.host, self.port, self.stats["last_error"])
                 if self._stop.wait(backoff):
