@@ -1734,7 +1734,13 @@ def check_account(acct, pushed_count=None):
     if not envelopes:
         return alerts
 
-    prefix = f"{acct_name}:"
+    # Keyed by the stable account id: renaming a label used to orphan every key,
+    # which then replayed the whole window as new mail.
+    storage_prefix = f"{budget_key}:"
+    legacy_prefix = f"{acct_name}:"
+    if storage_prefix != legacy_prefix:
+        _migrate_seen_prefix(seen, legacy_prefix, storage_prefix, acct_name)
+    prefix = storage_prefix
     updated = False
     unreadable = []
 
@@ -2114,6 +2120,25 @@ def _save_scan_state(state):
         _scan_state_path().write_text(json.dumps(state), encoding='utf-8')
     except Exception:
         pass
+
+
+def _migrate_seen_prefix(seen, old_prefix, new_prefix, acct_name):
+    """Rewriting keys when the identity changes keeps history across a rename."""
+    moved = [k for k in list(seen) if k.startswith(old_prefix)]
+    if not moved:
+        return 0
+    for key in moved:
+        seen[new_prefix + key[len(old_prefix):]] = seen.pop(key)
+    try:
+        save_seen(seen)
+        import logging
+        logging.getLogger(__name__).warning(
+            """Hermes Email Watchdog: %s identity changed; migrated %d seen keys to %s""",
+            acct_name, len(moved), new_prefix,
+        )
+    except Exception:
+        pass
+    return len(moved)
 
 
 def _uidvalidity_path():

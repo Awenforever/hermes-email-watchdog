@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.22.3 - 2026-11-08
+
+- seen keys now use the stable account id instead of the display label. Renaming
+  a mailbox label used to orphan every key, which replayed the whole window as
+  new mail; existing keys are migrated once and the migration is logged.
+- The knobs declared in plugin.yaml are honoured: managed_reminder_scheduler
+  maps onto delivery.managed_cron, and weekly_report_notifications now gates
+  weekly-report treatment instead of being ignored.
+- Four-platform acceptance re-run on real machines after the test VMs were
+  recovered: T2 Ubuntu 22.04.1 / py3.10.12, T4 Windows 11 / py3.12.7, 685 cases
+  each, plus T1 container and T3 WSL2.
 ## 0.22.2 - 2026-11-08
 
 Closes the findings of three independent read-only audits (data integrity,

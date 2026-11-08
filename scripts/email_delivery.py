@@ -300,6 +300,15 @@ def format_notification(email: dict, analysis: dict, attachments: list, schedule
     summary_raw = strip_headers_footers(analysis.get("formatted_summary") or email.get("summary") or "")
 
     def is_weekly_report():
+        # plugin.yaml exposes weekly_report_notifications; when a user turns it
+        # off, a weekly report is treated as ordinary mail instead of a digest.
+        try:
+            _settings_blob = settings() or {}
+            _switch = (_settings_blob.get("delivery", {}) or {}).get("weekly_report_notifications")
+        except Exception:
+            _switch = None
+        if _switch is False:
+            return False
         blob = f"{subject}\n{sender}\n{raw_sender}".lower()
         return ("周报" in blob or "weekly briefing" in blob or "weekly-briefing" in blob or "agent mail" in body.lower())
 
