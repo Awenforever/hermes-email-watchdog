@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.5 - 2026-11-08
+
+- The notification spool is cleared at the end of a completed cycle as well as at
+  the start of the next one, and a clear that fails no longer replays history:
+  the drain resumes after the existing bytes and warns instead.
+- Correction to the 0.22.4 note that called this an offset-persistence bug: the
+  handler already cleared the spool each cycle, so a plain restart replayed
+  nothing. The real hole was the swallowed clear failure.
 ## 0.22.4 - 2026-11-08
 
 - Fix a false backlog alarm introduced in 0.22.2: the unseen counter compared

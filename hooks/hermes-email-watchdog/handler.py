@@ -868,6 +868,28 @@ async def _loop():
 
 
 
+def _prepare_spool(path):
+    """Clear the spool and return the offset to start reading at."""
+    """A failed clear used to be swallowed, after which the drain started at"""
+    """zero and delivered every notification the spool had ever accumulated."""
+    try:
+        path.write_text("", encoding="utf-8")
+    except Exception as exc:
+        logger.warning(
+            "Hermes Email Watchdog: could not clear the notification spool (%r); "
+            "starting after existing history instead of replaying it", exc,
+        )
+    try:
+        leftover = path.stat().st_size
+    except Exception:
+        leftover = 0
+    if leftover:
+        logger.warning(
+            "Hermes Email Watchdog: spool still holds %s bytes; skipping them", leftover,
+        )
+    return leftover
+
+
 async def _drain_spool(path, state):
     """Send notifications that the scan has already produced.
 
@@ -936,12 +958,8 @@ async def _run_once():
 
         seen_snapshot = _read_seen_snapshot()
         spool_path = STATE_ROOT / 'notify-spool.jsonl'
-        try:
-            spool_path.write_text('', encoding='utf-8')
-        except Exception:
-            pass
         os.environ['EMAIL_WATCHDOG_NOTIFY_SPOOL'] = str(spool_path)
-        drain_state = {'offset': 0, 'sent': 0, 'failed': 0}
+        drain_state = {'offset': _prepare_spool(spool_path), 'sent': 0, 'failed': 0}
 
         async def _drain_until_done():
             while True:
@@ -953,6 +971,11 @@ async def _run_once():
         scan_task = asyncio.create_task(asyncio.to_thread(_call_watchdog))
         await asyncio.gather(scan_task, _drain_until_done())
         await _drain_spool(spool_path, drain_state)
+        # The cycle is complete; leaving records behind would replay them after a restart.
+        try:
+            spool_path.write_text('', encoding='utf-8')
+        except Exception:
+            logger.warning('Hermes Email Watchdog: could not clear the notification spool after the scan')
         output = scan_task.result()
         status = {
             "state": "running",
