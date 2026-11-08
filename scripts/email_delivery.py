@@ -1436,6 +1436,12 @@ def _download_himalaya(config_path, msg_id, save_dir, account_key=None):
     exported = _download_himalaya_from_raw_message(config_path, msg_id, save_dir)
     if exported is not None:
         return exported
+    try:
+        import email_watch as _ew
+        _ew._CURRENT_CONFIG = config_path
+        _ew._charge_himalaya_login()
+    except Exception:
+        pass
     for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
         try:
             result = subprocess.run(

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.22.0 - 2026-11-08
+
+Independent audit round. Every item below was a way for an account to stop
+working while the watchdog still reported success.
+
+- Fix the IMAP ID payload: the opening parenthesis was inside the string, so
+  the identity command was malformed on servers that require it.
+- Reconnects now pass through the login budget and the throttle cooldown. A
+  session that was cooling down used to reconnect (and log in) anyway.
+- Logins from the CLI fallback are charged per process instead of once per
+  scan, and attachment downloads are charged too; the old pre-charge that
+  double-counted a fallback scan is gone.
+- A throttled account no longer falls back to the CLI inside the cooldown;
+  it raises, so the scan is reported as failing instead of quietly working
+  around the limit.
+- A message whose body cannot be read is no longer marked seen. It is
+  retried on the next scan and logged, instead of being dropped forever.
+- Seen is recorded only after delivery succeeds, so a delivery error no
+  longer permanently loses a message.
+- Accounts that were skipped this scan (cooldown or minimum interval) are
+  named in one log line, because silence was previously indistinguishable
+  from an empty mailbox.
+- The idle watcher never falls back to a private login: without a session it
+  stays off and scanning covers the account.
 ## 0.21.3 - 2026-11-07
 
 - Fix a silent per-account failure introduced with the direct session: the
