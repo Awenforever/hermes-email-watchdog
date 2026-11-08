@@ -21,7 +21,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-HERMES_HOME = Path(os.getenv("HERMES_HOME", str(Path.home() / ".hermes"))).expanduser()
+HERMES_HOME = Path(os.getenv("HERMES_HOME") or os.getenv("HERMES_EMAIL_WATCHDOG_DATA_ROOT") or str(Path.home() / ".hermes")).expanduser()
 
 
 def _resolve_skill_dir() -> Path:

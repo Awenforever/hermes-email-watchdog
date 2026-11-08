@@ -14,6 +14,16 @@ OPERATION="${HERMES_EMAIL_WATCHDOG_OPERATION:-install}"
 
 fail() { printf 'INSTALL_FAILED=%s\n' "$1" >&2; exit 1; }
 
+# Not every host exposes the interpreter as python3 (Windows, some venvs).
+PYBIN=""
+for candidate in python3 python py; do
+  if command -v "${candidate}" >/dev/null 2>&1; then
+    PYBIN="$(command -v "${candidate}")"
+    break
+  fi
+done
+[[ -n "${PYBIN}" ]] || fail "no-python-interpreter"
+
 # Python < 3.11 has no tomllib. The plugin reads Himalaya TOML configs, so a
 # missing parser makes it useless in a way that is easy to miss at install
 # time. Declare it in requirements.txt, try once, and report the outcome.
@@ -89,7 +99,13 @@ PY
 fi
 
 if [[ -e "${SKILL_DIR}" && "${root_real}" != "${skill_real}" && "${old_manifest_owner}" != "hermes-email-watchdog" ]]; then
-  fail "target exists without an owned install manifest"
+  # A previous run can die after the tree is moved into place but before the
+  # manifest is written; refusing forever would need a manual rm to recover.
+  if [[ -f "${SKILL_DIR}/plugin.yaml" ]] && grep -q "name: hermes-email-watchdog" "${SKILL_DIR}/plugin.yaml" 2>/dev/null; then
+    printf 'INSTALL_WARNING=adopted interrupted install at %s\n' "${SKILL_DIR}" >&2
+  else
+    fail "target exists without an owned install manifest"
+  fi
 fi
 
 backup_dir=""

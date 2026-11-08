@@ -35,6 +35,17 @@ owned=(
   "${HOME_ROOT}/.outbox.json.lock"
   "${HOME_ROOT}/onboarding-backups"
   "${HOME_ROOT}/himalaya"
+  "${HOME_ROOT}/login_budget.json"
+  "${HOME_ROOT}/throttle_state.json"
+  "${HOME_ROOT}/scan_state.json"
+  "${HOME_ROOT}/uidvalidity.json"
+  "${HOME_ROOT}/mail-actions.json"
+  "${HOME_ROOT}/decision_engine_config.json"
+  "${HOME_ROOT}/notify-spool.jsonl"
+  "${HOME_ROOT}/attachments"
+  "${HOME_ROOT}/calendar"
+  "${HOME_ROOT}/hook-backups"
+  "${HOME_ROOT}/runtime-backups"
   "${STATE_DIR}"
 )
 for path in "${owned[@]}"; do

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.22.2 - 2026-11-08
+
+Closes the findings of three independent read-only audits (data integrity,
+release/distribution, test-suite effectiveness) on top of the earlier silent
+failure and login-budget rounds. Each item below was a way for the product to
+lose mail, lose a notification, or fail to install while reporting success.
+
+- A single mail body could not be read without being marked seen: it is now
+  retried next scan and logged (0.22.0).
+- Seen is written atomically (tmp + fsync + rename). A truncated seen.json used
+  to raise JSONDecodeError on every account, and the fallback now logs and starts
+  empty instead of killing the scan.
+- run-once exported no notification spool, so it marked mail seen while its card
+  only reached stdout and the scheduler then skipped that mail forever.
+- The per-scan batch cap is now separate for the shared-session path (24) and the
+  CLI fallback (6): reading over one connection was never the connection churn the
+  old cap guarded against. A backlog larger than the cap is logged with counts.
+- install.sh resolves python3/python/py instead of assuming python3, reports
+  INSTALL_FAILED=no-python-interpreter, and can retry after an interrupted run
+  instead of refusing forever.
+- HERMES_EMAIL_WATCHDOG_DATA_ROOT is honoured by the Python entry points, so
+  setup.sh status looks where the installer actually wrote.
+- purge.sh removes the state files added since 0.18 (login budget, throttle,
+  scan, uidvalidity, mail actions, attachments, calendar, backups).
+- requires_hermes widened to <0.23 after validating against Hermes 0.22.7.
+- Release acceptance records exist for 0.22.0, 0.22.1 and 0.22.2.
 ## 0.22.1 - 2026-11-08
 
 - Declare the Python < 3.11 TOML dependency (tomli) in requirements.txt; install.sh

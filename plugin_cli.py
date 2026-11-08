@@ -320,6 +320,10 @@ def _env() -> dict[str, str]:
     env["HERMES_EMAIL_WATCHDOG_SKILL_DIR"] = str(_root())
     env["HERMES_EMAIL_WATCHDOG_STATE_ROOT"] = str(_state())
     env["EMAIL_WATCHDOG_CONFIG"] = str(_state() / "config.json")
+    # run-once still marks messages as seen, so its notifications must be able to
+    # leave the process; otherwise the card is printed and the mail is then skipped
+    # forever by the scheduler.
+    env["EMAIL_WATCHDOG_NOTIFY_SPOOL"] = str(_state() / "notify-spool.jsonl")
     return env
 
 
