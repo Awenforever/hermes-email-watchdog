@@ -90,5 +90,21 @@ class AuditRegressionTests(unittest.TestCase):
         self.assertIsNone(built, "a watcher must not open its own login behind the budget")
 
 
+    def test_cooldown_blocks_fallback_login(self):
+        """A throttled account must not be re-entered by the CLI fallback."""
+        sess.mark_throttled("k3", 60)
+        with self.assertRaises(sess.ImapThrottled):
+            sess.reserve_login("k3", budget_per_hour=60)
+
+    def test_cooldown_blocks_reconnect(self):
+        """The session itself must refuse to reconnect while cooling down."""
+        conn = _Conn()
+        session = sess.ImapSession("h", 993, "u", "p", key="k4", connector=lambda *a, **k: conn)
+        session.budget_per_hour = 60
+        sess.mark_throttled("k4", 60)
+        with self.assertRaises(sess.ImapThrottled):
+            session._open()
+
+
 if __name__ == "__main__":
     unittest.main()

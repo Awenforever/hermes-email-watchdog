@@ -710,6 +710,8 @@ def _invoke_himalaya_once(cmd, config_path, args, timeout):
 
 
 def _run_himalaya_json(config_path, args, timeout=30, account=None):
+    global _CURRENT_CONFIG
+    _CURRENT_CONFIG = config_path
     """Run Himalaya and return parsed JSON. Command/auth failures are explicit.
 
     Variant fallback is reserved for config/CLI/parse errors. Transport failures
@@ -755,6 +757,8 @@ def _run_himalaya_json(config_path, args, timeout=30, account=None):
 
 
 _HIMALAYA_BUDGET_KEY = None
+_CONFIG_BUDGET_KEYS = {}
+_CURRENT_CONFIG = None
 
 
 def _charge_himalaya_login():
@@ -818,6 +822,7 @@ def _imap_session_for(acct):
     except Exception:
         pass
     _budget = int(_WATCHDOG_SETTINGS.get('login_budget_per_hour', 60))
+    _CONFIG_BUDGET_KEYS[str(cfg)] = key
     session = email_imap_session.get_session(key, host, port, login, password, budget_per_hour=_budget)
     return session
 
@@ -979,6 +984,8 @@ def _parse_exported_message(path):
 
 
 def _export_himalaya_message(config_path, msg_id, account=None):
+    global _CURRENT_CONFIG
+    _CURRENT_CONFIG = config_path
     attempts = []
     with tempfile.TemporaryDirectory(prefix="hermes-email-read-") as tmp:
         destination = Path(tmp) / "message.eml"
@@ -1679,6 +1686,8 @@ def check_account(acct, pushed_count=None):
             size = int(_WATCHDOG_SETTINGS.get('backfill_page_size', 20)) * int(_WATCHDOG_SETTINGS.get('backfill_max_pages', 4))
             envelopes = session.list_recent(size)
         except Exception as exc:
+            if HAS_IMAP_SESSION and isinstance(exc, getattr(email_imap_session, 'ImapThrottled', ())):
+                raise
             try:
                 import logging
                 logging.getLogger(__name__).warning(
@@ -1687,34 +1696,10 @@ def check_account(acct, pushed_count=None):
             except Exception:
                 pass
             session = None
-            if HAS_IMAP_SESSION:
-                try:
-                    email_imap_session.reserve_login(budget_key, budget_per_hour=int(_WATCHDOG_SETTINGS.get('login_budget_per_hour', 60)))
-                except Exception as exc:
-                    try:
-                        import logging
-                        logging.getLogger(__name__).warning(
-                            'Hermes Email Watchdog: %s login budget spent (%s); skipping this scan', acct_name, exc
-                        )
-                    except Exception:
-                        pass
-                    raise email_imap_session.ImapThrottled(str(exc))
             envelopes = list_himalaya_backfill(
                 hconfig, seen, f"{acct_name}:", account=acct_alias,
             )
     else:
-        if HAS_IMAP_SESSION:
-            try:
-                email_imap_session.reserve_login(budget_key, budget_per_hour=int(_WATCHDOG_SETTINGS.get('login_budget_per_hour', 60)))
-            except Exception as exc:
-                try:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        'Hermes Email Watchdog: %s login budget spent (%s); skipping this scan', acct_name, exc
-                    )
-                except Exception:
-                    pass
-                raise email_imap_session.ImapThrottled(str(exc))
         envelopes = list_himalaya_backfill(
             hconfig, seen, f"{acct_name}:", account=acct_alias,
         )
@@ -1724,6 +1709,7 @@ def check_account(acct, pushed_count=None):
 
     prefix = f"{acct_name}:"
     updated = False
+    unreadable = []
 
     batch_limit = int(_WATCHDOG_SETTINGS.get("scan_batch_limit", 6))
     processed = 0
@@ -1752,8 +1738,18 @@ def check_account(acct, pushed_count=None):
             msg = read_himalaya(acct.get("himalaya_config") or acct.get("config"), msg_id, account=acct_alias)
 
         if msg is None:
-            seen[key] = True
-            updated = True
+            # An unreadable body is usually transient. Marking it seen here
+            # would drop the message forever while the scan still reported
+            # success, so leave it for the next scan and say so.
+            unreadable.append(acct_name + ':' + msg_id)
+            try:
+                import logging
+                logging.getLogger(__name__).warning(
+                    '''Hermes Email Watchdog: %s could not read message %s; will retry next scan''',
+                    acct_name, msg_id,
+                )
+            except Exception:
+                pass
             continue
 
         body = _extract_message_body(msg)
@@ -1849,8 +1845,6 @@ def check_account(acct, pushed_count=None):
             risk_result = {}
 
         rule_result = classify_rule(email_data)
-        seen[key] = True
-        updated = True
 
         if HAS_MODULES and from_addr:
             email_contacts.learn_contact(from_addr, from_name)
@@ -1871,6 +1865,8 @@ def check_account(acct, pushed_count=None):
         )
 
         if rule_result.get("action") == "skip" and not production_route_active:
+            seen[key] = True
+            updated = True
             if HAS_V3:
                 email_store.update_message_fields(storage_id, {"push_status": "skipped"})
                 try:
@@ -1892,6 +1888,7 @@ def check_account(acct, pushed_count=None):
             "rule_result": rule_result,
             "acct": acct,
             "subject": subject,
+            "seen_key": key,
         })
 
     if jobs:
@@ -1903,6 +1900,10 @@ def check_account(acct, pushed_count=None):
                 import logging
                 logging.getLogger(__name__).warning("email processing failed: %r", exc)
                 continue
+            # Only now is the message genuinely handled; marking it seen
+            # earlier turned a delivery failure into permanent mail loss.
+            seen[job.get("seen_key") or job["email_data"].get("id")] = True
+            updated = True
             if not alert:
                 continue
             if urgent:
@@ -2164,10 +2165,12 @@ def main():
         _LAST_ACCOUNT_SCAN.update(_load_scan_state())
     except Exception:
         pass
+    skipped_accounts = []
     for acct in ACCOUNTS:
         _pause_name = str(acct.get('label') or acct.get('name') or acct.get('id') or 'account')
         _min_interval = float(acct.get('min_interval_seconds') or 0)
         if _min_interval and (time.time() - _LAST_ACCOUNT_SCAN.get(_pause_name, 0)) < _min_interval:
+            skipped_accounts.append((_pause_name, "interval"))
             continue
         _LAST_ACCOUNT_SCAN[_pause_name] = time.time()
         try:
@@ -2175,6 +2178,7 @@ def main():
         except Exception:
             pass
         if _THROTTLE_UNTIL.get(_pause_name, 0) > time.time():
+            skipped_accounts.append((_pause_name, "throttled"))
             continue
         name = acct.get("label") or acct.get("name") or acct.get("id") or "account"
         try:
@@ -2198,6 +2202,16 @@ def main():
             if _should_emit_check_failure(name, e):
                 all_alerts.append(f"### ⚠️ {name} 检查失败\n\n{e}")
             accounts_seen.add(name)
+
+    if skipped_accounts:
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Hermes Email Watchdog: accounts not checked this scan: %s",
+                ", ".join("%s(%s)" % (n, r) for n, r in skipped_accounts),
+            )
+        except Exception:
+            pass
 
     if not all_alerts:
         return ""

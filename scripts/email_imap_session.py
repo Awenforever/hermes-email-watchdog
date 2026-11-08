@@ -63,7 +63,9 @@ class ImapSession:
     def _open(self):
         ctx = ssl.create_default_context()
         conn = self._connector(self.host, self.port, ssl_context=ctx, timeout=self.timeout)
-        if self.key and self.budget_per_hour:
+        if self.key and throttled_until(self.key) > time.time():
+            raise ImapThrottled("throttled cooldown active for %s" % self.key)
+        if self.budget_per_hour:
             _recent = [x for x in _LOGIN_TIMES.get(self.key, []) if time.time() - x < 3600]
             if len(_recent) >= int(self.budget_per_hour):
                 raise ImapThrottled('login budget exhausted for %s (%d/hour)' % (self.key, self.budget_per_hour))
@@ -490,8 +492,10 @@ def reserve_login(key, budget_per_hour=DEFAULT_LOGIN_BUDGET):
     session, so it must at least share the budget. Raises ImapThrottled when the
     hourly allowance is spent.
     """
-    key = str(key)
+    key = str(key) or "unknown"
     now = time.time()
+    if _THROTTLED_UNTIL.get(key, 0) > now:
+        raise ImapThrottled("throttled cooldown active for %s" % key)
     recent = [t for t in _LOGIN_TIMES.get(key, []) if now - t < 3600]
     if budget_per_hour and len(recent) >= int(budget_per_hour):
         _LOGIN_TIMES[key] = recent
