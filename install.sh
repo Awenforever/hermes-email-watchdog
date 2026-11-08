@@ -14,6 +14,29 @@ OPERATION="${HERMES_EMAIL_WATCHDOG_OPERATION:-install}"
 
 fail() { printf 'INSTALL_FAILED=%s\n' "$1" >&2; exit 1; }
 
+# Python < 3.11 has no tomllib. The plugin reads Himalaya TOML configs, so a
+# missing parser makes it useless in a way that is easy to miss at install
+# time. Declare it in requirements.txt, try once, and report the outcome.
+ensure_toml_support() {
+  if python3 -c 'import tomllib' >/dev/null 2>&1; then
+    printf 'TOML_SUPPORT=tomllib\n'
+    return 0
+  fi
+  if python3 -c 'import tomli' >/dev/null 2>&1; then
+    printf 'TOML_SUPPORT=tomli\n'
+    return 0
+  fi
+  python3 -m pip install --user --quiet 'tomli>=1.1' >/dev/null 2>&1 || true
+  if python3 -c 'import tomli' >/dev/null 2>&1; then
+    printf 'TOML_SUPPORT=tomli_installed\n'
+    return 0
+  fi
+  printf 'TOML_SUPPORT=missing\n' >&2
+  printf 'INSTALL_WARNING=no toml parser; run: python3 -m pip install tomli\n' >&2
+  return 0
+}
+ensure_toml_support
+
 python3 "${ROOT}/scripts/repository_contract_check.py" "${ROOT}" >/dev/null
 python3 "${ROOT}/scripts/verify_checksums.py" "${ROOT}" "${CHECKSUMS}"
 

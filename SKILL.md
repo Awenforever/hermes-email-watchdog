@@ -1,7 +1,7 @@
 ---
 name: hermes-email-watchdog
 description: 安装、个性化配置并运行多账号邮件助理；只读监控邮件，并可在用户逐次确认后创建提醒、回复或转发邮件。
-version: 0.22.0
+version: 0.22.1
 tags: [email, watchdog, notification, read-only, hermes, onboarding]
 ---
 
@@ -55,6 +55,14 @@ Email Watchdog 是独立邮箱助理。监控、分析、附件获取始终只�
 - 安装不修改 Hermes 核心消息适配器。
 - 默认卸载保留配置与引导状态；purge 必须显式确认并只删除插件自有数据。
 - 渠道传输由 Hermes 适配器负责；微信引用动作需要 `hermes-wechat-enhance >=2.3.0` 提供可持久还原的标准化入站引用事件和通用 `@` 命令桥接。两个插件仍独立安装，WeChat Enhance 不导入或假定 Email Watchdog 存在。
+
+## 连接与限流
+
+- 每个 IMAP 账户只保留一条长连接，同时承担新信检测、列信与取正文；正文用 BODY.PEEK，不会把邮件标记为已读。
+- 每账户每小时登录次数有上限并写入状态目录的 login_budget.json，重启不重置；额度用尽时跳过本轮而不是继续敲服务端。
+- 每轮对每个账户输出一行 path=session|himalaya budget=N；某账户长期没有这行日志，就等于它在静默失败。
+- 细节与调参见 docs/CONNECTIONS-AND-RATE-LIMITS.md。
+
 
 ## 数据归属
 

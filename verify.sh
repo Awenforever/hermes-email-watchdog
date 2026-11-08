@@ -23,4 +23,5 @@ def sha(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 assert sha(Path(skill)/"hooks/hermes-email-watchdog/handler.py")==sha(Path(active)/"handler.py")
 assert sha(Path(skill)/"hooks/hermes-email-watchdog/HOOK.yaml")==sha(Path(active)/"HOOK.yaml")
 PY
+python3 -c 'import tomllib' >/dev/null 2>&1 || python3 -c 'import tomli' >/dev/null 2>&1 || printf 'VERIFY_WARNING=toml parser missing (pip install tomli)' >&2
 printf 'VERIFY_OK\nmailbox_read_only=true\nweixin_modified=false\n'

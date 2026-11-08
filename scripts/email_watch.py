@@ -857,7 +857,15 @@ def list_himalaya_backfill(config_path, seen_keys, prefix, account=None, page_si
                 for row in page_rows
             )
             if known:
-                break
+                return collected
+    try:
+        import logging
+        logging.getLogger(__name__).warning(
+            """Hermes Email Watchdog: backfill hit its page cap (%d pages x %d) and the oldest page still held unknown mail; newer scans will pick it up""",
+            limit, size,
+        )
+    except Exception:
+        pass
     return collected
 
 
@@ -1685,6 +1693,7 @@ def check_account(acct, pushed_count=None):
         try:
             size = int(_WATCHDOG_SETTINGS.get('backfill_page_size', 20)) * int(_WATCHDOG_SETTINGS.get('backfill_max_pages', 4))
             envelopes = session.list_recent(size)
+            _check_uidvalidity(acct_name, session)
         except Exception as exc:
             if HAS_IMAP_SESSION and isinstance(exc, getattr(email_imap_session, 'ImapThrottled', ())):
                 raise
@@ -2074,6 +2083,49 @@ def _save_scan_state(state):
         _scan_state_path().write_text(json.dumps(state), encoding='utf-8')
     except Exception:
         pass
+
+
+def _uidvalidity_path():
+    return _scan_state_path().parent / "uidvalidity.json"
+
+
+def _check_uidvalidity(acct_name, session):
+    """A mailbox rebuild invalidates every UID. Detect it, clear seen for"""
+    """that account and say so, otherwise old UIDs silently suppress new mail."""
+    current = int(getattr(session, "uidvalidity", 0) or 0)
+    if not current:
+        return
+    path = _uidvalidity_path()
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        state = {}
+    previous = int(state.get(acct_name, 0) or 0)
+    if previous and previous != current:
+        try:
+            seen = load_seen()
+            prefix = acct_name + ":"
+            stale = [k for k in seen if k.startswith(prefix)]
+            for key in stale:
+                seen.pop(key, None)
+            save_seen(seen)
+        except Exception:
+            stale = []
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                """Hermes Email Watchdog: %s UIDVALIDITY changed (%s -> %s); cleared %d seen entries so new mail is not suppressed""",
+                acct_name, previous, current, len(stale),
+            )
+        except Exception:
+            pass
+    if previous != current:
+        state[acct_name] = current
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(state), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _should_emit_check_failure(name, exc):
