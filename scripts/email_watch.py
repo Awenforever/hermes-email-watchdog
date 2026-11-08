@@ -1748,7 +1748,7 @@ def check_account(acct, pushed_count=None):
     # connection churn) no longer applies there; the CLI fallback still needs it.
     _batch_key = "scan_batch_limit_session" if session is not None else "scan_batch_limit"
     batch_limit = int(_WATCHDOG_SETTINGS.get(_batch_key, 24 if session is not None else 6))
-    unseen_now = [e for e in envelopes if (f"{acct_name}:" + str(e.get("id") or e.get("message_id", ""))) not in seen]
+    unseen_now = [e for e in envelopes if (storage_prefix + str(e.get("id") or e.get("message_id", ""))) not in seen]
     if len(unseen_now) > batch_limit:
         try:
             import logging
