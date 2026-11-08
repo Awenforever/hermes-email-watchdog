@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.22.4 - 2026-11-08
+
+- Fix a false backlog alarm introduced in 0.22.2: the unseen counter compared
+  label-prefixed keys against state keyed by account id, so every scan warned
+  that an account had a full window of unseen mail when it had none.
 ## 0.22.3 - 2026-11-08
 
 - seen keys now use the stable account id instead of the display label. Renaming
