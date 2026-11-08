@@ -106,5 +106,47 @@ class AuditRegressionTests(unittest.TestCase):
             session._open()
 
 
+    def test_uidvalidity_change_clears_seen_for_that_account(self):
+        import email_watch
+        state = _TMP / 'uidvalidity.json'
+        seen_file = _TMP / 'seen.json'
+        class _Sess:
+            uidvalidity = 111
+        original_load = email_watch.load_seen
+        original_save = email_watch.save_seen
+        store = {'Gmail:1': True, 'Gmail:2': True, 'USTC:9': True}
+        email_watch.load_seen = lambda: dict(store)
+        email_watch.save_seen = lambda s: store.clear() or store.update(s)
+        try:
+            state.write_text('{"Gmail": 100}', encoding='utf-8')
+            _orig = email_watch._uidvalidity_path
+            email_watch._uidvalidity_path = lambda: state
+            email_watch._check_uidvalidity('Gmail', _Sess())
+            email_watch._uidvalidity_path = _orig
+        finally:
+            email_watch.load_seen = original_load
+            email_watch.save_seen = original_save
+        self.assertNotIn('Gmail:1', store, 'rebuilt mailbox must not keep suppressing mail')
+        self.assertIn('USTC:9', store, 'other accounts untouched')
+        self.assertIn('"Gmail": 111', state.read_text(encoding='utf-8'))
+
+    def test_attachment_download_is_charged(self):
+        """A CLI attachment fetch is a real login and must hit the budget."""
+        import email_watch, email_delivery
+        calls = []
+        original = email_watch._charge_himalaya_login
+        email_watch._charge_himalaya_login = lambda: calls.append(1)
+        original_key = email_watch._HIMALAYA_BUDGET_KEY
+        email_watch._HIMALAYA_BUDGET_KEY = 'gmail'
+        try:
+            try:
+                email_delivery._download_himalaya('/tmp/none.toml', '1', str(_TMP / 'attach-out'))
+            except Exception:
+                pass  # the CLI itself is absent here; the charge must happen anyway
+        finally:
+            email_watch._charge_himalaya_login = original
+            email_watch._HIMALAYA_BUDGET_KEY = original_key
+        self.assertTrue(calls, 'attachment fetch must be charged')
+
 if __name__ == "__main__":
     unittest.main()

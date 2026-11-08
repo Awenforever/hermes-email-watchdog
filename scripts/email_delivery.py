@@ -1425,6 +1425,17 @@ def _decode_attachments_from_bytes(raw, save_dir):
 
 def _download_himalaya(config_path, msg_id, save_dir, account_key=None):
     os.makedirs(save_dir, exist_ok=True)
+    # Both the raw export and the download command authenticate; charge the
+    # login once up front so a failure midway is still accounted for.
+    try:
+        import email_watch as _ew
+        _ew._CURRENT_CONFIG = config_path
+        account_hint = account_key
+        if account_hint:
+            _ew._HIMALAYA_BUDGET_KEY = str(account_hint)
+        _ew._charge_himalaya_login()
+    except Exception:
+        pass
     # Himalaya v1.2.0's attachment download command can corrupt arbitrary
     # binary payloads. Exporting the original RFC 822 message and decoding its
     # MIME parts in Python preserves bytes exactly and also gives us one
@@ -1436,12 +1447,6 @@ def _download_himalaya(config_path, msg_id, save_dir, account_key=None):
     exported = _download_himalaya_from_raw_message(config_path, msg_id, save_dir)
     if exported is not None:
         return exported
-    try:
-        import email_watch as _ew
-        _ew._CURRENT_CONFIG = config_path
-        _ew._charge_himalaya_login()
-    except Exception:
-        pass
     for cmd in _himalaya_cmd_variants(config_path, ["attachment", "download", str(msg_id), "--downloads-dir", save_dir]):
         try:
             result = subprocess.run(

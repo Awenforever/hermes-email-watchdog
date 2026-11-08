@@ -57,6 +57,7 @@ class ImapSession:
         self._conn = None
         self.key = key
         self.budget_per_hour = 0
+        self.uidvalidity = 0
         self.stats: Dict[str, Any] = {"connects": 0, "logins": 0, "lists": 0, "reads": 0, "errors": 0, "wakes": 0}
 
     # -- connection -------------------------------------------------
@@ -79,6 +80,7 @@ class ImapSession:
             conn.select(self.folder, readonly=True)
         except Exception:
             conn.select(self.folder)
+        self.uidvalidity = self._read_uidvalidity(conn)
         self.stats["connects"] += 1
         return conn
 
@@ -97,6 +99,20 @@ class ImapSession:
             conn.xatom('ID', payload)
         except Exception:
             pass
+
+
+    def _read_uidvalidity(self, conn):
+        """Mailbox identity. UIDs are only comparable within one UIDVALIDITY."""
+        try:
+            typ, data = conn.response("UIDVALIDITY")
+        except Exception:
+            return 0
+        if typ != "UIDVALIDITY" or not data:
+            return 0
+        try:
+            return int(data[0])
+        except Exception:
+            return 0
 
 
     def _connection(self):
