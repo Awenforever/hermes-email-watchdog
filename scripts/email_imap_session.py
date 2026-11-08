@@ -63,13 +63,15 @@ class ImapSession:
     # -- connection -------------------------------------------------
     def _open(self):
         ctx = ssl.create_default_context()
-        conn = self._connector(self.host, self.port, ssl_context=ctx, timeout=self.timeout)
+        # Refuse before dialing: a gate after the connection would leak a socket
+        # every time it fires, which is exactly the churn this guards against.
         if self.key and throttled_until(self.key) > time.time():
             raise ImapThrottled("throttled cooldown active for %s" % self.key)
-        if self.budget_per_hour:
+        if self.key and self.budget_per_hour:
             _recent = [x for x in _LOGIN_TIMES.get(self.key, []) if time.time() - x < 3600]
             if len(_recent) >= int(self.budget_per_hour):
                 raise ImapThrottled('login budget exhausted for %s (%d/hour)' % (self.key, self.budget_per_hour))
+        conn = self._connector(self.host, self.port, ssl_context=ctx, timeout=self.timeout)
         conn.login(self.username, self.password)
         self.stats["logins"] += 1
         if self.key:

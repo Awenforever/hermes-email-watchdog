@@ -451,12 +451,30 @@ def load_json(path):
     return {}
 
 def save_json(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
+    """Write atomically: a truncated state file used to crash every account."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 def load_seen():
-    return load_json(SEEN_FILE)
+    try:
+        data = load_json(SEEN_FILE)
+    except Exception:
+        # A corrupt file must not take every account down; start fresh and say so.
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                """seen state unreadable at %s; starting with an empty set""", SEEN_FILE,
+            )
+        except Exception:
+            pass
+        return {}
+    return data if isinstance(data, dict) else {}
 
 def save_seen(data):
     """Persist seen IDs with bounded retention to avoid unbounded JSON growth."""
@@ -1720,7 +1738,20 @@ def check_account(acct, pushed_count=None):
     updated = False
     unreadable = []
 
-    batch_limit = int(_WATCHDOG_SETTINGS.get("scan_batch_limit", 6))
+    # A shared session reads over one connection, so the old cap (meant to bound
+    # connection churn) no longer applies there; the CLI fallback still needs it.
+    _batch_key = "scan_batch_limit_session" if session is not None else "scan_batch_limit"
+    batch_limit = int(_WATCHDOG_SETTINGS.get(_batch_key, 24 if session is not None else 6))
+    unseen_now = [e for e in envelopes if (f"{acct_name}:" + str(e.get("id") or e.get("message_id", ""))) not in seen]
+    if len(unseen_now) > batch_limit:
+        try:
+            import logging
+            logging.getLogger(__name__).warning(
+                """Hermes Email Watchdog: %s has %d unseen messages but only %d are handled per scan; the rest stay queued in the mailbox window""",
+                acct_name, len(unseen_now), batch_limit,
+            )
+        except Exception:
+            pass
     processed = 0
     for env in envelopes:
         if processed >= batch_limit:

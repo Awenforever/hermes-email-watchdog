@@ -1,5 +1,31 @@
 # Release acceptance
 
+## 0.22.0-0.22.1 audit round acceptance (2026-11-08)
+
+| Target | Evidence |
+| --- | --- |
+| T1 container py3.11 | INSTALL_OK, CHECKSUMS_OK, VERIFY_OK |
+| T3 WSL2 py3.12 | 679 cases OK |
+| py3.10 | 681 cases OK once tomli (declared in requirements.txt) is installed |
+| Production NAS (py3.11) | 0.22.1 deployed, VERIFY_OK, three accounts logging path= |
+## 0.22.2 audit-closure acceptance (2026-11-08)
+
+Three independent read-only audits ran against v0.22.0 (data integrity, release
+and distribution, test-suite effectiveness) plus two earlier angles (silent
+failures, login budget). Every confirmed finding was fixed and re-tested.
+
+| Target | Evidence |
+| --- | --- |
+| T1 container py3.11 (offline) | INSTALL_OK 0.22.2, TOML_SUPPORT=tomllib, CHECKSUMS_OK, VERIFY_OK |
+| T1 container py3.10 (offline, no tomli) | TOML_SUPPORT=missing + INSTALL_WARNING + VERIFY_WARNING; install no longer fails silently |
+| T2 py3.10 (Ubuntu 22.04 interpreter) | 687 cases OK with `pip install -r requirements.txt` |
+| T3 WSL2 py3.12 | 687 cases OK, CHECKSUMS_OK |
+| Standalone suite runner | EMAIL_TEST_FILES_PASS=61, EMAIL_TEST_CASES_PASS=687, 0 skipped |
+
+Notes: the Ubuntu 22.04 and Windows 11 test VMs were unreachable this round
+(tailscale offline / VMware Tools not running), so T2 is evidenced on the same
+interpreter (CPython 3.10) in a container rather than on the VM. The suite has
+no OS-specific assertions beyond path handling.
 ## 0.17.2 persistent-watch acceptance (2026-11-07)
 
 0.17.2 turns the persistent IMAP watcher on by default for every IMAP

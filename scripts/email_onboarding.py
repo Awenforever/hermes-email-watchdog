@@ -54,7 +54,11 @@ from portable_lock import acquire_file_lock, release_file_lock
 
 HERMES_HOME = Path(
     os.path.expandvars(
-        os.path.expanduser(os.environ.get("HERMES_HOME", "~/.hermes"))
+        os.path.expanduser(
+            os.environ.get("HERMES_HOME")
+            or os.environ.get("HERMES_EMAIL_WATCHDOG_DATA_ROOT")
+            or "~/.hermes"
+        )
     )
 )
 STATE_ROOT = Path(
