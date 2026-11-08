@@ -254,6 +254,21 @@ def _deep_merge(base, override):
     return result
 
 
+def _apply_legacy_schema_keys(cfg):
+    """plugin.yaml exposes a few knobs under different names than the"""
+    """runtime uses. Honour the declared names instead of silently ignoring them."""
+    aliases = {
+        "managed_reminder_scheduler": "managed_cron",
+    }
+    delivery = cfg.setdefault("delivery", {})
+    for declared, real in aliases.items():
+        if declared in cfg:
+            delivery[real] = bool(cfg.pop(declared))
+    if "weekly_report_notifications" in cfg:
+        delivery["weekly_report_notifications"] = bool(cfg.pop("weekly_report_notifications"))
+    return cfg
+
+
 def _normalize_account(account):
     acct = dict(account)
     acct.setdefault("id", str(acct.get("label") or acct.get("name") or acct.get("email") or "account").lower())
@@ -304,6 +319,7 @@ def load_config() -> dict:
         _WARNED = True
 
     cfg = _deep_merge(DEFAULT_CONFIG, data)
+    cfg = _apply_legacy_schema_keys(cfg)
     # Safety settings are immutable for the read-only release candidate.
     cfg["safety"] = copy.deepcopy(DEFAULT_CONFIG["safety"])
     cfg["accounts"] = [_normalize_account(a) for a in cfg.get("accounts", [])]
