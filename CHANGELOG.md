@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.22.1 - 2026-11-08
+
+- Declare the Python < 3.11 TOML dependency (tomli) in requirements.txt; install.sh
+  detects and attempts to install it, and verify.sh warns when it is missing. On
+  Ubuntu 22.04 (Python 3.10) the plugin previously could not read Himalaya configs
+  at all, and nothing said why.
+- Record mailbox UIDVALIDITY per account. When it changes (mailbox rebuilt) the
+  stale seen entries for that account are cleared and logged, instead of old UIDs
+  silently suppressing new mail.
+- Warn when the backfill pager hits its cap while the oldest page still held
+  unknown mail, so a burst larger than the window is visible.
+- Charge the attachment login before any CLI process starts, not after the
+  raw-message export has already run.
 ## 0.22.0 - 2026-11-08
 
 Independent audit round. Every item below was a way for an account to stop

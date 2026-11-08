@@ -74,3 +74,17 @@ Hermes Email Watchdog: 163   path=himalaya budget=32
 - 长连接会被上游代理回收（实测偶发），客户端会自动重连，每次重连计 1 次登录；
 - 163 的服务端在长连接路径下不稳定，默认走 himalaya；
 - 服务端的限流措辞若变化，冷却判定可能失效，此时由登录预算兜底。
+
+## 七、运行依赖
+
+Python 3.11 及以上内置 `tomllib`，无需额外安装。
+
+Python 3.10（Ubuntu 22.04 默认版本）需要 `tomli`：
+
+```bash
+python3 -m pip install -r requirements.txt   # tomli; python_version < 3.11
+```
+
+`install.sh` 安装时会自动检测并尝试安装一次，输出 `TOML_SUPPORT=tomllib|tomli|tomli_installed|missing`；
+若为 `missing`，`verify.sh` 也会给出 `VERIFY_WARNING`。缺这个解析器时插件无法读取 Himalaya 配置，
+表现为每个账户都检查失败。
