@@ -1786,6 +1786,7 @@ def analyze_email(
     )
     if validation_errors or validated is None:
         raise SemanticEngineError("internal fallback schema invalid: " + "; ".join(validation_errors[:6]))
+    validated = email_semantic_schema.apply_policy_guards(validated, facts)
     return {
         "ok": True,
         "decision": validated,

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.22.6 - 2026-11-10
+
+Adds a narrow policy layer on top of the semantic decision, derived from a
+28-item human gold set (see docs/MODEL_BENCHMARK.md). It only ever quiets
+marketing or raises two urgent classes, and it is switchable with
+`HERMES_EMAIL_WATCHDOG_POLICY_GUARDS=0`.
+
+- Marketing mail is silenced only when it carries nothing actionable: no
+  deadline, amount, code or attachment. Every one of those keeps notifying.
+- A verification code with a validity window becomes critical.
+- A credential change (password reset, security key added or removed, recovery
+  codes) becomes critical.
+- Sign-in alerts are deliberately NOT promoted: the operator graded a new-device
+  alert critical but Google sign-in alerts high, so promoting them would trade
+  one error for another. The ambiguity is left to the model.
+
+Measured on the frozen gold set: one item corrected, none broken, and no change
+to the aggregate push-decision accuracy. The gaps that remain are calibration
+and label ambiguity, not something a rule can settle.
 ## 0.22.5 - 2026-11-08
 
 - The notification spool is cleared at the end of a completed cycle as well as at
