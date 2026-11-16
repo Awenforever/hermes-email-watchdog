@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Tuple
 
@@ -493,6 +494,68 @@ def summary_text(decision: Mapping[str, Any]) -> str:
 
 def summary_hash(decision: Mapping[str, Any]) -> str:
     return _sha(summary_text(decision))
+
+
+GUARD_VERSION = "priority_guards_v1"
+
+_DEADLINE_WORDS = ("截止", "到期", "应缴", "最后期限", "deadline", "due date", "expires", "过期")
+_MONEY_WORDS = ("¥", "￥", "$", "退款", "发票", "invoice", "金额", "账单")
+_CODE_WINDOW_WORDS = ("有效", "expires", "expire", "minute", "分钟", "秒内")
+# Only a credential *change* is urgent. A plain sign-in alert is worth a look,
+# not an alarm: the operator graded Google's "new sign-in" notices as high, so
+# promoting them to critical would be noise.
+_CREDENTIAL_CHANGE_WORDS = (
+    "security key was added", "security key was removed", "was added to your account",
+    "安全密钥", "密码已被修改", "密码已重置", "password was changed", "password was reset",
+    "recovery codes", "恢复代码", "two-factor was disabled", "2fa 已关闭", "passkey was removed",
+)
+
+
+def apply_policy_guards(decision: Mapping[str, Any], facts: Mapping[str, Any]) -> Dict[str, Any]:
+    """Narrow corrections for two failure modes measured against human labels.
+
+    A gold-label run showed the models (a) never silence marketing mail and
+    (b) under-rank codes and credential changes. Both cost the operator real
+    signal, and neither is a model-choice problem: every candidate failed the
+    same way. These guards only ever say *less* or *louder*, and only inside
+    three categories — a marketing message that carries a deadline, an amount,
+    a code or an attachment still notifies.
+    """
+    if os.environ.get("HERMES_EMAIL_WATCHDOG_POLICY_GUARDS", "1") in ("0", "false", "off"):
+        return decision
+    if not isinstance(decision, Mapping):
+        return decision
+    result = dict(decision)
+    classification = result.get("classification") if isinstance(result.get("classification"), Mapping) else {}
+    category = str(classification.get("category") or "")
+    importance = dict(result.get("importance") or {}) if isinstance(result.get("importance"), Mapping) else {}
+    notification = dict(result.get("notification") or {}) if isinstance(result.get("notification"), Mapping) else {}
+    blob = (
+        str(facts.get("source_subject") or "") + " " + str(facts.get("source_body") or "")[:4000]
+    ).lower()
+
+    if category == "newsletter_marketing" and notification.get("should_notify") is not False:
+        actionable = (
+            any(word in blob for word in _DEADLINE_WORDS)
+            or any(word in blob for word in _MONEY_WORDS)
+            or bool(facts.get("code_candidates"))
+            or bool(facts.get("attachments_present"))
+        )
+        if not actionable:
+            notification["should_notify"] = False
+            result["notification"] = notification
+
+    if category == "verification_code" and facts.get("code_candidates"):
+        if any(word in blob for word in _CODE_WINDOW_WORDS) and str(importance.get("level") or "") != "critical":
+            importance["level"] = "critical"
+            result["importance"] = importance
+
+    if category == "account_security" and any(word in blob for word in _CREDENTIAL_CHANGE_WORDS):
+        if str(importance.get("level") or "") != "critical":
+            importance["level"] = "critical"
+            result["importance"] = importance
+
+    return result
 
 
 def conservative_fallback(

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.22.7 - 2026-11-17
+
+`@原文` now also answers questions about the cited email.
+
+- Quote a push card and send `@原文` followed by a line of text: that text
+  becomes the question, the email body is passed as quoted context, and the
+  turn goes to the agent, so tools and session history still apply.
+- The prompt puts the question first, marks the email as reference material
+  rather than instructions, and caps the body (default 6000 chars,
+  `original_question_max_chars`); truncation says so in the prompt.
+- A plain `@原文` still renders the original-text card unchanged, and the
+  fetch failure / empty body paths stay retryable.
+- Requires hermes-wechat-enhance 3.5.5 or newer: older versions only
+  understand the `handled` decision, so the question would be dropped.
+## 0.22.6 - 2026-11-10
+
+Adds a narrow policy layer on top of the semantic decision, derived from a
+28-item human gold set (see docs/MODEL_BENCHMARK.md). It only ever quiets
+marketing or raises two urgent classes, and it is switchable with
+`HERMES_EMAIL_WATCHDOG_POLICY_GUARDS=0`.
+
+- Marketing mail is silenced only when it carries nothing actionable: no
+  deadline, amount, code or attachment. Every one of those keeps notifying.
+- A verification code with a validity window becomes critical.
+- A credential change (password reset, security key added or removed, recovery
+  codes) becomes critical.
+- Sign-in alerts are deliberately NOT promoted: the operator graded a new-device
+  alert critical but Google sign-in alerts high, so promoting them would trade
+  one error for another. The ambiguity is left to the model.
+
+Measured on the frozen gold set: one item corrected, none broken, and no change
+to the aggregate push-decision accuracy. The gaps that remain are calibration
+and label ambiguity, not something a rule can settle.
 ## 0.22.5 - 2026-11-08
 
 - The notification spool is cleared at the end of a completed cycle as well as at

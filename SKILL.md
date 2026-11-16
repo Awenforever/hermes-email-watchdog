@@ -1,7 +1,7 @@
 ---
 name: hermes-email-watchdog
 description: 安装、个性化配置并运行多账号邮件助理；只读监控邮件，并可在用户逐次确认后创建提醒、回复或转发邮件。
-version: 0.22.5
+version: 0.22.7
 tags: [email, watchdog, notification, read-only, hermes, onboarding]
 ---
 
@@ -71,3 +71,7 @@ Email Watchdog 是独立邮箱助理。监控、分析、附件获取始终只�
 - 用户数据：当前 Hermes profile 的 `plugin-data/hermes-email-watchdog/`。
 
 升级不得覆盖邮箱认证、通知目标、个性化策略、已处理索引、附件、日程或 outbox。
+
+## 命令适用范围
+
+入站命令（`@回复`/`@转发`/`@提醒`/`@原文`）依赖 `message:inbound`，该事件由 `hermes-wechat-enhance >= 3.5.5` 发出；Hermes Core 不发。故这些命令目前仅限 WeChat，且 `@原文` + 问题 需要 3.5.5 的 `rewrite` 决策，不支持旧版。
