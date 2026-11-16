@@ -848,6 +848,22 @@ def _handle_inbound_locked(context: dict):
         _atomic(ACTION_FILE, state)
         return _handled(response, receipt)
 
+    question = raw_typed.split("\n", 1)[1].strip() if raw_typed.startswith("@原文\n") else ""
+    if question:
+        try:
+            import email_original
+            fetched = email_original.fetch_original(action, _transport_uid(action))
+        except Exception:
+            return _handled("获取邮件原文失败，请稍后重试。", _receipt_key(context, "original-error"))
+        if fetched is None:
+            return _handled("这封邮件没有可用的正文，无法据此回答问题。", _receipt_key(context, "original-empty"))
+        prompt = email_original.build_question_prompt(action, fetched, question)
+        return {
+            "decision": "rewrite",
+            "message": prompt,
+            "source": "hermes-email-watchdog",
+        }
+
     if typed == "@原文" or typed.startswith("@原文\n"):
         receipt = _receipt_key(context, "original")
         try:

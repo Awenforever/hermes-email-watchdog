@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.7 - 2026-11-17
+
+`@原文` now also answers questions about the cited email.
+
+- Quote a push card and send `@原文` followed by a line of text: that text
+  becomes the question, the email body is passed as quoted context, and the
+  turn goes to the agent, so tools and session history still apply.
+- The prompt puts the question first, marks the email as reference material
+  rather than instructions, and caps the body (default 6000 chars,
+  `original_question_max_chars`); truncation says so in the prompt.
+- A plain `@原文` still renders the original-text card unchanged, and the
+  fetch failure / empty body paths stay retryable.
+- Requires hermes-wechat-enhance 3.5.5 or newer: older versions only
+  understand the `handled` decision, so the question would be dropped.
 ## 0.22.6 - 2026-11-10
 
 Adds a narrow policy layer on top of the semantic decision, derived from a
